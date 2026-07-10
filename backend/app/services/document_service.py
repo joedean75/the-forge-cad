@@ -1,0 +1,532 @@
+"""Design-document orchestration.
+
+A DesignDocument is the single source of truth for a part: its geometry is
+always a serialized FeatureTree. This service owns the in-memory document
+store, disk persistence, and cached evaluation (tessellation, mass, bbox).
+
+Manual editing (Phase 1+) and generative optimization (Phase 3) both mutate a
+document's feature tree and re-evaluate through here, so downstream consumers
+(simulate / DFM / CAM / machine) only ever read `document.derived`.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import uuid
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+
+from app.cad_kernel.core.feature_tree import FeatureTree
+from app.cad_kernel.core.topology import Solid
+from app.cad_kernel.geom.meshing import mesh_volume
+from app.cad_kernel.kernel import Kernel
+from app.models.schemas import (
+    BBox,
+    DerivedCache,
+    DesignDocument,
+    DocumentSummary,
+    OptimizationSetup,
+    Vector3,
+)
+from app.services import persistence
+from app.services.cad_service import solid_to_stl_data_uri
+
+_LOGGER = logging.getLogger(__name__)
+
+# Default density used for mass estimates when no material is bound to a doc.
+_DEFAULT_DENSITY = 2700.0  # kg/m^3 (aluminium-like)
+
+# Process-local stores. Documents persist to disk; evaluated solids are cached
+# in memory only and re-derived lazily on restart.
+DOCUMENTS: Dict[str, DesignDocument] = {}
+_SOLID_CACHE: Dict[str, Solid] = {}
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _hash_tree(tree: dict) -> str:
+    return hashlib.sha256(json.dumps(tree, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def _default_tree_dict() -> dict:
+    """A blank document starts as a small valid box so it is immediately visible."""
+    from app.cad_kernel.core.types import Point3, Vector3 as KVector3
+    from app.cad_kernel.ops.primitives import BoxFeature
+
+    root = BoxFeature(
+        id=str(uuid.uuid4()),
+        name="Base Box",
+        size=KVector3(0.1, 0.1, 0.1),
+        center=Point3(),
+    )
+    tree = FeatureTree(root).to_dict()
+    # Mark the base as a placeholder so the first real feature replaces it rather
+    # than being swallowed by / unioned into a stray 100 mm block.
+    tree["root"]["placeholder"] = True
+    return tree
+
+
+def _persist(doc: DesignDocument) -> None:
+    try:
+        persistence.save_document(doc.id, doc.model_dump())
+    except Exception as exc:  # persistence must never break the request
+        _LOGGER.warning("Failed to persist document %s: %s", doc.id, exc)
+
+
+# ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
+
+
+def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool = True) -> DesignDocument:
+    """Evaluate the document's feature tree into a solid and refresh DerivedCache.
+
+    Evaluation failures are captured in `derived.error` rather than raised, so a
+    malformed edit never wedges the document.
+    """
+    tree_hash = _hash_tree(doc.feature_tree)
+    try:
+        from app.services import feature_ops
+
+        active = feature_ops.resolve_suppressed(doc.feature_tree)
+        active = feature_ops.resolve_datums(active)  # bake sketch-on-face refs from live geometry
+        tree = FeatureTree.from_dict(active)
+        solid = Kernel.evaluate_tree(tree, resolution=resolution)
+        mesh = Kernel.tessellate(solid)
+
+        volume = abs(float(mesh_volume(mesh.vertices, mesh.faces))) if len(mesh.faces) else 0.0
+        bbox = None
+        if mesh.vertices is not None and len(mesh.vertices):
+            mn = mesh.vertices.min(axis=0)
+            mx = mesh.vertices.max(axis=0)
+            bbox = BBox(
+                min=Vector3(x=float(mn[0]), y=float(mn[1]), z=float(mn[2])),
+                max=Vector3(x=float(mx[0]), y=float(mx[1]), z=float(mx[2])),
+            )
+
+        doc.derived = DerivedCache(
+            solid_hash=tree_hash,
+            mesh_url=solid_to_stl_data_uri(solid),
+            bbox=bbox,
+            mass=round(volume * _DEFAULT_DENSITY, 4),
+            volume=round(volume, 6),
+        )
+        _SOLID_CACHE[doc.id] = solid
+    except Exception as exc:
+        _LOGGER.warning("Document %s evaluation failed: %s", doc.id, exc)
+        doc.derived = DerivedCache(solid_hash=tree_hash, error=str(exc))
+        _SOLID_CACHE.pop(doc.id, None)
+
+    doc.updated_at = _now()
+    if persist:
+        _persist(doc)
+    return doc
+
+
+def get_solid(doc_id: str, resolution: int = 128) -> Solid:
+    """Return the evaluated Solid for a document, re-evaluating lazily if needed."""
+    if doc_id in _SOLID_CACHE:
+        return _SOLID_CACHE[doc_id]
+    doc = get_document(doc_id)
+    if doc is None:
+        raise KeyError(doc_id)
+    evaluate_document(doc, resolution=resolution)
+    if doc_id not in _SOLID_CACHE:
+        raise ValueError(doc.derived.error or "Document could not be evaluated")
+    return _SOLID_CACHE[doc_id]
+
+
+# ---------------------------------------------------------------------------
+# CRUD
+# ---------------------------------------------------------------------------
+
+
+def access_role(doc: DesignDocument, account_id: Optional[str]) -> Optional[str]:
+    """The caller's role on a document: "owner" | "editor" | "viewer" | None.
+
+    Legacy documents (`owner_id is None`) predate ownership and grant full access
+    to any authenticated account, preserving pre-multi-tenancy behavior.
+    """
+    if doc.owner_id is None or doc.owner_id == account_id:
+        return "owner"
+    for c in doc.collaborators:
+        if c.account_id == account_id:
+            return c.role
+    return None
+
+
+def can_access(doc: DesignDocument, account_id: Optional[str]) -> bool:
+    """True if the caller may view the document (owner, editor, or viewer)."""
+    return access_role(doc, account_id) is not None
+
+
+def can_edit(doc: DesignDocument, account_id: Optional[str]) -> bool:
+    """True if the caller may mutate geometry (owner or editor)."""
+    return access_role(doc, account_id) in ("owner", "editor")
+
+
+def can_manage(doc: DesignDocument, account_id: Optional[str]) -> bool:
+    """True if the caller may delete or manage sharing (owner only)."""
+    return access_role(doc, account_id) == "owner"
+
+
+def create_document(
+    name: Optional[str] = None,
+    prompt: Optional[str] = None,
+    units: str = "m",
+    resolution: int = 128,
+    owner_id: Optional[str] = None,
+) -> DesignDocument:
+    doc_id = str(uuid.uuid4())
+    provenance = "manual"
+
+    dimensions = []
+    if prompt and prompt.strip():
+        from app.services.text_to_cad_engine import generate_part_tree
+
+        feature_tree, dimensions, source = generate_part_tree(prompt)
+        tree = feature_tree.to_dict()
+        provenance = "text_to_cad"
+        _LOGGER.info("Generated part via %s engine (%d dims) for prompt: %s", source, len(dimensions), prompt[:60])
+        if not name:
+            stripped = prompt.strip()
+            name = stripped[:57] + "..." if len(stripped) > 60 else stripped
+    else:
+        tree = _default_tree_dict()
+        name = name or "Untitled Part"
+
+    now = _now()
+    doc = DesignDocument(
+        id=doc_id,
+        name=name,
+        owner_id=owner_id,
+        units=units,  # type: ignore[arg-type]
+        feature_tree=tree,
+        provenance=provenance,  # type: ignore[arg-type]
+        created_at=now,
+        updated_at=now,
+        dimensions=dimensions,
+    )
+    DOCUMENTS[doc_id] = doc
+    evaluate_document(doc, resolution=resolution)
+    return doc
+
+
+def ai_edit_document(doc_id: str, instruction: str, resolution: int = 128) -> DesignDocument:
+    """Apply a natural-language edit to a document's geometry via the LLM."""
+    from app.services.text_to_cad_engine import edit_part_tree
+
+    doc = get_document(doc_id)
+    if doc is None:
+        raise KeyError(doc_id)
+
+    result = edit_part_tree(doc.feature_tree, instruction)
+    if result is None:
+        raise ValueError("AI edit did not produce valid geometry")
+
+    tree, new_dims, source = result
+    _LOGGER.info("AI-edited document %s via %s: %s", doc_id, source, instruction[:60])
+    doc.feature_tree = tree.to_dict()
+    if doc.provenance != "mixed":
+        doc.provenance = "mixed"
+    # Refresh model-generated dimensions; keep the user's own.
+    doc.dimensions = [d for d in doc.dimensions if d.source == "user"] + new_dims
+    evaluate_document(doc, resolution=resolution)
+    return doc
+
+
+def add_dimension(doc_id: str, req) -> Optional["Dimension"]:
+    """Append a point-to-point dimension to a document."""
+    from app.models.schemas import Dimension
+
+    doc = get_document(doc_id)
+    if doc is None:
+        return None
+    dim = Dimension(id=str(uuid.uuid4()), a=req.a, b=req.b, label=req.label, source=req.source)
+    doc.dimensions.append(dim)
+    doc.updated_at = _now()
+    _persist(doc)
+    return dim
+
+
+def remove_dimension(doc_id: str, dim_id: str) -> bool:
+    doc = get_document(doc_id)
+    if doc is None:
+        return False
+    before = len(doc.dimensions)
+    doc.dimensions = [d for d in doc.dimensions if d.id != dim_id]
+    if len(doc.dimensions) == before:
+        return False
+    doc.updated_at = _now()
+    _persist(doc)
+    return True
+
+
+def get_document(doc_id: str) -> Optional[DesignDocument]:
+    if doc_id in DOCUMENTS:
+        return DOCUMENTS[doc_id]
+    data = persistence.load_document(doc_id)
+    if not data:
+        return None
+    try:
+        doc = DesignDocument(**data)
+        DOCUMENTS[doc_id] = doc
+        return doc
+    except Exception as exc:
+        _LOGGER.warning("Could not load document %s: %s", doc_id, exc)
+        return None
+
+
+def list_documents(owner_id: Optional[str] = None) -> List[DocumentSummary]:
+    ids = set(DOCUMENTS.keys()) | set(persistence.list_documents())
+    summaries: List[DocumentSummary] = []
+    for doc_id in ids:
+        doc = get_document(doc_id)
+        if doc is None:
+            continue
+        role = access_role(doc, owner_id) if owner_id is not None else "owner"
+        if owner_id is not None and role is None:
+            continue
+        summaries.append(
+            DocumentSummary(
+                id=doc.id,
+                name=doc.name,
+                provenance=doc.provenance,
+                updated_at=doc.updated_at,
+                mesh_url=doc.derived.mesh_url,
+                role=role or "owner",
+                shared=bool(owner_id is not None and doc.owner_id not in (None, owner_id)),
+            )
+        )
+    summaries.sort(key=lambda s: s.updated_at, reverse=True)
+    return summaries
+
+
+def update_document(
+    doc_id: str,
+    name: Optional[str] = None,
+    feature_tree: Optional[dict] = None,
+    optimization: Optional[OptimizationSetup] = None,
+    resolution: int = 128,
+) -> Optional[DesignDocument]:
+    doc = get_document(doc_id)
+    if doc is None:
+        return None
+
+    tree_changed = False
+    if name is not None:
+        doc.name = name
+    if optimization is not None:
+        doc.optimization = optimization
+    if feature_tree is not None and feature_tree != doc.feature_tree:
+        doc.feature_tree = feature_tree
+        tree_changed = True
+        if doc.provenance == "text_to_cad":
+            doc.provenance = "mixed"
+
+    if tree_changed:
+        evaluate_document(doc, resolution=resolution)
+    else:
+        doc.updated_at = _now()
+        _persist(doc)
+    return doc
+
+
+def delete_document(doc_id: str) -> bool:
+    DOCUMENTS.pop(doc_id, None)
+    _SOLID_CACHE.pop(doc_id, None)
+    return persistence.delete_document(doc_id)
+
+
+# ---------------------------------------------------------------------------
+# Version history (snapshots, restore, branch)
+# ---------------------------------------------------------------------------
+
+_MAX_VERSIONS = 100  # bound history growth per document
+
+
+def snapshot_version(doc_id: str, label: str, author_id: Optional[str] = None) -> Optional["DocumentVersion"]:
+    """Capture the document's current feature tree as a labelled version."""
+    from app.models.schemas import DocumentVersion
+
+    doc = get_document(doc_id)
+    if doc is None:
+        return None
+    parent = doc.version_history[-1].id if doc.version_history else None
+    version = DocumentVersion(
+        id=str(uuid.uuid4()),
+        label=label or f"Version {len(doc.version_history) + 1}",
+        feature_tree=json.loads(json.dumps(doc.feature_tree)),  # deep copy
+        parent_id=parent,
+        author_id=author_id,
+        created_at=_now(),
+    )
+    doc.version_history.append(version)
+    # Bound growth: drop the oldest once past the cap.
+    if len(doc.version_history) > _MAX_VERSIONS:
+        doc.version_history = doc.version_history[-_MAX_VERSIONS:]
+    doc.updated_at = _now()
+    _persist(doc)
+    return version
+
+
+def restore_version(doc_id: str, version_id: str, resolution: int = 128) -> Optional[DesignDocument]:
+    """Roll the document's geometry back to a stored version.
+
+    The current state is auto-snapshotted first, so a restore is itself undoable.
+    """
+    doc = get_document(doc_id)
+    if doc is None:
+        return None
+    target = next((v for v in doc.version_history if v.id == version_id), None)
+    if target is None:
+        raise ValueError("version not found")
+    snapshot_version(doc_id, "Auto-save before restore", author_id=doc.owner_id)
+    doc.feature_tree = json.loads(json.dumps(target.feature_tree))
+    doc.provenance = "mixed"
+    evaluate_document(doc, resolution=resolution)
+    return doc
+
+
+def branch_from_version(
+    doc_id: str, version_id: str, owner_id: Optional[str], name: Optional[str] = None, resolution: int = 128
+) -> Optional[DesignDocument]:
+    """Fork a new, independently-owned document from a stored version."""
+    doc = get_document(doc_id)
+    if doc is None:
+        return None
+    target = next((v for v in doc.version_history if v.id == version_id), None)
+    if target is None:
+        raise ValueError("version not found")
+
+    now = _now()
+    new_id = str(uuid.uuid4())
+    branch = DesignDocument(
+        id=new_id,
+        name=name or f"{doc.name} (branch)",
+        owner_id=owner_id,
+        units=doc.units,
+        feature_tree=json.loads(json.dumps(target.feature_tree)),
+        provenance="mixed",
+        created_at=now,
+        updated_at=now,
+        dimensions=[d.model_copy() for d in doc.dimensions],
+    )
+    DOCUMENTS[new_id] = branch
+    evaluate_document(branch, resolution=resolution)
+    return branch
+
+
+# ---------------------------------------------------------------------------
+# Collaboration (sharing)
+# ---------------------------------------------------------------------------
+
+
+def add_collaborator(doc_id: str, email: str, role: str = "viewer") -> DesignDocument:
+    """Share a document with another account by email (owner action)."""
+    from app.models.schemas import Collaborator
+    from app.services import accounts
+
+    doc = get_document(doc_id)
+    if doc is None:
+        raise KeyError(doc_id)
+    if role not in ("viewer", "editor"):
+        raise ValueError("role must be 'viewer' or 'editor'")
+    target = accounts.account_by_email(email)
+    if target is None:
+        raise ValueError(f"no account found for {email}")
+    if target.id == doc.owner_id:
+        raise ValueError("owner already has full access")
+
+    existing = next((c for c in doc.collaborators if c.account_id == target.id), None)
+    if existing is not None:
+        existing.role = role  # type: ignore[assignment]
+    else:
+        doc.collaborators.append(
+            Collaborator(account_id=target.id, email=target.email, role=role, added_at=_now())  # type: ignore[arg-type]
+        )
+    doc.updated_at = _now()
+    _persist(doc)
+    return doc
+
+
+def remove_collaborator(doc_id: str, account_id: str) -> DesignDocument:
+    doc = get_document(doc_id)
+    if doc is None:
+        raise KeyError(doc_id)
+    doc.collaborators = [c for c in doc.collaborators if c.account_id != account_id]
+    doc.updated_at = _now()
+    _persist(doc)
+    return doc
+
+
+# ---------------------------------------------------------------------------
+# Generative optimization (Phase 3)
+# ---------------------------------------------------------------------------
+
+from app.models.schemas import OptimizeJob  # noqa: E402
+
+_OPTIMIZE_JOBS: Dict[str, OptimizeJob] = {}
+
+
+def get_optimize_job(job_id: str) -> Optional[OptimizeJob]:
+    return _OPTIMIZE_JOBS.get(job_id)
+
+
+def run_document_optimize(doc_id: str, setup, resolution: int = 128, progress=None) -> DesignDocument:
+    """Run SIMP scoped to the document body and fold the result in as an OptimizeFeature."""
+    import numpy as np
+
+    from app.cad_kernel.ops.generative import OptimizeFeature
+    from app.services.simp_optimizer import run_simp_from_solid
+
+    doc = get_document(doc_id)
+    if doc is None:
+        raise KeyError(doc_id)
+
+    tree = FeatureTree.from_dict(doc.feature_tree)
+    root = tree.root
+    # Re-optimize from the original body, not a prior generative result.
+    body = root.children[0] if isinstance(root, OptimizeFeature) and root.children else root
+
+    result = run_simp_from_solid(body, setup, progress=progress)
+    density = np.asarray(result["density"], dtype=float).round(3).tolist()
+
+    opt_feature = OptimizeFeature(
+        name="Generative",
+        children=[body],
+        cache={
+            "density": density,
+            "origin": result["origin"],
+            "size": result["size"],
+            "threshold": result["threshold"],
+        },
+        setup={
+            "volume_fraction": setup.volume_fraction,
+            "objective": setup.objective.target,
+            "material_id": setup.material_id,
+        },
+        inputs_hash=_hash_tree(body.to_dict()),
+    )
+
+    doc.feature_tree = FeatureTree(opt_feature).to_dict()
+    doc.optimization = setup
+    doc.provenance = "generative"
+    evaluate_document(doc, resolution=resolution)
+    return doc
+
+
+def restore_documents() -> None:
+    """Load persisted document metadata into memory on startup (lazy solids)."""
+    for doc_id in persistence.list_documents():
+        data = persistence.load_document(doc_id)
+        if not data:
+            continue
+        try:
+            DOCUMENTS[doc_id] = DesignDocument(**data)
+        except Exception as exc:
+            _LOGGER.warning("Skipping unloadable document %s: %s", doc_id, exc)

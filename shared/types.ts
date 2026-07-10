@@ -1,0 +1,343 @@
+export interface Vector3 {
+  x: number
+  y: number
+  z: number
+}
+
+export interface Material {
+  id: string
+  name: string
+  density: number
+  yield_strength: number
+  youngs_modulus: number
+  poissons_ratio: number
+  color: string
+}
+
+export interface DesignSpace {
+  size: Vector3
+  center: Vector3
+}
+
+export interface PreserveRegion {
+  id: string
+  name: string
+  type: 'sphere' | 'cylinder'
+  center: Vector3
+  radius: number
+  height?: number
+}
+
+export interface ObstacleRegion {
+  id: string
+  name: string
+  type: 'box' | 'sphere'
+  center: Vector3
+  size?: Vector3
+  radius?: number
+}
+
+export interface LoadCase {
+  id: string
+  name: string
+  point: Vector3
+  force: Vector3
+  load_type: 'static' | 'dynamic' | 'thermal'
+}
+
+export interface Constraint {
+  id: string
+  name: string
+  type: 'fixed' | 'symmetry' | 'displacement'
+  point: Vector3
+  normal?: Vector3
+}
+
+export interface Objective {
+  target: 'minimize_mass' | 'maximize_stiffness' | 'minimize_displacement'
+  weight: number
+}
+
+export interface DesignSpec {
+  name: string
+  design_space: DesignSpace
+  preserve_regions: PreserveRegion[]
+  obstacle_regions: ObstacleRegion[]
+  load_cases: LoadCase[]
+  constraints: Constraint[]
+  material_id: string
+  objective: Objective
+}
+
+export type JobStatus = 'pending' | 'meshing' | 'optimizing' | 'postprocessing' | 'done' | 'failed'
+
+export interface OptimizeJob {
+  id: string
+  status: JobStatus
+  progress: number
+  message: string
+}
+
+export interface CadRepresentation {
+  format: string
+  feature_tree: object
+  step_url?: string
+}
+
+export interface Candidate {
+  id: string
+  name: string
+  score: number
+  mass: number
+  stiffness: number
+  max_stress: number
+  mesh_url: string
+  cad?: CadRepresentation
+}
+
+export interface OptimizeResult {
+  job_id: string
+  candidates: Candidate[]
+}
+
+export interface SimulationResult {
+  max_stress: number
+  max_displacement: number
+  safety_factor: number
+  compliance: number
+  mass: number
+  stress_field_url?: string
+}
+
+export interface ManufacturingResult {
+  build_orientation: string
+  build_orientation_vector?: Vector3
+  overhang_angle: number
+  overhang_area: number
+  support_volume: number
+  printability_score: number
+  print_time_minutes: number
+  feature_size_ok: boolean
+  enclosed_cavities: boolean
+}
+
+export interface NodePart {
+  id: string
+  name: string
+  material: string
+  quantity: number
+  print_time_minutes: number
+  position?: Vector3
+  candidate_id?: string
+  mesh_url?: string
+}
+
+export interface Strut {
+  id: string
+  start: Vector3
+  end: Vector3
+  diameter: number
+}
+
+export interface AssemblyResult {
+  id: string
+  kind: string
+  nodes: NodePart[]
+  struts: Strut[]
+}
+
+export type WorkflowStep =
+  | 'requirements'
+  | 'generative'
+  | 'topology'
+  | 'simulation'
+  | 'manufacturing'
+  | 'assembly'
+  | 'export'
+
+export interface DesignGenerationResponse {
+  kind: 'part' | 'assembly'
+  part?: Candidate
+  assembly?: AssemblyResult
+}
+
+export interface LlmConfig {
+  configured: boolean
+  provider: string
+  base_url: string
+  model: string
+  available_models: string[]
+}
+
+// ---------------------------------------------------------------------------
+// Unified design-document model (mirrors backend/app/models/schemas.py)
+// ---------------------------------------------------------------------------
+
+export interface BBox {
+  min: Vector3
+  max: Vector3
+}
+
+export interface Quote {
+  process: string
+  material_cost: number
+  machine_cost: number
+  setup_cost: number
+  total: number
+  currency: string
+  lead_time_days?: number
+}
+
+export interface DfmCheck {
+  id: string
+  label: string
+  status: 'pass' | 'warn' | 'fail'
+  detail: string
+  value?: number
+}
+
+export interface DfmReport {
+  process: string
+  checks: DfmCheck[]
+  printability_score: number
+  quote?: Quote
+  build_orientation?: string
+  build_orientation_vector?: Vector3
+  overhang_angle?: number
+  overhang_area?: number
+  support_volume?: number
+  print_time_minutes?: number
+}
+
+export interface CamResult {
+  gcode_url?: string
+  operations: string[]
+  estimated_minutes: number
+  stock_size?: Vector3
+}
+
+export interface DerivedCache {
+  solid_hash?: string
+  mesh_url?: string
+  step_url?: string
+  bbox?: BBox
+  mass: number
+  volume: number
+  sim?: SimulationResult
+  dfm?: DfmReport
+  cam?: CamResult
+  error?: string
+}
+
+export interface OptimizationSetup {
+  design_domain: 'from_body' | 'box'
+  box_size?: Vector3
+  box_center?: Vector3
+  keep_in: PreserveRegion[]
+  keep_out: ObstacleRegion[]
+  load_cases: LoadCase[]
+  constraints: Constraint[]
+  objective: Objective
+  volume_fraction: number
+  resolution: number
+  material_id: string
+  result_cache_id?: string
+  inputs_hash?: string
+}
+
+export interface DocumentVersion {
+  id: string
+  label: string
+  feature_tree: object
+  parent_id?: string
+  author_id?: string | null
+  created_at: string
+}
+
+export interface VersionSummary {
+  id: string
+  label: string
+  author_id?: string | null
+  created_at: string
+}
+
+export interface Collaborator {
+  account_id: string
+  email: string
+  role: 'viewer' | 'editor'
+  added_at: string
+}
+
+export interface Dimension {
+  id: string
+  a: Vector3
+  b: Vector3
+  label?: string
+  source: 'user' | 'llm'
+}
+
+export type DocumentProvenance = 'text_to_cad' | 'manual' | 'generative' | 'mixed'
+
+export interface DesignDocument {
+  id: string
+  name: string
+  /** Owning tenant; null for legacy documents created before multi-tenancy. */
+  owner_id?: string | null
+  collaborators: Collaborator[]
+  units: 'mm' | 'm'
+  feature_tree: FeatureTreeDict
+  optimization?: OptimizationSetup
+  derived: DerivedCache
+  provenance: DocumentProvenance
+  created_at: string
+  updated_at: string
+  version_history: DocumentVersion[]
+  dimensions: Dimension[]
+}
+
+export interface DocumentSummary {
+  id: string
+  name: string
+  provenance: string
+  updated_at: string
+  mesh_url?: string
+  /** The caller's access level on this document. */
+  role: 'owner' | 'editor' | 'viewer'
+  /** True when the document is shared with the caller (they are not the owner). */
+  shared: boolean
+}
+
+// Serialized FeatureTree ({ version, root }) — the parametric recipe.
+export interface FeatureNode {
+  type: string
+  id?: string | null
+  name: string
+  params: Record<string, unknown>
+  suppressed?: boolean
+}
+
+export interface FeatureTreeDict {
+  version: string
+  root: FeatureNode
+}
+
+export type EditorMode = 'model' | 'optimize' | 'validate' | 'make' | 'machine'
+
+export interface MachinePrinter {
+  name: string
+  url: string
+}
+
+export interface MachineStatus {
+  connected: boolean
+  error?: string
+  state?: string
+  filename?: string
+  progress?: number
+  print_duration?: number
+  extruder_temp?: number
+  extruder_target?: number
+  bed_temp?: number
+  bed_target?: number
+  position?: number[]
+}

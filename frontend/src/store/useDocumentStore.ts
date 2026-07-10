@@ -1,0 +1,369 @@
+import { create } from 'zustand'
+import type {
+  DesignDocument,
+  EditorMode,
+  FeatureTreeDict,
+  OptimizeJob,
+  OptimizationSetup,
+  LoadCase,
+  Objective,
+  SimulationResult,
+  DfmReport,
+  CamResult,
+  Vector3,
+} from '../../../shared/types'
+import { api } from '../api/client'
+import { ensureIds } from '../util/featureTree'
+
+const DEFAULT_RESOLUTION = 96
+
+export interface SketchSpec {
+  points: Record<string, unknown>[]
+  lines?: Record<string, unknown>[]
+  arcs?: Record<string, unknown>[]
+  circles?: Record<string, unknown>[]
+  constraints?: Record<string, unknown>[]
+}
+
+interface DocumentState {
+  doc: DesignDocument | null
+  mode: EditorMode
+  selectedFeatureId: string | null
+  busy: boolean
+  error: string | null
+  optimizeJob: OptimizeJob | null
+  sim: SimulationResult | null
+  dfm: DfmReport | null
+  cam: CamResult | null
+  past: FeatureTreeDict[]
+  future: FeatureTreeDict[]
+  undo: () => Promise<void>
+  redo: () => Promise<void>
+  sketchOpen: boolean
+  sketchEdit: { featureId: string; sketch: SketchSpec; plane: string; depth: number; offset: number } | null
+  openSketch: (edit?: { featureId: string; sketch: SketchSpec; plane: string; depth: number; offset: number }) => void
+  closeSketch: () => void
+
+  setMode: (mode: EditorMode) => void
+  select: (id: string | null) => void
+  clearError: () => void
+  runOptimize: (opts: {
+    volume_fraction?: number
+    objective?: Objective
+    resolution?: number
+    load_cases?: LoadCase[]
+  }) => Promise<void>
+  runSimulate: () => Promise<void>
+  runDfm: (buildAxis?: string) => Promise<void>
+  runCam: (tool: { diameter_mm: number; stepdown_mm: number; stepover_mm: number; feed_mm_min: number }) => Promise<void>
+  exportStep: () => Promise<void>
+  downloadGcode: () => void
+  addDimension: (a: Vector3, b: Vector3, label?: string | null) => Promise<void>
+  removeDimension: (dimId: string) => Promise<void>
+
+  createFromPrompt: (prompt: string) => Promise<void>
+  newBlank: () => Promise<void>
+  openDocument: (id: string) => Promise<void>
+  rename: (name: string) => Promise<void>
+  /** Replace the feature tree and re-evaluate on the server. */
+  commitTree: (tree: FeatureTreeDict) => Promise<void>
+  /** The single geometry-mutation path (same operations agents call). Returns the op result. */
+  runOp: (op: string, args?: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>
+  aiEdit: (instruction: string) => Promise<void>
+}
+
+/** Normalize a freshly-received document so every feature node has a stable id. */
+function withIds(doc: DesignDocument): DesignDocument {
+  return { ...doc, feature_tree: ensureIds(doc.feature_tree) }
+}
+
+export const useDocumentStore = create<DocumentState>((set, get) => ({
+  doc: null,
+  mode: 'model',
+  selectedFeatureId: null,
+  busy: false,
+  error: null,
+  optimizeJob: null,
+  sim: null,
+  dfm: null,
+  cam: null,
+  past: [],
+  future: [],
+  sketchOpen: false,
+  sketchEdit: null,
+  openSketch: (edit) => set({ sketchOpen: true, sketchEdit: edit ?? null }),
+  closeSketch: () => set({ sketchOpen: false, sketchEdit: null }),
+
+  setMode: (mode) => set({ mode }),
+  select: (selectedFeatureId) => set({ selectedFeatureId }),
+  clearError: () => set({ error: null }),
+
+  runOptimize: async (opts) => {
+    const { doc } = get()
+    if (!doc) return
+    const setup: OptimizationSetup = {
+      design_domain: 'from_body',
+      keep_in: [],
+      keep_out: [],
+      load_cases: opts.load_cases ?? [],
+      constraints: [],
+      objective: opts.objective ?? { target: 'minimize_mass', weight: 1 },
+      volume_fraction: opts.volume_fraction ?? 0.4,
+      resolution: opts.resolution ?? 96,
+      material_id: 'al-7075',
+    }
+    set({ busy: true, error: null, optimizeJob: null })
+    try {
+      let job = await api.optimizeDocument(doc.id, { setup, resolution: setup.resolution })
+      set({ optimizeJob: job })
+      while (job.status !== 'done' && job.status !== 'failed') {
+        await new Promise((r) => setTimeout(r, 500))
+        job = await api.getOptimizeJob(doc.id, job.id)
+        set({ optimizeJob: job })
+      }
+      if (job.status === 'failed') {
+        set({ error: job.message })
+      } else {
+        const updated = withIds(await api.getDocument(doc.id))
+        set({
+          doc: updated,
+          selectedFeatureId: updated.feature_tree.root?.id ?? null,
+          mode: 'model',
+          sim: null,
+          dfm: null,
+          cam: null,
+        })
+      }
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Optimization failed' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  runOp: async (op, args) => {
+    const { doc, past } = get()
+    if (!doc) return undefined
+    set({ past: [...past, doc.feature_tree].slice(-50), future: [], busy: true, error: null })
+    try {
+      const res = await api.runOperation(doc.id, op, args)
+      if (res.document) {
+        const updated = withIds(res.document)
+        set({ doc: updated, error: updated.derived.error ?? null, sim: null, dfm: null, cam: null })
+      }
+      return res.result
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : `Operation ${op} failed` })
+      return undefined
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  aiEdit: async (instruction) => {
+    const { doc, past } = get()
+    if (!doc || !instruction.trim()) return
+    set({ past: [...past, doc.feature_tree].slice(-50), future: [], busy: true, error: null })
+    try {
+      const updated = withIds(await api.aiEditDocument(doc.id, instruction))
+      set({
+        doc: updated,
+        selectedFeatureId: updated.feature_tree.root?.id ?? null,
+        sim: null,
+        dfm: null,
+        cam: null,
+      })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'AI edit failed' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  runSimulate: async () => {
+    const { doc } = get()
+    if (!doc) return
+    set({ busy: true, error: null })
+    try {
+      const sim = await api.simulateDocument(doc.id, 96)
+      set({ sim })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Simulation failed' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  runDfm: async (buildAxis = 'auto') => {
+    const { doc } = get()
+    if (!doc) return
+    set({ busy: true, error: null })
+    try {
+      const dfm = await api.dfmDocument(doc.id, buildAxis, 96)
+      set({ dfm })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'DFM analysis failed' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  runCam: async (tool) => {
+    const { doc } = get()
+    if (!doc) return
+    set({ busy: true, error: null })
+    try {
+      const cam = await api.camDocument(doc.id, tool)
+      set({ cam })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'CAM generation failed' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  exportStep: async () => {
+    const { doc } = get()
+    if (!doc) return
+    try {
+      const step = await api.exportDocumentStep(doc.id, 128)
+      const blob = new Blob([step], { type: 'application/step' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${doc.name.replace(/[^\w.-]+/g, '_') || 'part'}.step`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Export failed' })
+    }
+  },
+
+  downloadGcode: () => {
+    const { doc, cam } = get()
+    if (!doc || !cam?.gcode_url) return
+    const a = document.createElement('a')
+    a.href = cam.gcode_url
+    a.download = `${doc.name.replace(/[^\w.-]+/g, '_') || 'part'}.nc`
+    a.click()
+  },
+
+  addDimension: async (a, b, label) => {
+    const { doc } = get()
+    if (!doc) return
+    try {
+      const dim = await api.addDimension(doc.id, { a, b, label, source: 'user' })
+      set({ doc: { ...doc, dimensions: [...doc.dimensions, dim] } })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Failed to add dimension' })
+    }
+  },
+
+  removeDimension: async (dimId) => {
+    const { doc } = get()
+    if (!doc) return
+    // optimistic removal
+    set({ doc: { ...doc, dimensions: doc.dimensions.filter((d) => d.id !== dimId) } })
+    try {
+      await api.removeDimension(doc.id, dimId)
+    } catch {
+      /* ignore; next fetch reconciles */
+    }
+  },
+
+  createFromPrompt: async (prompt) => {
+    if (!prompt.trim()) return
+    set({ busy: true, error: null })
+    try {
+      const doc = withIds(await api.createDocument({ prompt, resolution: DEFAULT_RESOLUTION }))
+      set({ doc, selectedFeatureId: doc.feature_tree.root?.id ?? null, mode: 'model', sim: null, dfm: null, cam: null, past: [], future: [] })
+      if (doc.derived.error) set({ error: doc.derived.error })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Failed to generate part' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  newBlank: async () => {
+    set({ busy: true, error: null })
+    try {
+      const doc = withIds(await api.createDocument({ resolution: DEFAULT_RESOLUTION }))
+      set({ doc, selectedFeatureId: doc.feature_tree.root?.id ?? null, mode: 'model', sim: null, dfm: null, cam: null, past: [], future: [] })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Failed to create document' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  openDocument: async (id) => {
+    set({ busy: true, error: null })
+    try {
+      const doc = withIds(await api.getDocument(id))
+      set({ doc, selectedFeatureId: doc.feature_tree.root?.id ?? null, sim: null, dfm: null, cam: null, past: [], future: [] })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Failed to open document' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  rename: async (name) => {
+    const { doc } = get()
+    if (!doc) return
+    set({ doc: { ...doc, name } })
+    try {
+      await api.updateDocument(doc.id, { name })
+    } catch {
+      /* name is cosmetic; ignore transient failure */
+    }
+  },
+
+  commitTree: async (tree) => {
+    const { doc, past } = get()
+    if (!doc) return
+    // snapshot current tree for undo, then optimistic update
+    set({ past: [...past, doc.feature_tree].slice(-50), future: [], busy: true, error: null, doc: { ...doc, feature_tree: tree } })
+    try {
+      const updated = withIds(
+        await api.updateDocument(doc.id, { feature_tree: tree, resolution: DEFAULT_RESOLUTION }),
+      )
+      set({ doc: updated, error: updated.derived.error ?? null, sim: null, dfm: null, cam: null })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Failed to evaluate edit' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  undo: async () => {
+    const { doc, past, future } = get()
+    if (!doc || past.length === 0) return
+    const prev = past[past.length - 1]
+    set({ past: past.slice(0, -1), future: [...future, doc.feature_tree], busy: true, error: null, doc: { ...doc, feature_tree: prev } })
+    try {
+      const updated = withIds(await api.updateDocument(doc.id, { feature_tree: prev, resolution: DEFAULT_RESOLUTION }))
+      set({ doc: updated, error: updated.derived.error ?? null, sim: null, dfm: null, cam: null })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Undo failed' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  redo: async () => {
+    const { doc, past, future } = get()
+    if (!doc || future.length === 0) return
+    const next = future[future.length - 1]
+    set({ future: future.slice(0, -1), past: [...past, doc.feature_tree], busy: true, error: null, doc: { ...doc, feature_tree: next } })
+    try {
+      const updated = withIds(await api.updateDocument(doc.id, { feature_tree: next, resolution: DEFAULT_RESOLUTION }))
+      set({ doc: updated, error: updated.derived.error ?? null, sim: null, dfm: null, cam: null })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Redo failed' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+}))

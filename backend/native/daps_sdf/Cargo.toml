@@ -1,0 +1,19 @@
+[package]
+name = "daps_sdf"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "daps_sdf"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+numpy = "0.22"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true

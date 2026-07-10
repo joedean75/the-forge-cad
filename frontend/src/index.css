@@ -1,0 +1,129 @@
+@import "tailwindcss";
+
+/* ── Typeface: Space Grotesk (display), IBM Plex Mono (data), IBM Plex Sans (UI) ── */
+@import "@fontsource/space-grotesk/400.css";
+@import "@fontsource/space-grotesk/500.css";
+@import "@fontsource/space-grotesk/600.css";
+@import "@fontsource/space-grotesk/700.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+
+@theme {
+  /* ── Graphite drafting-film neutrals (cool, not neutral-black) ── */
+  --color-cad-bg: #12151a;         /* viewport / app base */
+  --color-cad-panel: #191d24;      /* panels + chrome */
+  --color-cad-raised: #20252e;     /* rows / raised controls */
+  --color-cad-border: #2c333e;     /* hairline rules */
+  --color-cad-text: #8a95a5;       /* body / secondary */
+  --color-cad-text-heading: #eef1f5; /* headings / primary */
+
+  /* ── Stress ramp: cool VOID → hot LOADED. The app's value language. ── */
+  --color-stress-void: #3a4658;    /* unloaded / low density */
+  --color-stress-mid: #8c6f84;     /* transition */
+  --color-cad-accent: #e86a3c;     /* ember — loaded / active (UI accent) */
+  --color-cad-accent-hot: #ffb86b; /* filament — stress concentration / peak */
+  --color-cad-accent-glow: rgba(232, 106, 60, 0.18);
+
+  /* ── Status (kept engineering-legible, tuned to the palette) ── */
+  --color-cad-success: #5cc9a7;    /* verified / within spec */
+  --color-cad-warning: #e8a63c;    /* margin / caution */
+  --color-cad-danger: #e8553c;     /* over limit / fault */
+
+  /* ── Type roles ── */
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-cad-bg);
+  color: var(--color-cad-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Numbers are data: any element tagged .tabular renders as aligned mono figures. */
+.tabular {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum" 1, "zero" 1;
+  letter-spacing: -0.01em;
+}
+
+/* Drafting eyebrow: mono, tracked-out, preceded by a datum tick in markup. */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+/* Inspector section header: mono eyebrow anchored by an ember datum bar. */
+.sec-head {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--color-cad-text-heading);
+  padding-left: 9px;
+  border-left: 2px solid var(--color-cad-accent);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333b47;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #414a58;
+}
+
+/* Filament pulse — the heated node on the load-path spine. Motion-safe. */
+@keyframes filament-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.animate-filament {
+  animation: filament-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-filament,
+  .animate-pulse {
+    animation: none !important;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}

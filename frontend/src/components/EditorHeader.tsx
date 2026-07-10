@@ -1,0 +1,207 @@
+import { useEffect, useState } from 'react'
+import { Sparkles, Plus, Loader2, Cpu, FolderOpen, Undo2, Redo2, UserCircle2, History } from 'lucide-react'
+import { useDocumentStore } from '../store/useDocumentStore'
+import { useAuthStore } from '../store/useAuthStore'
+import { api } from '../api/client'
+import type { EditorMode, LlmConfig } from '../../../shared/types'
+
+const MODES: { id: EditorMode; label: string; ready: boolean }[] = [
+  { id: 'model', label: 'Model', ready: true },
+  { id: 'optimize', label: 'Optimize', ready: true },
+  { id: 'validate', label: 'Validate', ready: true },
+  { id: 'make', label: 'Make', ready: true },
+  { id: 'machine', label: 'Machine', ready: true },
+]
+
+function TrussMark() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 19 L12 6 L20 19 M4 19 L20 19 M12 6 L12 19"
+        stroke="var(--color-stress-void)"
+        strokeWidth="1.25"
+        strokeLinejoin="round"
+      />
+      <circle cx="4" cy="19" r="1.8" fill="var(--color-cad-text)" />
+      <circle cx="20" cy="19" r="1.8" fill="var(--color-cad-text)" />
+      <circle cx="12" cy="6" r="2.4" fill="var(--color-cad-accent)" />
+    </svg>
+  )
+}
+
+function LlmSelector() {
+  const [cfg, setCfg] = useState<LlmConfig | null>(null)
+  const [updating, setUpdating] = useState(false)
+
+  useEffect(() => {
+    api.getLlmConfig().then(setCfg).catch(() => setCfg(null))
+  }, [])
+
+  const on = cfg?.configured ?? false
+
+  const changeModel = async (model: string) => {
+    if (!cfg || model === cfg.model) return
+    setUpdating(true)
+    try {
+      setCfg(await api.setLlmModel(model))
+    } catch {
+      /* keep prior config on failure */
+    } finally {
+      setUpdating(false)
+    }
+  }
+
+  return (
+    <div
+      className="flex items-center gap-1.5 h-9 pl-2 pr-1.5 rounded-sm border border-cad-border shrink-0"
+      title={on ? `Text-to-CAD via ${cfg?.provider}` : 'No LLM key — using the rule-based parser (add LLM_API_KEY to backend/.env)'}
+    >
+      <Cpu size={13} className={on ? 'text-cad-success' : 'text-cad-text/50'} />
+      {on && cfg ? (
+        <select
+          value={cfg.model}
+          onChange={(e) => changeModel(e.target.value)}
+          disabled={updating}
+          className="tabular max-w-[150px] bg-transparent text-[10px] text-cad-text-heading outline-none cursor-pointer disabled:opacity-50"
+        >
+          {cfg.available_models.map((m) => (
+            <option key={m} value={m} className="bg-cad-panel text-cad-text-heading">
+              {m}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <span className="tabular text-[10px] text-cad-text/60 pr-1">rule-based</span>
+      )}
+      {updating && <Loader2 size={11} className="animate-spin text-cad-text shrink-0" />}
+    </div>
+  )
+}
+
+export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory }: { onOpenLibrary: () => void; onOpenAccount: () => void; onOpenHistory: () => void }) {
+  const { mode, setMode, busy, createFromPrompt, newBlank, doc, undo, redo, past, future } = useDocumentStore()
+  const account = useAuthStore((s) => s.account)
+  const [prompt, setPrompt] = useState('')
+
+  const submit = () => {
+    if (!prompt.trim() || busy) return
+    createFromPrompt(prompt)
+    setPrompt('')
+  }
+
+  return (
+    <header className="h-14 border-b border-cad-border bg-cad-panel flex items-center gap-4 pl-3 pr-4 shrink-0 z-20">
+      <div className="flex items-center gap-2.5 shrink-0">
+        <TrussMark />
+        <div className="leading-none">
+          <h1 className="font-display text-cad-text-heading font-semibold text-[15px] tracking-tight leading-none">
+            DAPS
+          </h1>
+          <p className="eyebrow text-cad-text mt-1 leading-none">Design Studio</p>
+        </div>
+        <button
+          onClick={onOpenLibrary}
+          title="Open parts library"
+          className="flex items-center gap-1.5 h-9 px-2.5 ml-1 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void transition-colors"
+        >
+          <FolderOpen size={14} />
+          <span className="text-[11px] font-medium">Files</span>
+        </button>
+        <div className="flex items-center gap-0.5 ml-1">
+          <button
+            onClick={undo}
+            disabled={past.length === 0 || busy}
+            title="Undo (Ctrl+Z)"
+            className="flex items-center justify-center h-9 w-8 rounded-sm text-cad-text hover:text-cad-text-heading hover:bg-cad-raised transition-colors disabled:opacity-30"
+          >
+            <Undo2 size={15} />
+          </button>
+          <button
+            onClick={redo}
+            disabled={future.length === 0 || busy}
+            title="Redo (Ctrl+Shift+Z)"
+            className="flex items-center justify-center h-9 w-8 rounded-sm text-cad-text hover:text-cad-text-heading hover:bg-cad-raised transition-colors disabled:opacity-30"
+          >
+            <Redo2 size={15} />
+          </button>
+        </div>
+      </div>
+
+      {/* always-available text-to-CAD prompt bar */}
+      <div className="flex-1 max-w-2xl mx-auto flex items-center gap-2">
+        <div className="flex-1 flex items-center gap-2 h-9 px-3 rounded-sm bg-cad-bg border border-cad-border focus-within:border-cad-accent transition-colors">
+          <Sparkles size={14} className="text-cad-accent shrink-0" />
+          <input
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && submit()}
+            placeholder="Describe a part — e.g. a 100×50×30 mm bracket with two mounting holes"
+            className="flex-1 bg-transparent text-xs text-cad-text-heading placeholder:text-cad-text/50 outline-none"
+          />
+          <button
+            onClick={submit}
+            disabled={!prompt.trim() || busy}
+            className="flex items-center gap-1.5 px-2.5 h-6 rounded-sm bg-cad-accent text-cad-bg text-[11px] font-semibold hover:bg-cad-accent-hot transition-colors disabled:opacity-40"
+          >
+            {busy ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+            Generate
+          </button>
+        </div>
+        <button
+          onClick={newBlank}
+          disabled={busy}
+          title="New blank body"
+          className="flex items-center justify-center h-9 w-9 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void transition-colors disabled:opacity-40"
+        >
+          <Plus size={16} />
+        </button>
+        <LlmSelector />
+      </div>
+
+      {/* workspace mode switcher */}
+      <div className="flex items-center gap-0.5 p-0.5 rounded-sm bg-cad-bg border border-cad-border shrink-0">
+        {MODES.map((m) => {
+          const active = mode === m.id
+          return (
+            <button
+              key={m.id}
+              onClick={() => setMode(m.id)}
+              disabled={!doc}
+              title={m.ready ? m.label : `${m.label} — coming soon`}
+              className={`relative px-2.5 py-1 rounded-[3px] text-[11px] font-medium tracking-wide transition-colors disabled:opacity-40 ${
+                active
+                  ? 'bg-cad-accent/15 text-cad-accent-hot'
+                  : 'text-cad-text hover:text-cad-text-heading'
+              }`}
+            >
+              {m.label}
+              {!m.ready && (
+                <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-stress-void" />
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* version history & sharing */}
+      <button
+        onClick={onOpenHistory}
+        disabled={!doc}
+        title="Version history & sharing"
+        className="flex items-center justify-center h-9 w-9 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void transition-colors shrink-0 disabled:opacity-40"
+      >
+        <History size={15} />
+      </button>
+
+      {/* account / subscription */}
+      <button
+        onClick={onOpenAccount}
+        title={account ? `${account.email} · ${account.plan.name} plan` : 'Sign in'}
+        className="flex items-center gap-1.5 h-9 px-2.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void transition-colors shrink-0"
+      >
+        <UserCircle2 size={15} />
+        <span className="text-[11px] font-medium max-w-[90px] truncate">{account ? account.plan.name : 'Sign in'}</span>
+      </button>
+    </header>
+  )
+}

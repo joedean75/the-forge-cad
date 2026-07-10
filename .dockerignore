@@ -1,0 +1,14 @@
+# Keep the build context (and image) small and secret-free.
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.vite
+frontend/dist
+backend/data
+**/.env
+.git
+.github
+*.md
+!DEPLOY.md

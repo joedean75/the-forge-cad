@@ -1,0 +1,42 @@
+# Render.com blueprint — one managed Postgres + the Docker web service.
+# Deploy: push this repo to GitHub, then "New > Blueprint" in Render and point it
+# here. Set the `sync: false` secrets in the dashboard. See DEPLOY.md.
+
+databases:
+  - name: daps-db
+    databaseName: daps
+    user: daps
+    plan: basic-256mb          # bump as data grows; enables automated backups
+
+services:
+  - type: web
+    name: daps
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: standard             # torch/scipy/meshing need real RAM+CPU; not free-tier
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: daps-db
+          property: connectionString
+      - key: DAPS_AUTH_REQUIRED     # enforce real auth in production
+        value: "1"
+      - key: DAPS_JWT_SECRET        # stable signing secret (generated once)
+        generateValue: true
+      - key: DAPS_CORS_ORIGINS      # SPA is same-origin; set only if you split hosts
+        value: ""
+      - key: PUBLIC_BASE_URL        # your public URL, for Stripe redirects
+        sync: false
+      - key: STRIPE_API_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_PRO
+        sync: false
+      - key: STRIPE_PRICE_ENTERPRISE
+        sync: false
+      - key: LLM_API_KEY            # optional; rule-based parser runs without it
+        sync: false

@@ -1,0 +1,228 @@
+"""Analysis and export helpers for DesignDocuments.
+
+These wrap the CAD kernel so the documents router stays thin. Everything here
+consumes a document's evaluated solid via `document_service.get_solid`.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Optional
+
+import numpy as np
+from fastapi import HTTPException
+
+from app.cad_kernel.geom.meshing import mesh_volume, solid_to_mesh
+from app.cad_kernel.kernel import Kernel
+from app.models.schemas import (
+    DesignSpec,
+    DfmCheck,
+    DfmReport,
+    Material,
+    OptimizationSetup,
+    Quote,
+    SimulationResult,
+    Vector3,
+)
+from app.services import document_service as docs
+from app.services.cad_service import (
+    kernel_manufacturing_analysis,
+    solid_to_step_string,
+)
+from app.routers.materials import _MATERIALS
+
+
+# Default LPBF process constants (rough averages for aluminum)
+_LAYER_THICKNESS_M = 30e-6
+_HATCH_SPACING_M = 100e-6
+_SCAN_SPEED_MPS = 1.0
+_MIN_FEATURE_SIZE_M = 1e-3
+_OVERHANG_THRESHOLD_DEG = 45.0
+_DEFAULT_DENSITY = 2700.0  # kg/m^3
+
+
+def _default_spec() -> DesignSpec:
+    """Fallback spec when a document has no optimization overlay."""
+    return DesignSpec(
+        name="Default",
+        design_space={"size": {"x": 1.0, "y": 1.0, "z": 1.0}, "center": {"x": 0.0, "y": 0.0, "z": 0.0}},
+        preserve_regions=[],
+        obstacle_regions=[],
+        load_cases=[
+            {"id": "l1", "name": "Vertical Load", "point": {"x": 0.0, "y": 0.5, "z": 0.0}, "force": {"x": 0.0, "y": -1000.0, "z": 0.0}, "load_type": "static"},
+        ],
+        constraints=[
+            {"id": "c1", "name": "Fixed Base", "type": "fixed", "point": {"x": 0.0, "y": -0.5, "z": 0.0}},
+        ],
+        material_id="al-7075",
+        objective={"target": "minimize_mass", "weight": 1.0},
+    )
+
+
+def _spec_from_optimization(doc_name: str, opt: OptimizationSetup) -> DesignSpec:
+    return DesignSpec(
+        name=doc_name,
+        design_space={"size": {"x": 1.0, "y": 1.0, "z": 1.0}, "center": {"x": 0.0, "y": 0.0, "z": 0.0}},
+        preserve_regions=opt.keep_in,
+        obstacle_regions=opt.keep_out,
+        load_cases=opt.load_cases,
+        constraints=opt.constraints,
+        material_id=opt.material_id,
+        objective=opt.objective,
+    )
+
+
+def _material_for_spec(spec: DesignSpec) -> Material:
+    return next((m for m in _MATERIALS if m.id == spec.material_id), _MATERIALS[0])
+
+
+def _approximate_simulation(solid, spec: DesignSpec, mat: Material) -> SimulationResult:
+    """Coarse simulation estimate for an arbitrary kernel solid."""
+    mesh = solid_to_mesh(solid)
+    volume = abs(mesh_volume(mesh.vertices, mesh.faces))
+    mass = volume * mat.density
+
+    verts = mesh.vertices
+    size = verts.max(axis=0) - verts.min(axis=0)
+    char_len = float(np.mean(size)) + 1e-6
+    area_scale = (volume ** (2.0 / 3.0)) + 1e-6
+
+    E_pa = mat.youngs_modulus * 1e9
+
+    total_force = 0.0
+    for load in spec.load_cases:
+        f = np.array([load.force.x, load.force.y, load.force.z])
+        total_force += float(np.linalg.norm(f))
+
+    max_stress_mpa = (total_force / area_scale) / 1e6
+    max_stress_mpa = max(0.01, min(max_stress_mpa, 500.0))
+    max_displacement_mm = (total_force * char_len) / (E_pa * area_scale) * 1000.0
+    compliance_j = total_force * (max_displacement_mm / 1000.0)
+    safety_factor = mat.yield_strength / max(max_stress_mpa, 1e-6)
+    safety_factor = min(safety_factor, 999.0)
+
+    return SimulationResult(
+        max_stress=round(max_stress_mpa, 2),
+        max_displacement=round(max_displacement_mm, 4),
+        safety_factor=round(safety_factor, 2),
+        compliance=round(compliance_j, 6),
+        mass=round(mass, 4),
+    )
+
+
+def _auto_build_axis(solid) -> tuple[str, np.ndarray]:
+    """Pick +X/+Y/+Z to minimize overhang area."""
+    axes = {
+        "+X": np.array([1.0, 0.0, 0.0]),
+        "+Y": np.array([0.0, 1.0, 0.0]),
+        "+Z": np.array([0.0, 0.0, 1.0]),
+    }
+    best_name = "+Z"
+    best_area = float("inf")
+    for name, axis in axes.items():
+        stats = kernel_manufacturing_analysis(solid, build_axis=axis)
+        if stats["overhang_area"] < best_area:
+            best_area = stats["overhang_area"]
+            best_name = name
+    return best_name, axes[best_name]
+
+
+def simulate_document(doc_id: str, resolution: int = 128) -> SimulationResult:
+    doc = docs.get_document(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    spec = _spec_from_optimization(doc.name, doc.optimization) if doc.optimization else _default_spec()
+    solid = docs.get_solid(doc_id, resolution=resolution)
+    mat = _material_for_spec(spec)
+    return _approximate_simulation(solid, spec, mat)
+
+
+def dfm_document(doc_id: str, build_axis: str = "auto", resolution: int = 128) -> DfmReport:
+    doc = docs.get_document(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    solid = docs.get_solid(doc_id, resolution=resolution)
+
+    axes = {"x": "+X", "y": "+Y", "z": "+Z"}
+    if build_axis.lower() in axes:
+        axis_name = axes[build_axis.lower()]
+        axis_vec = {"x": np.array([1.0, 0.0, 0.0]), "y": np.array([0.0, 1.0, 0.0]), "z": np.array([0.0, 0.0, 1.0])}[build_axis.lower()]
+    else:
+        axis_name, axis_vec = _auto_build_axis(solid)
+
+    stats = kernel_manufacturing_analysis(solid, build_axis=axis_vec)
+    overhang_area = stats["overhang_area"]
+    overhang_angle = stats["max_overhang_angle"]
+    total_area = stats["total_area"]
+    total_volume = stats["total_volume"]
+    support_volume = stats["support_volume"]
+    min_edge = stats["min_edge"]
+
+    overhang_penalty = 60.0 * (overhang_area / total_area) if total_area > 0 else 0.0
+    support_penalty = 20.0 * (support_volume / total_volume) if total_volume > 0 else 0.0
+    printability = int(round(np.clip(100.0 - overhang_penalty - support_penalty, 0.0, 100.0)))
+
+    deposition_rate = _SCAN_SPEED_MPS * _HATCH_SPACING_M * _LAYER_THICKNESS_M
+    total_print_volume = total_volume + support_volume
+    print_time_minutes = int(round((total_print_volume / max(deposition_rate, 1e-15)) / 60.0))
+
+    feature_size_ok = min_edge >= _MIN_FEATURE_SIZE_M
+    enclosed_cavities = bool(total_volume > 0 and support_volume > 0)
+
+    checks = [
+        DfmCheck(id="overhang", label="Overhang angle", status="fail" if overhang_angle > _OVERHANG_THRESHOLD_DEG else "pass", detail=f"{overhang_angle:.1f}° max", value=overhang_angle),
+        DfmCheck(id="feature_size", label="Feature size", status="pass" if feature_size_ok else "fail", detail=f"{min_edge*1000:.2f} mm min edge", value=min_edge),
+        DfmCheck(id="support", label="Support volume", status="warn" if support_volume > 0 else "pass", detail=f"{support_volume*1e6:.2f} mm³", value=support_volume),
+    ]
+
+    return DfmReport(
+        process="LPBF",
+        checks=checks,
+        printability_score=printability,
+        quote=Quote(
+            process="LPBF",
+            material_cost=round(total_volume * 50.0, 2),
+            machine_cost=round(print_time_minutes * 2.0, 2),
+            setup_cost=50.0,
+            total=round(total_volume * 50.0 + print_time_minutes * 2.0 + 50.0, 2),
+            lead_time_days=max(1, int(math.ceil(print_time_minutes / 720))),
+        ),
+        build_orientation=axis_name,
+        build_orientation_vector=Vector3(x=float(axis_vec[0]), y=float(axis_vec[1]), z=float(axis_vec[2])),
+        overhang_angle=round(overhang_angle, 1),
+        overhang_area=round(overhang_area, 6),
+        support_volume=round(support_volume, 9),
+        print_time_minutes=max(1, print_time_minutes),
+    )
+
+
+def export_step_document(doc_id: str, resolution: int = 128) -> str:
+    doc = docs.get_document(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    solid = docs.get_solid(doc_id, resolution=resolution)
+    return solid_to_step_string(solid, name=f"doc_{doc_id}")
+
+
+def cam_document(doc_id: str, tool) -> "object":
+    """Generate a 2.5D profiling program for the document body and cache it."""
+    from app.cad_kernel.core.feature_tree import FeatureTree
+    from app.models.schemas import CamResult
+    from app.services.cam.toolpath import generate_toolpaths
+
+    doc = docs.get_document(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    root = FeatureTree.from_dict(doc.feature_tree).root
+    try:
+        result = generate_toolpaths(root, tool)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"CAM generation failed: {exc}")
+
+    cam = CamResult(**result)
+    doc.derived.cam = cam
+    docs._persist(doc)
+    return cam

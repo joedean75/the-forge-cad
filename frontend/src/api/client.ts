@@ -1,0 +1,275 @@
+import type {
+  Material,
+  DesignSpec,
+  OptimizeJob,
+  OptimizeResult,
+  SimulationResult,
+  ManufacturingResult,
+  AssemblyResult,
+  DfmReport,
+  CamResult,
+  Candidate,
+  DesignGenerationResponse,
+  LlmConfig,
+  DesignDocument,
+  DocumentSummary,
+  OptimizationSetup,
+  FeatureTreeDict,
+  MachinePrinter,
+  MachineStatus,
+  Dimension,
+  Vector3,
+  VersionSummary,
+  DocumentVersion,
+  Collaborator,
+} from '../../../shared/types'
+
+const API_BASE = '/api'
+
+// Session token (JWT) attached to every request when present. Persisted so a
+// reload keeps the user signed in.
+let authToken: string | null = typeof localStorage !== 'undefined' ? localStorage.getItem('daps_token') : null
+
+export function setAuthToken(token: string | null) {
+  authToken = token
+  if (typeof localStorage !== 'undefined') {
+    if (token) localStorage.setItem('daps_token', token)
+    else localStorage.removeItem('daps_token')
+  }
+}
+
+export function getAuthToken() {
+  return authToken
+}
+
+export function authHeaders(base: Record<string, string> = {}): Record<string, string> {
+  return authToken ? { ...base, Authorization: `Bearer ${authToken}` } : base
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${url}`, {
+    ...init,
+    headers: authHeaders({ 'Content-Type': 'application/json', ...(init?.headers as Record<string, string>) }),
+  })
+  if (!res.ok) {
+    let detail = res.statusText
+    try {
+      detail = (await res.json())?.detail ?? detail
+    } catch {
+      /* non-JSON error body */
+    }
+    const err = new Error(`API error: ${res.status} ${detail}`) as Error & { status?: number }
+    err.status = res.status
+    throw err
+  }
+  return res.json() as Promise<T>
+}
+
+export interface AccountView {
+  id: string
+  email: string
+  plan: { id: string; name: string; features: string[] }
+  usage: { ops_used: number; monthly_op_quota: number; period_start: number }
+  api_keys: { id: string; name: string; prefix: string; created_at: string }[]
+  created_at: string
+}
+
+export interface PlanSummary {
+  id: string
+  name: string
+  price_usd_month: number
+  max_documents: number
+  resolution_cap: number
+  monthly_op_quota: number
+  seats: number
+  features: string[]
+}
+
+export const api = {
+  health: () => fetchJson<{ status: string }>('/health'),
+  materials: () => fetchJson<Material[]>('/materials'),
+  optimize: (spec: DesignSpec) =>
+    fetchJson<OptimizeJob>('/optimize', {
+      method: 'POST',
+      body: JSON.stringify(spec),
+    }),
+  getJob: (jobId: string) => fetchJson<OptimizeJob>(`/optimize/${jobId}`),
+  getResult: (jobId: string) => fetchJson<OptimizeResult>(`/optimize/${jobId}/result`),
+  simulate: (candidateId: string) =>
+    fetchJson<SimulationResult>(`/simulate?candidate_id=${candidateId}`, { method: 'POST' }),
+  manufacture: (candidateId: string, buildAxis: string = 'auto') =>
+    fetchJson<ManufacturingResult>(`/manufacturing?candidate_id=${candidateId}&build_axis=${buildAxis}`, { method: 'POST' }),
+  textToCad: (prompt: string, spec: DesignSpec) =>
+    fetchJson<DesignSpec>('/text-to-cad', { method: 'POST', body: JSON.stringify({ prompt, spec }) }),
+  assembly: () => fetchJson<AssemblyResult>('/assembly'),
+  exportStep: (candidateId: string) =>
+    fetch(`/api/export/${candidateId}/step`).then((res) => {
+      if (!res.ok) throw new Error(`API error: ${res.status}`)
+      return res.text()
+    }),
+  generatePart: (prompt: string, resolution: number = 128) =>
+    fetchJson<Candidate>('/text-to-cad/generate', {
+      method: 'POST',
+      body: JSON.stringify({ prompt, resolution }),
+    }),
+  reevaluate: (candidateId: string, featureTree: object, resolution: number = 128) =>
+    fetchJson<Candidate>(`/cad/${candidateId}/reevaluate`, {
+      method: 'POST',
+      body: JSON.stringify({ feature_tree: featureTree, resolution }),
+    }),
+  generateAssembly: (prompt: string, resolution: number = 128) =>
+    fetchJson<AssemblyResult>('/assembly/generate', {
+      method: 'POST',
+      body: JSON.stringify({ prompt, resolution }),
+    }),
+  exportAssemblyStep: (assemblyId: string) =>
+    fetch(`/api/export/assembly/${assemblyId}/step`).then((res) => {
+      if (!res.ok) throw new Error(`API error: ${res.status}`)
+      return res.text()
+    }),
+  listSavedCandidates: () => fetchJson<Candidate[]>('/cad/candidates'),
+  listSavedAssemblies: () => fetchJson<AssemblyResult[]>('/cad/assemblies'),
+  getAssembly: (id: string) => fetchJson<AssemblyResult>(`/cad/assemblies/${id}`),
+  generateDesign: (prompt: string, resolution: number = 128) =>
+    fetchJson<DesignGenerationResponse>('/design/generate', {
+      method: 'POST',
+      body: JSON.stringify({ prompt, resolution }),
+    }),
+  getLlmConfig: () => fetchJson<LlmConfig>('/llm/config'),
+  setLlmModel: (model: string) =>
+    fetchJson<LlmConfig>('/llm/model', {
+      method: 'POST',
+      body: JSON.stringify({ model }),
+    }),
+
+  // ── Design documents (unified part model) ──
+  createDocument: (body: { name?: string; prompt?: string; units?: 'mm' | 'm'; resolution?: number }) =>
+    fetchJson<DesignDocument>('/documents', { method: 'POST', body: JSON.stringify(body) }),
+  listDocuments: () => fetchJson<DocumentSummary[]>('/documents'),
+  getDocument: (id: string) => fetchJson<DesignDocument>(`/documents/${id}`),
+  updateDocument: (
+    id: string,
+    body: { name?: string; feature_tree?: FeatureTreeDict; optimization?: OptimizationSetup; resolution?: number },
+  ) => fetchJson<DesignDocument>(`/documents/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  evaluateDocument: (id: string, resolution = 128) =>
+    fetchJson<DesignDocument>(`/documents/${id}/evaluate?resolution=${resolution}`, { method: 'POST' }),
+  aiEditDocument: (id: string, instruction: string, resolution = 96) =>
+    fetchJson<DesignDocument>(`/documents/${id}/ai-edit`, {
+      method: 'POST',
+      body: JSON.stringify({ instruction, resolution }),
+    }),
+  /** The single mutation path shared by the UI and AI agents. */
+  runOperation: (id: string, op: string, args?: Record<string, unknown>) =>
+    fetchJson<{ ok: boolean; op: string; result: Record<string, unknown>; document?: DesignDocument }>(
+      `/documents/${id}/op`,
+      { method: 'POST', body: JSON.stringify({ op, args: args ?? {} }) },
+    ),
+  optimizeDocument: (id: string, body: { setup?: OptimizationSetup; resolution?: number }) =>
+    fetchJson<OptimizeJob>(`/documents/${id}/optimize`, { method: 'POST', body: JSON.stringify(body) }),
+  getOptimizeJob: (id: string, jobId: string) =>
+    fetchJson<OptimizeJob>(`/documents/${id}/optimize/${jobId}`),
+  simulateDocument: (id: string, resolution = 128) =>
+    fetchJson<SimulationResult>(`/documents/${id}/simulate?resolution=${resolution}`, { method: 'POST' }),
+  dfmDocument: (id: string, buildAxis = 'auto', resolution = 128) =>
+    fetchJson<DfmReport>(`/documents/${id}/dfm?build_axis=${buildAxis}&resolution=${resolution}`, { method: 'POST' }),
+  exportDocumentStep: (id: string, resolution = 128) =>
+    fetch(`/api/documents/${id}/step?resolution=${resolution}`, { headers: authHeaders() }).then((res) => {
+      if (!res.ok) throw new Error(`API error: ${res.status}`)
+      return res.text()
+    }),
+  camDocument: (
+    id: string,
+    tool: { diameter_mm?: number; stepdown_mm?: number; stepover_mm?: number; feed_mm_min?: number },
+  ) => fetchJson<CamResult>(`/documents/${id}/cam`, { method: 'POST', body: JSON.stringify(tool) }),
+  addDimension: (
+    id: string,
+    dim: { a: Vector3; b: Vector3; label?: string | null; source?: 'user' | 'llm' },
+  ) => fetchJson<Dimension>(`/documents/${id}/dimensions`, { method: 'POST', body: JSON.stringify(dim) }),
+  removeDimension: (id: string, dimId: string) =>
+    fetchJson<{ status: string; id: string }>(`/documents/${id}/dimensions/${dimId}`, { method: 'DELETE' }),
+
+  solveSketch: (spec: {
+    points: unknown[]
+    lines?: unknown[]
+    circles?: unknown[]
+    constraints?: unknown[]
+  }) =>
+    fetchJson<{
+      points: Record<string, [number, number]>
+      radii: Record<string, number>
+      residual: number
+      converged: boolean
+      polygon: [number, number][] | null
+    }>('/sketch/solve', { method: 'POST', body: JSON.stringify(spec) }),
+
+  // ── Machine control (Moonraker / Mainsail / Klipper) ──
+  listPrinters: () => fetchJson<MachinePrinter[]>('/machine/printers'),
+  machineStatus: (url: string) =>
+    fetchJson<MachineStatus>('/machine/status', { method: 'POST', body: JSON.stringify({ url }) }),
+  machineJog: (url: string, axis: string, distance: number, feed = 1500) =>
+    fetchJson<{ ok: boolean }>('/machine/jog', { method: 'POST', body: JSON.stringify({ url, axis, distance, feed }) }),
+  machineHome: (url: string, axes = '') =>
+    fetchJson<{ ok: boolean }>('/machine/home', { method: 'POST', body: JSON.stringify({ url, axes }) }),
+  machinePrint: (url: string, action: string, filename?: string) =>
+    fetchJson<{ ok: boolean }>('/machine/print', { method: 'POST', body: JSON.stringify({ url, action, filename }) }),
+  machineSendDocument: (url: string, docId: string, start = false) =>
+    fetchJson<{ ok: boolean }>('/machine/send-document', {
+      method: 'POST',
+      body: JSON.stringify({ url, doc_id: docId, start }),
+    }),
+  deleteDocument: (id: string) =>
+    fetchJson<{ status: string; id: string }>(`/documents/${id}`, { method: 'DELETE' }),
+
+  // ── Version history & collaboration ──
+  listVersions: (id: string) => fetchJson<VersionSummary[]>(`/documents/${id}/versions`),
+  createVersion: (id: string, label: string) =>
+    fetchJson<DocumentVersion>(`/documents/${id}/versions`, {
+      method: 'POST',
+      body: JSON.stringify({ label }),
+    }),
+  restoreVersion: (id: string, versionId: string, resolution = 96) =>
+    fetchJson<DesignDocument>(`/documents/${id}/versions/${versionId}/restore?resolution=${resolution}`, {
+      method: 'POST',
+    }),
+  branchVersion: (id: string, versionId: string, name?: string, resolution = 96) =>
+    fetchJson<DesignDocument>(`/documents/${id}/versions/${versionId}/branch`, {
+      method: 'POST',
+      body: JSON.stringify({ name, resolution }),
+    }),
+  listCollaborators: (id: string) => fetchJson<Collaborator[]>(`/documents/${id}/collaborators`),
+  addCollaborator: (id: string, email: string, role: 'viewer' | 'editor') =>
+    fetchJson<DesignDocument>(`/documents/${id}/collaborators`, {
+      method: 'POST',
+      body: JSON.stringify({ email, role }),
+    }),
+  removeCollaborator: (id: string, accountId: string) =>
+    fetchJson<DesignDocument>(`/documents/${id}/collaborators/${accountId}`, { method: 'DELETE' }),
+
+  // ── Auth & subscription ──
+  signup: (email: string, password: string) =>
+    fetchJson<{ token: string; account: AccountView }>('/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+  login: (email: string, password: string) =>
+    fetchJson<{ token: string; account: AccountView }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+  me: () => fetchJson<AccountView>('/auth/me'),
+  listPlans: () =>
+    fetchJson<{ plans: PlanSummary[]; billing: { provider: string; live: boolean; note: string | null } }>('/auth/plans'),
+  subscribe: (planId: string) =>
+    fetchJson<{ status: string; plan?: AccountView['plan']; url?: string }>('/auth/subscribe', {
+      method: 'POST',
+      body: JSON.stringify({ plan_id: planId }),
+    }),
+  billingPortal: () => fetchJson<{ url: string }>('/auth/billing-portal', { method: 'POST' }),
+  createApiKey: (name: string) =>
+    fetchJson<{ api_key: string; warning: string; account: AccountView }>('/auth/api-keys', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  revokeApiKey: (keyId: string) =>
+    fetchJson<{ revoked: string; account: AccountView }>(`/auth/api-keys/${keyId}`, { method: 'DELETE' }),
+}
