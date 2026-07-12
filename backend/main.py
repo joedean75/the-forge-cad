@@ -152,5 +152,19 @@ def health():
 
 # Serve the built React/Vite frontend so the app works from a single URL.
 dist_dir = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+
+@app.get("/landing", include_in_schema=False)
+def landing_page():
+    """Marketing landing page (also reachable at /landing.html via the mount)."""
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    page = dist_dir / "landing.html"
+    if not page.exists():
+        raise HTTPException(status_code=404, detail="landing page not built")
+    return FileResponse(str(page))
+
+
 if dist_dir.exists():
     app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="static")

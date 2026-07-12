@@ -3,15 +3,7 @@ import { Sparkles, Plus, Loader2, Cpu, FolderOpen, Undo2, Redo2, UserCircle2, Hi
 import { useDocumentStore } from '../store/useDocumentStore'
 import { useAuthStore } from '../store/useAuthStore'
 import { api } from '../api/client'
-import type { EditorMode, LlmConfig } from '../../../shared/types'
-
-const MODES: { id: EditorMode; label: string; ready: boolean }[] = [
-  { id: 'model', label: 'Model', ready: true },
-  { id: 'optimize', label: 'Optimize', ready: true },
-  { id: 'validate', label: 'Validate', ready: true },
-  { id: 'make', label: 'Make', ready: true },
-  { id: 'machine', label: 'Machine', ready: true },
-]
+import type { LlmConfig } from '../../../shared/types'
 
 function TrussMark() {
   return (
@@ -79,7 +71,7 @@ function LlmSelector() {
 }
 
 export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory }: { onOpenLibrary: () => void; onOpenAccount: () => void; onOpenHistory: () => void }) {
-  const { mode, setMode, busy, createFromPrompt, newBlank, doc, undo, redo, past, future } = useDocumentStore()
+  const { busy, createFromPrompt, newBlank, doc, undo, redo, past, future } = useDocumentStore()
   const account = useAuthStore((s) => s.account)
   const [prompt, setPrompt] = useState('')
 
@@ -156,31 +148,6 @@ export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory }: { 
           <Plus size={16} />
         </button>
         <LlmSelector />
-      </div>
-
-      {/* workspace mode switcher */}
-      <div className="flex items-center gap-0.5 p-0.5 rounded-sm bg-cad-bg border border-cad-border shrink-0">
-        {MODES.map((m) => {
-          const active = mode === m.id
-          return (
-            <button
-              key={m.id}
-              onClick={() => setMode(m.id)}
-              disabled={!doc}
-              title={m.ready ? m.label : `${m.label} — coming soon`}
-              className={`relative px-2.5 py-1 rounded-[3px] text-[11px] font-medium tracking-wide transition-colors disabled:opacity-40 ${
-                active
-                  ? 'bg-cad-accent/15 text-cad-accent-hot'
-                  : 'text-cad-text hover:text-cad-text-heading'
-              }`}
-            >
-              {m.label}
-              {!m.ready && (
-                <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-stress-void" />
-              )}
-            </button>
-          )
-        })}
       </div>
 
       {/* version history & sharing */}

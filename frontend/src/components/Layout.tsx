@@ -3,6 +3,7 @@ import { EditorHeader } from './EditorHeader'
 import { LibraryDrawer } from './LibraryDrawer'
 import { AccountDrawer } from './AccountDrawer'
 import { HistoryShareDrawer } from './HistoryShareDrawer'
+import { ModeSpine } from './ModeSpine'
 import { useAuthStore } from '../store/useAuthStore'
 import { SketchCanvas } from '../features/sketch/SketchCanvas'
 import { DocumentViewport } from './DocumentViewport'
@@ -53,16 +54,43 @@ function RightPanel() {
   )
 }
 
+function Readout({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="flex items-baseline gap-1">
+      <span className="eyebrow text-cad-text/45">{label}</span>
+      <span className="tabular text-[10px] text-cad-text">{value}</span>
+    </span>
+  )
+}
+
 function StatusBar() {
-  const { doc, busy, error } = useDocumentStore()
+  const { doc, mode, busy, error } = useDocumentStore()
+  const d = doc?.derived
   return (
     <div className="h-8 border-t border-cad-border bg-cad-panel px-4 flex items-center gap-3 shrink-0">
+      {/* machine state */}
       <span className={`w-1.5 h-1.5 rounded-full ${busy ? 'bg-cad-accent-hot animate-filament' : error ? 'bg-cad-danger' : 'bg-cad-success'}`} />
-      <span className="eyebrow text-cad-text">{busy ? 'evaluating' : error ? 'error' : 'ready'}</span>
-      {error && <span className="text-[11px] text-cad-danger truncate flex-1">{error}</span>}
-      {!error && doc && (
-        <span className="tabular text-[10px] text-cad-text/70 ml-auto">
-          {doc.derived.solid_hash ? `hash ${doc.derived.solid_hash}` : ''}
+      <span className="eyebrow text-cad-text">{busy ? 'evaluating' : error ? 'fault' : 'ready'}</span>
+
+      {/* active stage */}
+      <span className="flex items-center gap-1.5 pl-1">
+        <span aria-hidden className="w-0.5 h-3 bg-cad-accent rounded-full" />
+        <span className="eyebrow text-cad-text/80">{MODE_TITLE[mode]}</span>
+      </span>
+
+      {/* live telemetry */}
+      {error ? (
+        <span className="text-[11px] text-cad-danger truncate flex-1">{error}</span>
+      ) : (
+        <div className="flex items-center gap-4 ml-1">
+          {d?.mass != null && d.mass > 0 && <Readout label="mass" value={`${d.mass.toFixed(3)} kg`} />}
+          {d?.volume != null && d.volume > 0 && <Readout label="vol" value={`${(d.volume * 1e6).toFixed(1)} cm³`} />}
+        </div>
+      )}
+
+      {d?.solid_hash && (
+        <span className="tabular text-[10px] text-cad-text/50 ml-auto">
+          <span className="text-cad-text/35">sha</span> {d.solid_hash}
         </span>
       )}
     </div>
@@ -107,6 +135,7 @@ export function Layout() {
         onOpenHistory={() => setHistoryOpen(true)}
       />
       <div className="flex flex-1 min-h-0">
+        <ModeSpine />
         <FeatureTreePanel />
         <DocumentViewport />
         <RightPanel />

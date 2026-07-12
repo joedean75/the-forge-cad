@@ -8,10 +8,10 @@ rule-based parser.
 Supported environment variables (in order of precedence):
   LLM_API_KEY / KIMI_API_KEY
   LLM_BASE_URL / KIMI_BASE_URL   (default: https://api.moonshot.cn/v1)
-  LLM_MODEL / KIMI_MODEL         (default: moonshot-v1-8k)
+  LLM_MODEL / KIMI_MODEL         (default: kimi-k2-turbo-preview)
 
 For OpenRouter, set LLM_BASE_URL=https://openrouter.ai/api/v1 and
-LLM_MODEL to a routed model id, e.g. openai/gpt-3.5-turbo.
+LLM_MODEL to a routed model id, e.g. anthropic/claude-sonnet-5.
 """
 
 from __future__ import annotations
@@ -28,28 +28,43 @@ _LOGGER = logging.getLogger(__name__)
 
 LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("KIMI_API_KEY")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL") or os.getenv("KIMI_BASE_URL", "https://api.moonshot.cn/v1")
-LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("KIMI_MODEL", "moonshot-v1-8k")
+LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("KIMI_MODEL", "kimi-k2-turbo-preview")
 
-# Curated model lists by provider. OpenRouter supports many more; these are common, reliable defaults.
+# Curated model lists by provider — current flagships first, then fast/cheap
+# tiers, then legacy fallbacks. OpenRouter routes many more; the active model is
+# always injected at the top of the list if it isn't already present.
 _PROVIDER_MODELS: dict[str, list[str]] = {
     "openrouter": [
-        "openai/gpt-4o-mini",
-        "openai/gpt-3.5-turbo",
-        "openai/gpt-4o",
-        "anthropic/claude-3.5-sonnet",
-        "anthropic/claude-3-haiku",
-        "google/gemini-flash-1.5",
-        "meta-llama/llama-3.1-70b-instruct",
+        "anthropic/claude-sonnet-5",
+        "anthropic/claude-opus-4.8",
+        "anthropic/claude-haiku-4.5",
+        "openai/gpt-5.1",
+        "openai/gpt-5-mini",
+        "google/gemini-3-pro",
+        "google/gemini-2.5-flash",
+        "moonshotai/kimi-k2-thinking",
+        "x-ai/grok-4.1",
+        "deepseek/deepseek-chat",
+        "meta-llama/llama-4-maverick",
     ],
     "moonshot": [
-        "moonshot-v1-8k",
+        "kimi-k2-thinking",
+        "kimi-k2-turbo-preview",
+        "kimi-k2-0905-preview",
+        "kimi-latest",
         "moonshot-v1-32k",
-        "moonshot-v1-128k",
     ],
     "openai": [
-        "gpt-4o-mini",
-        "gpt-3.5-turbo",
+        "gpt-5.1",
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-4.1",
         "gpt-4o",
+    ],
+    "anthropic": [
+        "claude-sonnet-5",
+        "claude-opus-4-8",
+        "claude-haiku-4-5-20251001",
     ],
 }
 
@@ -59,6 +74,8 @@ def _provider_name(base_url: str) -> str:
         return "openrouter"
     if "moonshot" in base_url:
         return "moonshot"
+    if "anthropic" in base_url:
+        return "anthropic"
     if "openai" in base_url:
         return "openai"
     return "custom"

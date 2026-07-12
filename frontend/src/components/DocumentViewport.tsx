@@ -174,8 +174,15 @@ function SelectionHighlight({ node, fit }: { node: FeatureNode; fit: NonNullable
   )
 }
 
+const EXAMPLE_PROMPTS = [
+  '100×60×20 mm mounting bracket with 4 corner holes',
+  'a flanged pipe, 40 mm bore, 8 mm wall',
+  'hex standoff, M3 thread, 25 mm tall',
+  'L-bracket 80×80 mm, 5 mm thick, 3 holes per leg',
+]
+
 export function DocumentViewport() {
-  const { doc, busy, selectedFeatureId, addDimension, removeDimension } = useDocumentStore()
+  const { doc, busy, selectedFeatureId, addDimension, removeDimension, createFromPrompt, newBlank } = useDocumentStore()
   const [isolate, setIsolate] = useState(false)
   const [showDims, setShowDims] = useState(false)
   const [measuring, setMeasuring] = useState(false)
@@ -349,12 +356,33 @@ export function DocumentViewport() {
         </div>
       )}
 
-      {/* empty state */}
+      {/* empty state — with one-click example prompts to make text-to-CAD discoverable */}
       {!doc && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 px-6">
           <Boxes size={40} className="text-cad-border" />
-          <p className="text-sm text-cad-text">Describe a part above to begin</p>
-          <p className="text-[11px] text-cad-text/60">or start from a blank body</p>
+          <div className="text-center">
+            <p className="text-sm text-cad-text-heading">Describe a part to begin</p>
+            <p className="text-[11px] text-cad-text/60 mt-1">Type in the bar above, or try one of these:</p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-2 max-w-lg">
+            {EXAMPLE_PROMPTS.map((p) => (
+              <button
+                key={p}
+                onClick={() => !busy && createFromPrompt(p)}
+                disabled={busy}
+                className="text-[11px] px-2.5 py-1.5 rounded-full border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-cad-accent/50 hover:bg-cad-accent/5 transition-colors disabled:opacity-40"
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => !busy && newBlank()}
+            disabled={busy}
+            className="text-[11px] text-cad-text/70 hover:text-cad-accent-hot underline underline-offset-2 disabled:opacity-40"
+          >
+            or start from a blank body
+          </button>
         </div>
       )}
 

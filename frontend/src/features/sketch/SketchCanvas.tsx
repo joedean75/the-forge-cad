@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   X, MousePointer2, Minus as LineIcon, Square, Circle as CircleIcon, Loader2,
-  MoveHorizontal, MoveVertical, Ruler, GitCompareArrows, Spline, Equal, Dot, Anchor, Trash2,
+  MoveHorizontal, MoveVertical, Ruler, GitCompareArrows, Spline, Equal, Dot, Anchor, Trash2, Eye, EyeOff,
 } from 'lucide-react'
 import { api } from '../../api/client'
 import { useDocumentStore } from '../../store/useDocumentStore'
-import { flatten } from '../../util/featureTree'
+import { flatten, findNode } from '../../util/featureTree'
+import { PartBackdrop, useMeshTriangles, faceToPlaneOffset } from './PartBackdrop'
 
 type Pt = { id: string; x: number; y: number } // millimetres, y-up
 type Ln = { id: string; a: string; b: string }
@@ -25,6 +26,15 @@ const TOOLS: { id: Tool; label: string; icon: typeof Square }[] = [
   { id: 'circle', label: 'Circle', icon: CircleIcon },
   { id: 'arc', label: 'Arc', icon: Spline },
 ]
+
+// What the active tool expects next — shown as a hint so drawing is self-explanatory.
+const TOOL_HINT: Record<Tool, string> = {
+  select: 'Click an entity to select · Shift-click for multiple · then apply a constraint',
+  line: 'Click to place each point · Esc to finish the chain',
+  rect: 'Click two opposite corners',
+  circle: 'Click the center, then a point on the rim',
+  arc: 'Click center, then start point, then end point',
+}
 
 // Tessellate an arc (mm, y-up) from p_from to p_to about center for SVG preview.
 function arcPolyline(
@@ -69,6 +79,21 @@ export function SketchCanvas() {
   const [op, setOp] = useState<'union' | 'subtract'>('union')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
+  const [showPart, setShowPart] = useState(true)
+
+  // The existing body, shown behind the sketch so you can see what you're drawing
+  // on. Only fetched/parsed while the sketch is actually open.
+  const partTris = useMeshTriangles(sketchOpen && showPart ? doc?.derived.mesh_url : null)
+  // Display plane + section position: when sketching on a face, mirror the
+  // backend datum resolution from that feature's live geometry; else the free plane.
+  const backdrop = useMemo<{ plane: 'xy' | 'xz' | 'yz'; sectionMm: number }>(() => {
+    if (onFace && doc) {
+      const node = findNode(doc.feature_tree, onFace.featureId)
+      const r = node ? faceToPlaneOffset(node, onFace.face) : null
+      if (r) return { plane: r.plane, sectionMm: r.offsetMm }
+    }
+    return { plane: plane as 'xy' | 'xz' | 'yz', sectionMm: offset }
+  }, [onFace, doc, plane, offset])
 
   // Load an existing sketch when opened in edit mode; blank otherwise (metres -> mm).
   useEffect(() => {
@@ -340,6 +365,14 @@ export function SketchCanvas() {
           <select value={plane} disabled={!!onFace} onChange={(e) => setPlane(e.target.value)} className="tabular px-2 py-1 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-[11px] outline-none disabled:opacity-40">
             <option value="xy">XY</option><option value="xz">XZ</option><option value="yz">YZ</option>
           </select>
+          <button
+            onClick={() => setShowPart((v) => !v)}
+            disabled={!doc?.derived.mesh_url}
+            title={showPart ? 'Hide the existing part' : 'Show the existing part behind the sketch'}
+            className={`flex items-center gap-1 px-2 py-1.5 rounded-sm border text-[10px] transition-colors disabled:opacity-40 ${showPart ? 'border-cad-accent/50 text-cad-accent-hot bg-cad-accent/10' : 'border-cad-border text-cad-text hover:text-cad-text-heading'}`}
+          >
+            {showPart ? <Eye size={12} /> : <EyeOff size={12} />} Part
+          </button>
           <label className="flex items-center gap-1 text-[10px] text-cad-text">
             depth
             <input type="number" value={depth} min={0.5} step={0.5} onChange={(e) => setDepth(parseFloat(e.target.value) || 0)} className="tabular w-14 px-1.5 py-1 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-[11px] outline-none" />mm
@@ -388,6 +421,9 @@ export function SketchCanvas() {
             <line x1={-130} y1={0} x2={130} y2={0} stroke="#2c333e" strokeWidth={0.5} />
             <line x1={0} y1={-95} x2={0} y2={95} stroke="#2c333e" strokeWidth={0.5} />
 
+            {/* existing part: dim silhouette + bright section where the plane cuts */}
+            {showPart && <PartBackdrop positions={partTris} plane={backdrop.plane} sectionMm={backdrop.sectionMm} />}
+
             {/* circles */}
             {circles.map((c) => {
               const ct = getPt(c.center)
@@ -417,6 +453,19 @@ export function SketchCanvas() {
             {/* points */}
             {pts.map((p) => <circle key={p.id} cx={sx(p.x)} cy={sy(p.y)} r={isSel(p.id) ? 2 : 1.4} fill={isSel(p.id) ? '#ffb86b' : '#7d8ba0'} />)}
           </svg>
+
+          {/* active-tool hint */}
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 text-[10px] text-cad-text/80 bg-cad-panel/80 backdrop-blur-sm px-3 py-1 rounded-full border border-cad-border pointer-events-none">
+            {TOOL_HINT[tool]}
+          </div>
+
+          {/* backdrop legend */}
+          {showPart && partTris && (
+            <div className="absolute top-3 right-3 flex flex-col gap-1 text-[9px] text-cad-text/70 bg-cad-panel/70 px-2 py-1.5 rounded-sm border border-cad-border pointer-events-none">
+              <span className="flex items-center gap-1.5"><span className="w-3 h-2 rounded-sm" style={{ background: 'rgba(125,139,160,0.4)' }} /> existing part</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-0.5" style={{ background: '#5cc9a7' }} /> section at this plane</span>
+            </div>
+          )}
 
           <div className="tabular absolute bottom-3 left-3 text-[10px] text-cad-text/70 bg-cad-panel/70 px-2 py-1 rounded-sm border border-cad-border">
             {cursor ? `${cursor.x.toFixed(1)}, ${cursor.y.toFixed(1)} mm` : 'grid: 10 mm'} · {pts.length} pts · {lines.length} lines · {arcs.length} arcs · {circles.length} circles
