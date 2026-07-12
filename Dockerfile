@@ -19,8 +19,9 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 
 # System libs required by trimesh / scikit-image (OpenGL, glib).
+# `libgl1` replaces the old `libgl1-mesa-glx`, which was dropped in Debian 12.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1-mesa-glx libglib2.0-0 \
+    libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv/backend

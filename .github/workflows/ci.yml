@@ -28,8 +28,9 @@ jobs:
           pip install -r requirements.txt
       - name: Run tests
         working-directory: backend
+        # `python -m` puts backend/ on sys.path so the `app` package imports.
         # Uses the default embedded SQLite (conftest points at an isolated temp DB).
-        run: pytest -q
+        run: python -m pytest -q
 
   frontend:
     name: Frontend · lint + type-check + build
