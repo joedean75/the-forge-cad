@@ -41,8 +41,19 @@ interface DocumentState {
   redo: () => Promise<void>
   sketchOpen: boolean
   sketchEdit: { featureId: string; sketch: SketchSpec; plane: string; depth: number; offset: number } | null
+  /** True while the user is picking a sketch plane (a face in the viewport or a base plane). */
+  sketchPick: boolean
+  /** How a new sketch should be seeded once the overlay opens (from the pick step). */
+  sketchPreset: { onFace?: { featureId: string; face: string }; plane?: string } | null
   openSketch: (edit?: { featureId: string; sketch: SketchSpec; plane: string; depth: number; offset: number }) => void
   closeSketch: () => void
+  /** Enter face/plane-picking mode (viewport + feature tree) before the sketch opens. */
+  startSketchPick: () => void
+  cancelSketchPick: () => void
+  /** Open a new sketch attached to a feature's face (from a viewport or tree click). */
+  pickSketchOnFace: (featureId: string, face: string) => void
+  /** Open a new sketch on a base datum plane (xy/xz/yz). */
+  pickSketchPlane: (plane: string) => void
 
   setMode: (mode: EditorMode) => void
   select: (id: string | null) => void
@@ -91,8 +102,16 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   future: [],
   sketchOpen: false,
   sketchEdit: null,
-  openSketch: (edit) => set({ sketchOpen: true, sketchEdit: edit ?? null }),
-  closeSketch: () => set({ sketchOpen: false, sketchEdit: null }),
+  sketchPick: false,
+  sketchPreset: null,
+  openSketch: (edit) => set({ sketchOpen: true, sketchEdit: edit ?? null, sketchPick: false, sketchPreset: null }),
+  closeSketch: () => set({ sketchOpen: false, sketchEdit: null, sketchPick: false, sketchPreset: null }),
+  startSketchPick: () => set({ sketchPick: true, sketchOpen: false, sketchEdit: null }),
+  cancelSketchPick: () => set({ sketchPick: false }),
+  pickSketchOnFace: (featureId, face) =>
+    set({ sketchPick: false, sketchOpen: true, sketchEdit: null, sketchPreset: { onFace: { featureId, face } } }),
+  pickSketchPlane: (plane) =>
+    set({ sketchPick: false, sketchOpen: true, sketchEdit: null, sketchPreset: { plane } }),
 
   setMode: (mode) => set({ mode }),
   select: (selectedFeatureId) => set({ selectedFeatureId }),

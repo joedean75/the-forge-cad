@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Optional
 
 import httpx
@@ -33,18 +34,24 @@ LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("KIMI_MODEL", "kimi-k2-turbo-pre
 # Curated model lists by provider — current flagships first, then fast/cheap
 # tiers, then legacy fallbacks. OpenRouter routes many more; the active model is
 # always injected at the top of the list if it isn't already present.
+# Curated frontier allowlist for OpenRouter, in display order. Every id here is a
+# real OpenRouter slug; `available_models()` intersects this with OpenRouter's live
+# catalog so the picker never offers a slug the router has retired.
 _PROVIDER_MODELS: dict[str, list[str]] = {
     "openrouter": [
-        "anthropic/claude-sonnet-5",
         "anthropic/claude-opus-4.8",
+        "anthropic/claude-sonnet-5",
+        "anthropic/claude-sonnet-4.5",
         "anthropic/claude-haiku-4.5",
         "openai/gpt-5.1",
+        "openai/gpt-5",
         "openai/gpt-5-mini",
-        "google/gemini-3-pro",
+        "google/gemini-3.1-pro-preview",
+        "google/gemini-3.5-flash",
         "google/gemini-2.5-flash",
+        "x-ai/grok-4.5",
         "moonshotai/kimi-k2-thinking",
-        "x-ai/grok-4.1",
-        "deepseek/deepseek-chat",
+        "deepseek/deepseek-v3.2",
         "meta-llama/llama-4-maverick",
     ],
     "moonshot": [
@@ -89,14 +96,62 @@ def set_model(model: str) -> None:
 
 def set_base_url(base_url: str) -> None:
     """Set the active API base URL at runtime."""
-    global LLM_BASE_URL
+    global LLM_BASE_URL, _OPENROUTER_CATALOG, _OPENROUTER_FETCHED_AT
     LLM_BASE_URL = base_url
+    # Provider may have changed; drop the cached catalog so it re-fetches.
+    _OPENROUTER_CATALOG = None
+    _OPENROUTER_FETCHED_AT = 0.0
+
+
+# Cache OpenRouter's live model catalog (ids only) so `available_models()` can
+# filter the curated allowlist without a network round-trip on every config read.
+_OPENROUTER_CATALOG: Optional[set[str]] = None
+_OPENROUTER_FETCHED_AT: float = 0.0
+_OPENROUTER_TTL = 3600.0  # seconds
+
+
+def _openrouter_catalog() -> Optional[set[str]]:
+    """Best-effort fetch of OpenRouter's public model catalog (ids only).
+
+    Cached for ``_OPENROUTER_TTL`` seconds. Returns ``None`` on any failure so
+    callers fall back to the static curated list. The ``/models`` endpoint is
+    public and needs no API key.
+    """
+    global _OPENROUTER_CATALOG, _OPENROUTER_FETCHED_AT
+    now = time.monotonic()
+    if _OPENROUTER_CATALOG is not None and now - _OPENROUTER_FETCHED_AT < _OPENROUTER_TTL:
+        return _OPENROUTER_CATALOG
+    url = f"{LLM_BASE_URL.rstrip('/')}/models"
+    try:
+        with httpx.Client(timeout=4.0) as client:
+            resp = client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+        ids = {m["id"] for m in data.get("data", []) if isinstance(m, dict) and m.get("id")}
+        if ids:
+            _OPENROUTER_CATALOG = ids
+            _OPENROUTER_FETCHED_AT = now
+            return ids
+    except Exception as exc:  # network, JSON, or shape errors — non-fatal
+        _LOGGER.debug("OpenRouter catalog fetch failed: %s", exc)
+    return None
 
 
 def available_models() -> list[str]:
-    """Return a list of recommended models for the current provider."""
+    """Return a list of recommended models for the current provider.
+
+    For OpenRouter, the curated frontier allowlist is intersected with the live
+    catalog (when reachable) so retired slugs are dropped; the active model is
+    always injected at the front if it isn't already present.
+    """
     provider = _provider_name(LLM_BASE_URL)
     models = list(_PROVIDER_MODELS.get(provider, []))
+    if provider == "openrouter":
+        live = _openrouter_catalog()
+        if live:
+            filtered = [m for m in models if m in live]
+            if len(filtered) >= 3:  # ignore an implausibly small/partial catalog
+                models = filtered
     if LLM_MODEL not in models:
         models.insert(0, LLM_MODEL)
     return models

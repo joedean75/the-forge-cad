@@ -70,7 +70,8 @@ function nodeLabel(node: FeatureNode): string {
 }
 
 export function FeatureTreePanel() {
-  const { doc, selectedFeatureId, select, runOp, rename, busy, openSketch } = useDocumentStore()
+  const { doc, selectedFeatureId, select, runOp, rename, busy,
+    sketchPick, startSketchPick, cancelSketchPick, pickSketchOnFace } = useDocumentStore()
   const [op, setOp] = useState<BooleanOp>('union')
   const [editingName, setEditingName] = useState(false)
 
@@ -154,9 +155,16 @@ export function FeatureTreePanel() {
               style={{ paddingLeft: 12 + depth * 14 }}
             >
               <button
-                onClick={() => select(node.id ?? null)}
+                onClick={() =>
+                  sketchPick && node.id
+                    ? pickSketchOnFace(node.id, 'top')
+                    : select(node.id ?? null)
+                }
+                title={sketchPick ? 'Sketch on this feature’s top face' : undefined}
                 className={`flex-1 flex items-center gap-2 py-1.5 min-w-0 text-left transition-colors ${
-                  suppressed ? 'opacity-40' : active ? 'text-cad-accent-hot' : 'text-cad-text hover:text-cad-text-heading'
+                  sketchPick
+                    ? 'text-cad-accent-hot hover:text-cad-accent cursor-copy'
+                    : suppressed ? 'opacity-40' : active ? 'text-cad-accent-hot' : 'text-cad-text hover:text-cad-text-heading'
                 }`}
               >
                 <Icon size={14} className={active && !suppressed ? 'text-cad-accent' : 'text-cad-text/70'} />
@@ -226,14 +234,23 @@ export function FeatureTreePanel() {
             </button>
           ))}
         </div>
-        <button
-          onClick={() => openSketch()}
-          disabled={busy}
-          title="Open the 2D constrained sketch canvas"
-          className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-sm border border-cad-accent/40 text-cad-accent-hot hover:bg-cad-accent/10 transition disabled:opacity-40"
-        >
-          <PencilRuler size={13} /> <span className="text-[10px]">New Sketch…</span>
-        </button>
+        {sketchPick ? (
+          <button
+            onClick={cancelSketchPick}
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-sm border border-cad-accent/60 bg-cad-accent/10 text-cad-accent-hot transition"
+          >
+            <PencilRuler size={13} /> <span className="text-[10px]">Pick a face or plane… (cancel)</span>
+          </button>
+        ) : (
+          <button
+            onClick={startSketchPick}
+            disabled={busy}
+            title="Start a sketch — then click a face in the viewport, a feature here, or a base plane"
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-sm border border-cad-accent/40 text-cad-accent-hot hover:bg-cad-accent/10 transition disabled:opacity-40"
+          >
+            <PencilRuler size={13} /> <span className="text-[10px]">New Sketch…</span>
+          </button>
+        )}
 
         <div>
           <span className="eyebrow text-cad-text/60 block mb-1.5">Modify body</span>

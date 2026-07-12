@@ -196,6 +196,12 @@ def resolve_datums(tree: Dict[str, Any]) -> Dict[str, Any]:
 
     t = copy.deepcopy(tree)
 
+    def _subtree_ids(node: Dict[str, Any]) -> set:
+        ids = {node.get("id")}
+        for c in children_of(node):
+            ids |= _subtree_ids(c)
+        return ids
+
     def walk(node: Dict[str, Any]) -> None:
         params = node.get("params", {})
         ref = params.get("on_face")
@@ -203,12 +209,20 @@ def resolve_datums(tree: Dict[str, Any]) -> Dict[str, Any]:
             fid = ref.get("feature_id")
             face = ref.get("face")
             if fid and fid != node.get("id"):
-                try:
-                    plane, offset = datum.resolve_face(t, fid, face)
-                    params["plane"] = plane
-                    params["offset"] = offset
-                except (KeyError, ValueError):
-                    pass  # keep the baked-in fallback plane/offset
+                # Skip re-resolution when the referenced feature *contains* this
+                # extrude (an ancestor / whole-body reference): resolving it would
+                # fold the sketch's own geometry into the datum and drift the plane
+                # upward every regen. The plane baked at creation (before the
+                # sketch was in the tree) is the correct, stable fallback.
+                target = find_node(t, fid)
+                is_ancestor = target is not None and node.get("id") in _subtree_ids(target)
+                if not is_ancestor:
+                    try:
+                        plane, offset = datum.resolve_face(t, fid, face)
+                        params["plane"] = plane
+                        params["offset"] = offset
+                    except (KeyError, ValueError):
+                        pass  # keep the baked-in fallback plane/offset
         for c in children_of(node):
             walk(c)
 

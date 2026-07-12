@@ -21,6 +21,32 @@ function TrussMark() {
   )
 }
 
+// Friendly vendor headings for OpenRouter's "vendor/model" slugs.
+const VENDOR_LABEL: Record<string, string> = {
+  anthropic: 'Anthropic · Claude',
+  openai: 'OpenAI · GPT',
+  google: 'Google · Gemini',
+  'x-ai': 'xAI · Grok',
+  moonshotai: 'Moonshot · Kimi',
+  deepseek: 'DeepSeek',
+  'meta-llama': 'Meta · Llama',
+  mistralai: 'Mistral',
+}
+
+/** Group "vendor/model" slugs under a vendor heading; flat models fall under one. */
+function groupModels(models: string[]): [string, { value: string; label: string }[]][] {
+  const groups = new Map<string, { value: string; label: string }[]>()
+  for (const m of models) {
+    const slash = m.indexOf('/')
+    const vendor = slash > 0 ? m.slice(0, slash) : ''
+    const heading = vendor ? VENDOR_LABEL[vendor] ?? vendor : 'Models'
+    const label = slash > 0 ? m.slice(slash + 1) : m
+    if (!groups.has(heading)) groups.set(heading, [])
+    groups.get(heading)!.push({ value: m, label })
+  }
+  return [...groups.entries()]
+}
+
 function LlmSelector() {
   const [cfg, setCfg] = useState<LlmConfig | null>(null)
   const [updating, setUpdating] = useState(false)
@@ -54,12 +80,16 @@ function LlmSelector() {
           value={cfg.model}
           onChange={(e) => changeModel(e.target.value)}
           disabled={updating}
-          className="tabular max-w-[150px] bg-transparent text-[10px] text-cad-text-heading outline-none cursor-pointer disabled:opacity-50"
+          className="tabular max-w-[180px] bg-transparent text-[10px] text-cad-text-heading outline-none cursor-pointer disabled:opacity-50"
         >
-          {cfg.available_models.map((m) => (
-            <option key={m} value={m} className="bg-cad-panel text-cad-text-heading">
-              {m}
-            </option>
+          {groupModels(cfg.available_models).map(([heading, items]) => (
+            <optgroup key={heading} label={heading} className="bg-cad-panel text-cad-text">
+              {items.map((it) => (
+                <option key={it.value} value={it.value} className="bg-cad-panel text-cad-text-heading">
+                  {it.label}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
       ) : (

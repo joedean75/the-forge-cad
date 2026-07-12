@@ -2,7 +2,7 @@ import { Suspense, useMemo, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, Grid, GizmoHelper, GizmoViewport, Html, Line } from '@react-three/drei'
 import * as THREE from 'three'
-import { Boxes, Ruler, Crosshair, X, ScanEye } from 'lucide-react'
+import { Boxes, Ruler, Crosshair, X, ScanEye, PencilRuler } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { MeshLoader } from './MeshLoader'
 import { collectSnapPoints, collectProxies, findNode, type FeatureProxy } from '../util/featureTree'
@@ -182,7 +182,8 @@ const EXAMPLE_PROMPTS = [
 ]
 
 export function DocumentViewport() {
-  const { doc, busy, selectedFeatureId, addDimension, removeDimension, createFromPrompt, newBlank } = useDocumentStore()
+  const { doc, busy, selectedFeatureId, addDimension, removeDimension, createFromPrompt, newBlank,
+    sketchPick, pickSketchOnFace, pickSketchPlane, cancelSketchPick } = useDocumentStore()
   const [isolate, setIsolate] = useState(false)
   const [showDims, setShowDims] = useState(false)
   const [measuring, setMeasuring] = useState(false)
@@ -273,7 +274,8 @@ export function DocumentViewport() {
             <MeshLoader
               key={meshUrl}
               url={meshUrl}
-              onPick={measuring ? handlePick : undefined}
+              onPick={measuring && !sketchPick ? handlePick : undefined}
+              onPickFace={sketchPick && rootId ? (face) => pickSketchOnFace(rootId, face) : undefined}
               dim={isolate && !!selectedNode}
             />
           )}
@@ -350,9 +352,45 @@ export function DocumentViewport() {
         </div>
       )}
 
-      {measuring && (
+      {measuring && !sketchPick && (
         <div className="tabular absolute top-[68px] left-3 text-[10px] text-cad-accent-hot bg-cad-panel/85 border border-cad-accent/40 rounded-sm px-2 py-1">
           {pending ? 'Click the second point — snaps to ●' : 'Click the first point — snaps to feature ●'}
+        </div>
+      )}
+
+      {/* sketch-plane picker: click a face on the body, or choose a base plane */}
+      {sketchPick && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-cad-panel/95 backdrop-blur-sm border border-cad-accent/50 rounded-md px-3 py-2 shadow-lg">
+          <div className="flex items-center gap-2">
+            <PencilRuler size={14} className="text-cad-accent" />
+            <div className="leading-tight">
+              <p className="text-[11px] font-medium text-cad-text-heading">
+                {meshUrl ? 'Click a face to sketch on' : 'Choose a base plane to sketch on'}
+              </p>
+              <p className="text-[9px] text-cad-text/70">
+                {meshUrl ? 'or pick the part in the tree, or a base plane →' : 'the body is empty — start on a datum plane'}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 pl-2 border-l border-cad-border">
+            {(['xy', 'xz', 'yz'] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => pickSketchPlane(p)}
+                title={`Sketch on the ${p.toUpperCase()} datum plane`}
+                className="tabular px-2 py-1 rounded-sm border border-cad-border text-[10px] text-cad-text hover:text-cad-accent-hot hover:border-cad-accent/50 transition-colors"
+              >
+                {p.toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={cancelSketchPick}
+            title="Cancel"
+            className="p-1 rounded-sm text-cad-text hover:text-cad-danger"
+          >
+            <X size={13} />
+          </button>
         </div>
       )}
 

@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import { api } from '../../api/client'
 import { useDocumentStore } from '../../store/useDocumentStore'
-import { flatten, findNode } from '../../util/featureTree'
+import { findNode } from '../../util/featureTree'
 import { PartBackdrop, useMeshTriangles, faceToPlaneOffset } from './PartBackdrop'
 
 type Pt = { id: string; x: number; y: number } // millimetres, y-up
@@ -56,10 +56,8 @@ function arcPolyline(
   return out.join(' ')
 }
 
-const FACES = ['top', 'bottom', 'left', 'right', 'front', 'back'] as const
-
 export function SketchCanvas() {
-  const { runOp, sketchOpen, sketchEdit, closeSketch, doc } = useDocumentStore()
+  const { runOp, sketchOpen, sketchEdit, sketchPreset, closeSketch, startSketchPick, doc } = useDocumentStore()
   const svgRef = useRef<SVGSVGElement>(null)
   const [pts, setPts] = useState<Pt[]>([])
   const [lines, setLines] = useState<Ln[]>([])
@@ -120,10 +118,13 @@ export function SketchCanvas() {
       setDepth(sketchEdit.depth * 1000)
       setOffset(sketchEdit.offset * 1000)
     } else {
-      setPts([]); setLines([]); setArcs([]); setCircles([]); setCons([]); setPlane('xy'); setDepth(10); setOffset(0)
+      // New sketch: seed the plane/face from the pick step (viewport face, a tree
+      // feature, or a base plane); default to a free XY plane.
+      setPts([]); setLines([]); setArcs([]); setCircles([]); setCons([])
+      setPlane(sketchPreset?.plane ?? 'xy'); setDepth(10); setOffset(0)
     }
-    setOnFace(null); setSel([]); setDraft(null); setStatus('')
-  }, [sketchOpen, sketchEdit])
+    setOnFace(sketchEdit ? null : (sketchPreset?.onFace ?? null)); setSel([]); setDraft(null); setStatus('')
+  }, [sketchOpen, sketchEdit, sketchPreset])
 
   if (!sketchOpen) return null
 
@@ -339,32 +340,25 @@ export function SketchCanvas() {
         </div>
         <div className="flex items-center gap-2">
           <span className="tabular text-[10px] text-cad-text/70 mr-1">{status}</span>
-          {/* On-face reference: places the sketch on another feature's face so it
-              follows that feature through later edits (resolved live at regen). */}
-          <label className="flex items-center gap-1 text-[10px] text-cad-text" title="Attach this sketch to a feature's face — it tracks the face when that feature is resized">
-            on face
-            <select
-              value={onFace ? `${onFace.featureId}|${onFace.face}` : ''}
-              onChange={(e) => {
-                if (!e.target.value) { setOnFace(null); return }
-                const [featureId, face] = e.target.value.split('|')
-                setOnFace({ featureId, face })
-              }}
-              className="tabular px-1.5 py-1 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-[11px] outline-none max-w-[150px]"
-            >
-              <option value="">— free plane —</option>
-              {(doc ? flatten(doc.feature_tree) : [])
-                .filter(({ node }) => node.type !== 'BooleanFeature' && node.id !== sketchEdit?.featureId)
-                .flatMap(({ node }) =>
-                  FACES.map((f) => (
-                    <option key={`${node.id}|${f}`} value={`${node.id}|${f}`}>{node.name} · {f}</option>
-                  )),
-                )}
-            </select>
-          </label>
-          <select value={plane} disabled={!!onFace} onChange={(e) => setPlane(e.target.value)} className="tabular px-2 py-1 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-[11px] outline-none disabled:opacity-40">
-            <option value="xy">XY</option><option value="xz">XZ</option><option value="yz">YZ</option>
-          </select>
+          {/* Sketch plane: either attached to a feature's face (picked in the
+              viewport / feature tree — tracks that face through later edits) or a
+              free base plane. The face is chosen by clicking, not a dropdown. */}
+          {onFace && doc ? (
+            <div className="flex items-center gap-1.5 h-7 pl-2 pr-1 rounded-sm border border-cad-accent/50 bg-cad-accent/10" title="Sketch attached to this face — it follows the feature when resized">
+              <span className="text-[10px] text-cad-accent-hot whitespace-nowrap max-w-[160px] truncate">
+                on {findNode(doc.feature_tree, onFace.featureId)?.name ?? 'part'} · {onFace.face}
+              </span>
+              <button onClick={() => { closeSketch(); startSketchPick() }} title="Pick a different face or plane" className="p-0.5 rounded-sm text-cad-text hover:text-cad-accent-hot"><MousePointer2 size={12} /></button>
+              <button onClick={() => setOnFace(null)} title="Detach — sketch on a free plane instead" className="p-0.5 rounded-sm text-cad-text hover:text-cad-danger"><X size={12} /></button>
+            </div>
+          ) : (
+            <label className="flex items-center gap-1 text-[10px] text-cad-text" title="Base sketch plane">
+              plane
+              <select value={plane} onChange={(e) => setPlane(e.target.value)} className="tabular px-2 py-1 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-[11px] outline-none">
+                <option value="xy">XY</option><option value="xz">XZ</option><option value="yz">YZ</option>
+              </select>
+            </label>
+          )}
           <button
             onClick={() => setShowPart((v) => !v)}
             disabled={!doc?.derived.mesh_url}
