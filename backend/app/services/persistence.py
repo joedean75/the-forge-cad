@@ -23,8 +23,9 @@ from app.db import DATA_DIR, Record, SessionLocal, init_db
 # Kinds (row namespaces in the `records` table).
 _ACCOUNT = "account"
 _CANDIDATE = "candidate"
-_ASSEMBLY = "assembly"
+_ASSEMBLY = "assembly"  # legacy generated AssemblyResult (trusses/frames)
 _DOCUMENT = "document"
+_ASSEMBLY_DOC = "assembly_doc"  # parts-composition assembly
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +130,26 @@ def list_documents() -> List[str]:
 
 def delete_document(document_id: str) -> bool:
     return _delete(_DOCUMENT, document_id)
+
+
+# ---------------------------------------------------------------------------
+# Assembly documents (parts composition)
+# ---------------------------------------------------------------------------
+
+def save_assembly_doc(assembly_id: str, assembly: dict) -> None:
+    _save(_ASSEMBLY_DOC, assembly_id, assembly, owner_id=assembly.get("owner_id"))
+
+
+def load_assembly_doc(assembly_id: str) -> Optional[dict]:
+    return _load(_ASSEMBLY_DOC, assembly_id)
+
+
+def list_assembly_docs() -> List[str]:
+    return _list(_ASSEMBLY_DOC)
+
+
+def delete_assembly_doc(assembly_id: str) -> bool:
+    return _delete(_ASSEMBLY_DOC, assembly_id)
 
 
 # ---------------------------------------------------------------------------

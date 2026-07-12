@@ -72,6 +72,8 @@ interface DocumentState {
   addDimension: (a: Vector3, b: Vector3, label?: string | null) => Promise<void>
   removeDimension: (dimId: string) => Promise<void>
 
+  /** Explicit save: geometry autosaves on every edit; this drops a named restore point. */
+  saveCheckpoint: (label?: string) => Promise<boolean>
   createFromPrompt: (prompt: string) => Promise<void>
   newBlank: () => Promise<void>
   openDocument: (id: string) => Promise<void>
@@ -287,6 +289,22 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       await api.removeDimension(doc.id, dimId)
     } catch {
       /* ignore; next fetch reconciles */
+    }
+  },
+
+  saveCheckpoint: async (label) => {
+    const { doc } = get()
+    if (!doc) return false
+    // The tree already persists on every mutation; a checkpoint is a named version
+    // the user can restore. Skip while a mutation is still in flight.
+    if (get().busy) return false
+    try {
+      const when = new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      await api.createVersion(doc.id, label ?? `Saved ${when}`)
+      return true
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Save failed' })
+      return false
     }
   },
 

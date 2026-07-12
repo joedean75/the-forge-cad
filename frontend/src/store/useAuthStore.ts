@@ -7,6 +7,8 @@ interface AuthState {
   /** True when a real payment provider (Stripe) is wired; false = local self-serve. */
   billingLive: boolean
   loading: boolean
+  /** True once the initial session check has completed (avoids a sign-in flash). */
+  ready: boolean
   error: string | null
   /** Load the current session (if a token is stored) + the public plan catalog. */
   init: () => Promise<void>
@@ -25,6 +27,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   plans: [],
   billingLive: false,
   loading: false,
+  ready: false,
   error: null,
 
   init: async () => {
@@ -42,6 +45,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         set({ account: null })
       }
     }
+    set({ ready: true })
   },
 
   signup: async (email, password) => {

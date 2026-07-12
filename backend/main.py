@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.routers import materials, optimize, simulate, manufacturing, text_to_cad, assembly, export, cad, design, llm, documents, machine, operations, sketch, auth
+from app.routers import materials, optimize, simulate, manufacturing, text_to_cad, assembly, export, cad, design, llm, documents, machine, operations, sketch, auth, assemblies
 from app.services import accounts, persistence
 from app.services.persistence import list_candidates, load_candidate, list_assemblies, load_assembly
 from app.services.mesh_generator import CANDIDATE_DATA
@@ -139,6 +139,7 @@ app.include_router(cad.router)
 app.include_router(design.router)
 app.include_router(llm.router)
 app.include_router(documents.router)
+app.include_router(assemblies.router)
 app.include_router(machine.router)
 app.include_router(operations.router)
 app.include_router(sketch.router)

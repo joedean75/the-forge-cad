@@ -307,6 +307,44 @@ export interface DocumentSummary {
   shared: boolean
 }
 
+// --- Assemblies: compose part documents into a placed whole ---
+export interface ComponentTransform {
+  translate: Vector3
+  rotate_deg: Vector3
+  scale: number
+}
+
+export interface AssemblyComponent {
+  id: string
+  part_id: string
+  name: string
+  transform: ComponentTransform
+  /** Resolved from the referenced part at read time. */
+  mesh_url?: string | null
+  bbox?: BBox | null
+  /** True when the referenced part was deleted. */
+  missing: boolean
+}
+
+export interface AssemblyDoc {
+  id: string
+  name: string
+  owner_id?: string | null
+  components: AssemblyComponent[]
+  bbox?: BBox | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AssemblySummary {
+  id: string
+  name: string
+  component_count: number
+  updated_at: string
+  role: 'owner' | 'editor' | 'viewer'
+  shared: boolean
+}
+
 // Serialized FeatureTree ({ version, root }) — the parametric recipe.
 export interface FeatureNode {
   type: string

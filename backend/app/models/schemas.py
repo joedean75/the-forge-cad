@@ -339,3 +339,65 @@ class UpdateDocumentRequest(BaseModel):
     feature_tree: Optional[dict] = None
     optimization: Optional[OptimizationSetup] = None
     resolution: int = Field(128, ge=32, le=512)
+
+
+# --------------------------------------------------------------------------
+# Assemblies — a document that composes part documents into a placed whole
+# (standard CAD assembly workflow: insert parts, position each instance).
+# --------------------------------------------------------------------------
+
+
+class ComponentTransform(BaseModel):
+    """Placement of a component instance in assembly space (metres, degrees)."""
+
+    translate: Vector3 = Field(default_factory=lambda: Vector3(x=0.0, y=0.0, z=0.0))
+    rotate_deg: Vector3 = Field(default_factory=lambda: Vector3(x=0.0, y=0.0, z=0.0))
+    scale: float = 1.0
+
+
+class AssemblyComponent(BaseModel):
+    """One placed instance of a part document inside an assembly."""
+
+    id: str
+    part_id: str  # references a DesignDocument
+    name: str  # cached part name for display
+    transform: ComponentTransform = Field(default_factory=ComponentTransform)
+    # Resolved from the referenced part at read time (not authoritative on disk):
+    mesh_url: Optional[str] = None
+    bbox: Optional[BBox] = None
+    missing: bool = False  # referenced part was deleted
+
+
+class AssemblyDoc(BaseModel):
+    id: str
+    name: str
+    owner_id: Optional[str] = None
+    components: List[AssemblyComponent] = []
+    bbox: Optional[BBox] = None  # resolved envelope over placed components
+    created_at: str
+    updated_at: str
+
+
+class AssemblySummary(BaseModel):
+    id: str
+    name: str
+    component_count: int = 0
+    updated_at: str
+    role: str = "owner"
+    shared: bool = False
+
+
+class CreateAssemblyRequest(BaseModel):
+    name: Optional[str] = None
+
+
+class UpdateAssemblyRequest(BaseModel):
+    name: Optional[str] = None
+
+
+class AddComponentRequest(BaseModel):
+    part_id: str
+
+
+class UpdateComponentRequest(BaseModel):
+    transform: ComponentTransform

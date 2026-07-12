@@ -22,6 +22,9 @@ import type {
   VersionSummary,
   DocumentVersion,
   Collaborator,
+  AssemblyDoc,
+  AssemblySummary,
+  ComponentTransform,
 } from '../../../shared/types'
 
 const API_BASE = '/api'
@@ -219,6 +222,28 @@ export const api = {
     }),
   deleteDocument: (id: string) =>
     fetchJson<{ status: string; id: string }>(`/documents/${id}`, { method: 'DELETE' }),
+
+  // ── Assemblies (compose parts) ──
+  listAssemblies: () => fetchJson<AssemblySummary[]>('/assemblies'),
+  createAssembly: (name?: string) =>
+    fetchJson<AssemblyDoc>('/assemblies', { method: 'POST', body: JSON.stringify({ name }) }),
+  getAssemblyDoc: (id: string) => fetchJson<AssemblyDoc>(`/assemblies/${id}`),
+  renameAssembly: (id: string, name: string) =>
+    fetchJson<AssemblyDoc>(`/assemblies/${id}`, { method: 'PUT', body: JSON.stringify({ name }) }),
+  deleteAssembly: (id: string) =>
+    fetchJson<{ ok: boolean }>(`/assemblies/${id}`, { method: 'DELETE' }),
+  addComponent: (id: string, partId: string) =>
+    fetchJson<AssemblyDoc>(`/assemblies/${id}/components`, {
+      method: 'POST',
+      body: JSON.stringify({ part_id: partId }),
+    }),
+  updateComponent: (id: string, componentId: string, transform: ComponentTransform) =>
+    fetchJson<AssemblyDoc>(`/assemblies/${id}/components/${componentId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ transform }),
+    }),
+  removeComponent: (id: string, componentId: string) =>
+    fetchJson<AssemblyDoc>(`/assemblies/${id}/components/${componentId}`, { method: 'DELETE' }),
 
   // ── Version history & collaboration ──
   listVersions: (id: string) => fetchJson<VersionSummary[]>(`/documents/${id}/versions`),

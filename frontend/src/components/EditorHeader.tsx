@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Sparkles, Plus, Loader2, Cpu, FolderOpen, Undo2, Redo2, UserCircle2, History } from 'lucide-react'
+import { Sparkles, Plus, Loader2, Cpu, FolderOpen, Undo2, Redo2, UserCircle2, History, Save, Check } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { useAuthStore } from '../store/useAuthStore'
 import { api } from '../api/client'
@@ -45,6 +45,49 @@ function groupModels(models: string[]): [string, { value: string; label: string 
     groups.get(heading)!.push({ value: m, label })
   }
   return [...groups.entries()]
+}
+
+function SaveControl() {
+  const { doc, busy, saveCheckpoint } = useDocumentStore()
+  const [flash, setFlash] = useState(false)
+
+  const save = async () => {
+    if (useDocumentStore.getState().busy) return
+    if (await saveCheckpoint()) {
+      setFlash(true)
+      setTimeout(() => setFlash(false), 1600)
+    }
+  }
+
+  // Ctrl/Cmd+S saves a checkpoint (and stops the browser's save dialog).
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        save()
+      }
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (!doc) return null
+  const justSaved = flash && !busy
+
+  return (
+    <button
+      onClick={save}
+      disabled={busy}
+      title="Your work autosaves on every edit. Click (Ctrl+S) to save a restore point you can return to."
+      className={`flex items-center gap-1.5 h-9 px-2.5 rounded-sm border text-[11px] font-medium transition-colors disabled:opacity-70 ${
+        justSaved ? 'border-cad-success/50 text-cad-success' : 'border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void'
+      }`}
+    >
+      {busy ? <Loader2 size={13} className="animate-spin" /> : justSaved ? <Check size={14} /> : <Save size={14} />}
+      {busy ? 'Saving…' : justSaved ? 'Saved' : 'Saved'}
+    </button>
+  )
 }
 
 function LlmSelector() {
@@ -147,6 +190,7 @@ export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory }: { 
             <Redo2 size={15} />
           </button>
         </div>
+        <SaveControl />
       </div>
 
       {/* always-available text-to-CAD prompt bar */}
