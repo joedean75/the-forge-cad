@@ -11,6 +11,7 @@ import type {
   DfmReport,
   CamResult,
   Vector3,
+  CopilotResult,
 } from '../../../shared/types'
 import { api } from '../api/client'
 import { ensureIds } from '../util/featureTree'
@@ -83,6 +84,8 @@ interface DocumentState {
   /** The single geometry-mutation path (same operations agents call). Returns the op result. */
   runOp: (op: string, args?: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>
   aiEdit: (instruction: string) => Promise<void>
+  /** Forge Copilot: run an agentic multi-step plan toward a goal. Returns the transcript. */
+  runCopilot: (goal: string) => Promise<CopilotResult | undefined>
 }
 
 /** Normalize a freshly-received document so every feature node has a stable id. */
@@ -196,6 +199,30 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'AI edit failed' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  runCopilot: async (goal) => {
+    const { doc, past } = get()
+    if (!doc || !goal.trim()) return undefined
+    set({ past: [...past, doc.feature_tree].slice(-50), future: [], busy: true, error: null })
+    try {
+      const res = await api.runCopilot(doc.id, goal)
+      if (res.document) {
+        const updated = withIds(res.document)
+        set({
+          doc: updated,
+          selectedFeatureId: updated.feature_tree.root?.id ?? null,
+          error: updated.derived.error ?? null,
+          sim: null, dfm: null, cam: null,
+        })
+      }
+      return res
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Copilot failed' })
+      return undefined
     } finally {
       set({ busy: false })
     }

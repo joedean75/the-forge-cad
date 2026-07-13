@@ -25,6 +25,7 @@ import type {
   AssemblyDoc,
   AssemblySummary,
   ComponentTransform,
+  CopilotResult,
 } from '../../../shared/types'
 
 const API_BASE = '/api'
@@ -160,6 +161,12 @@ export const api = {
     fetchJson<DesignDocument>(`/documents/${id}/ai-edit`, {
       method: 'POST',
       body: JSON.stringify({ instruction, resolution }),
+    }),
+  /** Forge Copilot: an agentic loop that plans + executes a sequence of operations. */
+  runCopilot: (id: string, goal: string, maxSteps = 8) =>
+    fetchJson<CopilotResult>(`/documents/${id}/copilot`, {
+      method: 'POST',
+      body: JSON.stringify({ goal, max_steps: maxSteps }),
     }),
   /** The single mutation path shared by the UI and AI agents. */
   runOperation: (id: string, op: string, args?: Record<string, unknown>) =>

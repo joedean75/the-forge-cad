@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Sparkles, Plus, Loader2, Cpu, FolderOpen, Undo2, Redo2, UserCircle2, History, Save, Check } from 'lucide-react'
+import { Sparkles, Plus, Loader2, Cpu, FolderOpen, Undo2, Redo2, UserCircle2, History, Save, Check, Bot } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { useAuthStore } from '../store/useAuthStore'
 import { api } from '../api/client'
@@ -143,7 +143,7 @@ function LlmSelector() {
   )
 }
 
-export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory }: { onOpenLibrary: () => void; onOpenAccount: () => void; onOpenHistory: () => void }) {
+export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOpenCopilot, copilotOpen }: { onOpenLibrary: () => void; onOpenAccount: () => void; onOpenHistory: () => void; onOpenCopilot: () => void; copilotOpen: boolean }) {
   const { busy, createFromPrompt, newBlank, doc, undo, redo, past, future } = useDocumentStore()
   const account = useAuthStore((s) => s.account)
   const [prompt, setPrompt] = useState('')
@@ -220,6 +220,16 @@ export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory }: { 
           className="flex items-center justify-center h-9 w-9 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void transition-colors disabled:opacity-40"
         >
           <Plus size={16} />
+        </button>
+        <button
+          onClick={onOpenCopilot}
+          disabled={!doc}
+          title="Forge Copilot — describe a goal, it plans and builds"
+          className={`flex items-center gap-1.5 h-9 px-2.5 rounded-sm border text-[11px] font-semibold transition-colors disabled:opacity-40 ${
+            copilotOpen ? 'border-cad-accent/60 bg-cad-accent/12 text-cad-accent-hot' : 'border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void'
+          }`}
+        >
+          <Bot size={15} /> Copilot
         </button>
         <LlmSelector />
       </div>

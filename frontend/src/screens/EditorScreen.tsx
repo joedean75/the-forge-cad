@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { EditorHeader } from '../components/EditorHeader'
 import { AccountDrawer } from '../components/AccountDrawer'
 import { HistoryShareDrawer } from '../components/HistoryShareDrawer'
+import { CopilotPanel } from '../components/CopilotPanel'
 import { ModeSpine } from '../components/ModeSpine'
 import { SketchCanvas } from '../features/sketch/SketchCanvas'
 import { DocumentViewport } from '../components/DocumentViewport'
@@ -93,6 +94,7 @@ function StatusBar() {
 export function EditorScreen() {
   const [accountOpen, setAccountOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [copilotOpen, setCopilotOpen] = useState(false)
   const go = useNavStore((s) => s.go)
 
   return (
@@ -101,6 +103,8 @@ export function EditorScreen() {
         onOpenLibrary={() => go('library')}
         onOpenAccount={() => setAccountOpen(true)}
         onOpenHistory={() => setHistoryOpen(true)}
+        onOpenCopilot={() => setCopilotOpen((v) => !v)}
+        copilotOpen={copilotOpen}
       />
       <div className="flex flex-1 min-h-0">
         <ModeSpine />
@@ -111,6 +115,7 @@ export function EditorScreen() {
       <StatusBar />
       <AccountDrawer open={accountOpen} onClose={() => setAccountOpen(false)} />
       <HistoryShareDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} />
+      <CopilotPanel open={copilotOpen} onClose={() => setCopilotOpen(false)} />
       <SketchCanvas />
     </div>
   )

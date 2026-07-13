@@ -307,6 +307,24 @@ export interface DocumentSummary {
   shared: boolean
 }
 
+// --- Forge Copilot: agentic operation loop ---
+export interface CopilotStep {
+  kind: 'op' | 'error' | 'done'
+  op?: string
+  args?: Record<string, unknown>
+  rationale?: string | null
+  ok?: boolean
+  error?: string | null
+  result?: Record<string, unknown>
+}
+
+export interface CopilotResult {
+  ok: boolean
+  summary: string
+  steps: CopilotStep[]
+  document?: DesignDocument | null
+}
+
 // --- Assemblies: compose part documents into a placed whole ---
 export interface ComponentTransform {
   translate: Vector3
