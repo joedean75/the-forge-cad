@@ -3,14 +3,14 @@
 # here. Set the `sync: false` secrets in the dashboard. See DEPLOY.md.
 
 databases:
-  - name: daps-db
-    databaseName: daps
-    user: daps
+  - name: forge-db
+    databaseName: forge
+    user: forge
     plan: basic-256mb          # bump as data grows; enables automated backups
 
 services:
   - type: web
-    name: daps
+    name: forge
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
@@ -20,13 +20,13 @@ services:
     envVars:
       - key: DATABASE_URL
         fromDatabase:
-          name: daps-db
+          name: forge-db
           property: connectionString
-      - key: DAPS_AUTH_REQUIRED     # enforce real auth in production
+      - key: FORGE_AUTH_REQUIRED     # enforce real auth in production
         value: "1"
-      - key: DAPS_JWT_SECRET        # stable signing secret (generated once)
+      - key: FORGE_JWT_SECRET        # stable signing secret (generated once)
         generateValue: true
-      - key: DAPS_CORS_ORIGINS      # SPA is same-origin; set only if you split hosts
+      - key: FORGE_CORS_ORIGINS      # SPA is same-origin; set only if you split hosts
         value: ""
       - key: PUBLIC_BASE_URL        # your public URL, for Stripe redirects
         sync: false

@@ -1,5 +1,5 @@
 """
-Topology-optimized mesh generation for DAPS-style generative designs.
+Topology-optimized mesh generation for Forge-style generative designs.
 
 The primary path uses a real 3D SIMP compliance-minimization solver
 (backend/app/services/simp_optimizer.py).  If the SIMP run fails for any

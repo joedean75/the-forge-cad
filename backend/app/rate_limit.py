@@ -17,7 +17,7 @@ from typing import Deque, Dict
 from fastapi import HTTPException, Request
 
 # Disable in tests / when explicitly turned off.
-_ENABLED = os.environ.get("DAPS_RATE_LIMIT", "1").lower() not in ("0", "false", "no")
+_ENABLED = os.environ.get("FORGE_RATE_LIMIT", "1").lower() not in ("0", "false", "no")
 
 _hits: Dict[str, Deque[float]] = defaultdict(deque)
 

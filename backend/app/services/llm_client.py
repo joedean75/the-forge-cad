@@ -241,7 +241,7 @@ Rules:
 # Feature-tree generation: the LLM emits real kernel geometry, not a shape enum.
 # ---------------------------------------------------------------------------
 
-_FEATURE_TREE_SYSTEM_PROMPT = """You are a solid-modeling CAD engine. Convert the user's description into a DAPS feature tree (JSON) that an SDF kernel evaluates into a real 3D solid.
+_FEATURE_TREE_SYSTEM_PROMPT = """You are a solid-modeling CAD engine. Convert the user's description into a Forge feature tree (JSON) that an SDF kernel evaluates into a real 3D solid.
 
 Output ONLY a JSON object of the form: {"version": "brep-v1", "root": NODE, "dimensions": [DIM, ...]}
 "dimensions" is OPTIONAL: 2-4 callouts of the part's most important dimensions (overall extents, key hole spacing). Each DIM is {"a":{"x":n,"y":n,"z":n},"b":{...},"label":str} where a and b are the two metre-space endpoints the dimension spans (e.g. the two ends of the overall width). Anchor them on the bounding box or a face.
@@ -394,7 +394,7 @@ def _headers() -> dict[str, str]:
     # OpenRouter recommends these headers for ranking and stats.
     if "openrouter.ai" in LLM_BASE_URL:
         headers["HTTP-Referer"] = os.getenv("OPENROUTER_REFERER", "http://localhost:8001")
-        headers["X-Title"] = os.getenv("OPENROUTER_TITLE", "DAPS CAD")
+        headers["X-Title"] = os.getenv("OPENROUTER_TITLE", "Forge CAD")
     return headers
 
 

@@ -16,7 +16,7 @@ npm run dev &
 FRONTEND_PID=$!
 cd ..
 
-echo "DAPS Design started:"
+echo "The Forge started:"
 echo "  Frontend: http://localhost:5173"
 echo "  Backend:  http://localhost:8000"
 echo "Press Ctrl+C to stop both servers."

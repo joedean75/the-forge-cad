@@ -3,7 +3,7 @@
 The source of truth for accounts, documents, candidates and assemblies moves off
 volatile in-memory dicts + loose JSON files onto a real transactional database:
 
-  * **Dev / tests / CI** → embedded SQLite (`sqlite:///backend/data/daps.db`),
+  * **Dev / tests / CI** → embedded SQLite (`sqlite:///backend/data/forge.db`),
     WAL-mode for concurrent readers, zero infrastructure.
   * **Production** → point `DATABASE_URL` at Postgres
     (`postgresql+psycopg://user:pass@host/db`) for MVCC concurrent writers,
@@ -29,7 +29,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 def _default_url() -> str:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    return f"sqlite:///{DATA_DIR / 'daps.db'}"
+    return f"sqlite:///{DATA_DIR / 'forge.db'}"
 
 
 def _normalize(url: str) -> str:

@@ -1,8 +1,8 @@
-# DAPS Design Replica
+# Forge Design Replica
 
-A browser-based replica of the **Divergent Adaptive Production System (DAPS)** design module. This project reproduces the end-to-end generative-design workflow — requirements, topology optimization preview, simulation review, additive-manufacturing constraints, and node-based assembly — as a modern web app.
+A browser-based replica of the **The Forge (Forge)** design module. This project reproduces the end-to-end generative-design workflow — requirements, topology optimization preview, simulation review, additive-manufacturing constraints, and node-based assembly — as a modern web app.
 
-> **Note:** The UI is a workflow mockup / presentation-layer interpretation of DAPS. The backend topology optimizer now uses a real 3D SIMP (Solid Isotropic Material with Penalization) compliance-minimization solver on a hexahedral voxel mesh. Density operations are structured to run on GPU via PyTorch when CUDA is available, while the sparse linear solve uses scipy for stability. DAPS itself is proprietary; this implementation is for educational/demonstration purposes only.
+> **Note:** The UI is a workflow mockup / presentation-layer interpretation of Forge. The backend topology optimizer now uses a real 3D SIMP (Solid Isotropic Material with Penalization) compliance-minimization solver on a hexahedral voxel mesh. Density operations are structured to run on GPU via PyTorch when CUDA is available, while the sparse linear solve uses scipy for stability. Forge itself is proprietary; this implementation is for educational/demonstration purposes only.
 
 ## Tech Stack
 
@@ -54,4 +54,4 @@ Open http://localhost:5173 in your browser.
 
 ## License
 
-MIT — for educational/demonstration purposes only. Divergent and DAPS are trademarks of Divergent Technologies, Inc.
+MIT — for educational/demonstration purposes only. Divergent and Forge are trademarks of Divergent Technologies, Inc.

@@ -1,4 +1,4 @@
-"""Minimal STEP AP214 exporter for the DAPS CAD kernel.
+"""Minimal STEP AP214 exporter for the Forge CAD kernel.
 
 The output represents a solid as a MANIFOLD_SOLID_BREP whose shell is made of
 planar triangular FACE_SURFACE entities.  This is a faceted STEP file: it is
@@ -148,8 +148,8 @@ def write_step(mesh: Union[FaceMesh, Solid], name: str = "part") -> str:
     out = StringIO()
     out.write("ISO-10303-21;\n")
     out.write("HEADER;\n")
-    out.write("FILE_DESCRIPTION(('DAPS CAD kernel export'),'2;1');\n")
-    out.write(f"FILE_NAME('{name}.step','{now}',(''),(''),'','DAPS CAD kernel','');\n")
+    out.write("FILE_DESCRIPTION(('Forge CAD kernel export'),'2;1');\n")
+    out.write(f"FILE_NAME('{name}.step','{now}',(''),(''),'','Forge CAD kernel','');\n")
     out.write("FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 3 1 1 }'));\n")
     out.write("ENDSEC;\n")
     out.write("DATA;\n")

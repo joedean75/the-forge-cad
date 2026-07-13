@@ -71,14 +71,14 @@ def _check_production_posture() -> None:
 
     if not AUTH_REQUIRED:
         log.warning(
-            "DAPS_AUTH_REQUIRED is off — every request is attributed to a shared "
-            "enterprise dev account. Set DAPS_AUTH_REQUIRED=1 for any deployment."
+            "FORGE_AUTH_REQUIRED is off — every request is attributed to a shared "
+            "enterprise dev account. Set FORGE_AUTH_REQUIRED=1 for any deployment."
         )
-    if AUTH_REQUIRED and not os.environ.get("DAPS_JWT_SECRET"):
+    if AUTH_REQUIRED and not os.environ.get("FORGE_JWT_SECRET"):
         log.error(
-            "DAPS_AUTH_REQUIRED is on but DAPS_JWT_SECRET is unset — session tokens "
+            "FORGE_AUTH_REQUIRED is on but FORGE_JWT_SECRET is unset — session tokens "
             "use an ephemeral per-process secret and will be invalidated on restart. "
-            "Set a stable DAPS_JWT_SECRET."
+            "Set a stable FORGE_JWT_SECRET."
         )
 
 
@@ -89,7 +89,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="DAPS Design Mock API", lifespan=lifespan)
+app = FastAPI(title="Forge Design Mock API", lifespan=lifespan)
 
 
 # Baseline security headers on every response (defense-in-depth for the SPA + API).
@@ -113,9 +113,9 @@ async def _security_headers(request: Request, call_next):
 
 # CORS origins are configurable; default to the local dev frontend. In production
 # the SPA is served same-origin (StaticFiles mount) so CORS is not needed for it —
-# only set DAPS_CORS_ORIGINS for genuinely separate front-end origins. A wildcard
+# only set FORGE_CORS_ORIGINS for genuinely separate front-end origins. A wildcard
 # is refused together with credentials (browsers reject it and it is unsafe).
-_cors_origins = [o.strip() for o in os.environ.get("DAPS_CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
+_cors_origins = [o.strip() for o in os.environ.get("FORGE_CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
 if "*" in _cors_origins:
     logging.getLogger(__name__).warning("Ignoring wildcard CORS origin with credentials; set explicit origins.")
     _cors_origins = ["http://localhost:5173"]

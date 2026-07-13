@@ -1,4 +1,4 @@
-"""Signed-distance-field evaluator for the DAPS CAD kernel.
+"""Signed-distance-field evaluator for the Forge CAD kernel.
 
 The kernel exposes a B-rep feature tree, but for robust boolean evaluation of
 primitives we compose signed distance functions on a regular grid and extract

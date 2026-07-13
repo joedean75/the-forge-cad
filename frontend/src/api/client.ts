@@ -31,13 +31,13 @@ const API_BASE = '/api'
 
 // Session token (JWT) attached to every request when present. Persisted so a
 // reload keeps the user signed in.
-let authToken: string | null = typeof localStorage !== 'undefined' ? localStorage.getItem('daps_token') : null
+let authToken: string | null = typeof localStorage !== 'undefined' ? localStorage.getItem('forge_token') : null
 
 export function setAuthToken(token: string | null) {
   authToken = token
   if (typeof localStorage !== 'undefined') {
-    if (token) localStorage.setItem('daps_token', token)
-    else localStorage.removeItem('daps_token')
+    if (token) localStorage.setItem('forge_token', token)
+    else localStorage.removeItem('forge_token')
   }
 }
 

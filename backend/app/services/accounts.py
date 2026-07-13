@@ -316,9 +316,9 @@ def link_stripe(acc: Account, customer_id: Optional[str], subscription_id: Optio
 # ---------------------------------------------------------------------------
 
 def _jwt_secret() -> str:
-    # A stable per-deployment secret. Set DAPS_JWT_SECRET in production; the
+    # A stable per-deployment secret. Set FORGE_JWT_SECRET in production; the
     # dev fallback keeps tokens valid across a single process lifetime.
-    return os.environ.get("DAPS_JWT_SECRET") or _DEV_SECRET
+    return os.environ.get("FORGE_JWT_SECRET") or _DEV_SECRET
 
 
 _DEV_SECRET = secrets.token_hex(32)

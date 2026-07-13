@@ -33,9 +33,9 @@ export function TopBar() {
         <TrussMark />
         <div className="leading-none">
           <h1 className="font-display text-cad-text-heading font-semibold text-[15px] tracking-tight leading-none">
-            DAPS
+            Forge
           </h1>
-          <p className="eyebrow text-cad-text mt-1 leading-none">Divergent Adaptive Production</p>
+          <p className="eyebrow text-cad-text mt-1 leading-none">The Forge</p>
         </div>
 
         <div className="h-7 w-px bg-cad-border mx-3" />

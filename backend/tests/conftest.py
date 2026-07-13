@@ -11,7 +11,7 @@ present in the environment/.env for the running app.
 import os
 import tempfile
 
-_TEST_DB_PATH = os.path.join(tempfile.gettempdir(), "daps_pytest.db")
+_TEST_DB_PATH = os.path.join(tempfile.gettempdir(), "forge_pytest.db")
 for _suffix in ("", "-wal", "-shm"):
     try:
         os.remove(_TEST_DB_PATH + _suffix)
@@ -20,7 +20,7 @@ for _suffix in ("", "-wal", "-shm"):
 os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_PATH}"
 # Rate limiting is exercised explicitly in test_security.py; keep it off for the
 # rest of the suite, which signs up/logs in many times from one client IP.
-os.environ.setdefault("DAPS_RATE_LIMIT", "0")
+os.environ.setdefault("FORGE_RATE_LIMIT", "0")
 
 import pytest
 

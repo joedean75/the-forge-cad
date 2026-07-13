@@ -160,7 +160,7 @@ export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory }: { 
         <TrussMark />
         <div className="leading-none">
           <h1 className="font-display text-cad-text-heading font-semibold text-[15px] tracking-tight leading-none">
-            DAPS
+            Forge
           </h1>
           <p className="eyebrow text-cad-text mt-1 leading-none">Design Studio</p>
         </div>

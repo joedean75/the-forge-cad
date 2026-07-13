@@ -1,4 +1,4 @@
-"""DAPS custom B-rep CAD kernel."""
+"""Forge custom B-rep CAD kernel."""
 
 from app.cad_kernel.kernel import Kernel
 from app.cad_kernel.core.topology import Solid, Face, Shell

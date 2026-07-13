@@ -64,7 +64,7 @@ export function AccountDrawer({ open, onClose }: { open: boolean; onClose: () =>
           <div className="flex items-center gap-2.5">
             <span aria-hidden className="w-0.5 h-3.5 bg-cad-accent rounded-full" />
             <h2 className="font-display text-sm font-semibold text-cad-text-heading">
-              {account ? 'Account & Subscription' : 'Sign in to DAPS'}
+              {account ? 'Account & Subscription' : 'Sign in to Forge'}
             </h2>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-sm text-cad-text hover:text-cad-text-heading hover:bg-cad-raised"><X size={16} /></button>

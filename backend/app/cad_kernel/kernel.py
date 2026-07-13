@@ -1,4 +1,4 @@
-"""Public entry point for the DAPS CAD kernel."""
+"""Public entry point for the Forge CAD kernel."""
 
 from __future__ import annotations
 

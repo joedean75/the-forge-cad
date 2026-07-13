@@ -167,7 +167,7 @@ export function ExportPanel() {
       <section>
         <h3 className="sec-head mb-2">Share</h3>
         <div className="p-3 rounded border border-cad-border bg-cad-bg/50 text-xs text-cad-text break-all">
-          https://daps-design.local/share/{selectedCandidate?.id ?? '...'}
+          https://forge-design.local/share/{selectedCandidate?.id ?? '...'}
         </div>
       </section>
     </div>

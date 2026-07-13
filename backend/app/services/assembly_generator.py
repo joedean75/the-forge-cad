@@ -1,4 +1,4 @@
-"""Prompt-driven assembly generator for the DAPS CAD kernel.
+"""Prompt-driven assembly generator for the Forge CAD kernel.
 
 Produces richer, parameter-aware assemblies from natural-language prompts.
 Each node is a real kernel solid, and struts describe the structural

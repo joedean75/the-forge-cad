@@ -1,4 +1,4 @@
-"""Parametric feature tree for the DAPS CAD kernel.
+"""Parametric feature tree for the Forge CAD kernel.
 
 A feature tree is a declarative recipe that produces a `Solid`.  Features are
 serializable so designs can be stored, transferred, and regenerated.

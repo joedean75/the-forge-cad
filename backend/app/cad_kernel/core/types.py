@@ -1,4 +1,4 @@
-"""Core geometric types for the DAPS CAD kernel.
+"""Core geometric types for the Forge CAD kernel.
 
 These are intentionally lightweight value types.  Topology classes in
 `topology.py` reference them to build a boundary representation.

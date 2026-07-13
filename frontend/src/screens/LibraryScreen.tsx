@@ -84,7 +84,7 @@ export function LibraryScreen() {
       <header className="h-14 border-b border-cad-border bg-cad-panel/80 backdrop-blur-sm flex items-center gap-3 px-4 shrink-0 z-20">
         <TrussMark />
         <div className="leading-none">
-          <h1 className="font-display text-cad-text-heading font-semibold text-[15px] tracking-tight leading-none">DAPS</h1>
+          <h1 className="font-display text-cad-text-heading font-semibold text-[15px] tracking-tight leading-none">Forge</h1>
           <p className="eyebrow text-cad-text mt-1 leading-none">Library</p>
         </div>
         <div className="flex-1" />

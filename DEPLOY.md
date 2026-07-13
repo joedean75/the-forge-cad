@@ -1,6 +1,6 @@
-# Deploying DAPS
+# Deploying Forge
 
-This is the researched deployment plan for DAPS: what the workload needs, the
+This is the researched deployment plan for Forge: what the workload needs, the
 options considered, the recommendation, and step-by-step instructions. A
 CI/CD pipeline (GitHub Actions) is already wired — see the end.
 
@@ -40,10 +40,10 @@ health checks with no servers to run, and a clean vertical-scale path for launch
 2. In Render: **New → Blueprint**, select the repo. It reads `render.yaml` and
    provisions the Postgres database + the Docker web service.
 3. Set the dashboard secrets (marked `sync: false`): `PUBLIC_BASE_URL` (your
-   Render URL, e.g. `https://daps.onrender.com`), and if using billing:
+   Render URL, e.g. `https://forge.onrender.com`), and if using billing:
    `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PRO`,
    `STRIPE_PRICE_ENTERPRISE`. `LLM_API_KEY` is optional.
-4. `DATABASE_URL`, `DAPS_AUTH_REQUIRED=1`, and a generated `DAPS_JWT_SECRET` are
+4. `DATABASE_URL`, `FORGE_AUTH_REQUIRED=1`, and a generated `FORGE_JWT_SECRET` are
    wired automatically by the blueprint.
 5. In the **Stripe dashboard**, add a webhook endpoint pointing at
    `https://<your-domain>/api/auth/webhook/stripe` and paste its signing secret
@@ -55,9 +55,9 @@ health checks with no servers to run, and a clean vertical-scale path for launch
 # On the box (Docker installed):
 git clone <repo> && cd cad
 # Put real secrets in an env file (never commit it):
-#   DATABASE_URL=postgresql://user:pass@db-host/daps
-#   DAPS_AUTH_REQUIRED=1
-#   DAPS_JWT_SECRET=<long random string>
+#   DATABASE_URL=postgresql://user:pass@db-host/forge
+#   FORGE_AUTH_REQUIRED=1
+#   FORGE_JWT_SECRET=<long random string>
 #   STRIPE_* / LLM_API_KEY as needed
 docker compose up -d          # brings up postgres + backend (edit compose for prod)
 # Front it with Caddy/Traefik/nginx for TLS on :443 → :8000.
@@ -68,12 +68,12 @@ docker compose up -d          # brings up postgres + backend (edit compose for p
 | Env var | Why |
 |---|---|
 | `DATABASE_URL` | Managed Postgres. `postgres://` / `postgresql://` URLs are auto-normalized to the psycopg v3 driver. |
-| `DAPS_AUTH_REQUIRED=1` | **Critical.** Without it every request is attributed to a shared enterprise dev account. The app logs a loud warning at startup if it is off. |
-| `DAPS_JWT_SECRET` | Stable session-token signing key. Without it tokens reset on every restart. |
+| `FORGE_AUTH_REQUIRED=1` | **Critical.** Without it every request is attributed to a shared enterprise dev account. The app logs a loud warning at startup if it is off. |
+| `FORGE_JWT_SECRET` | Stable session-token signing key. Without it tokens reset on every restart. |
 | `PUBLIC_BASE_URL` | Base URL for Stripe checkout redirects. |
 | `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_*` | Live billing. Omit for local/self-serve plan changes. |
-| `DAPS_CORS_ORIGINS` | Only if the SPA is hosted on a different origin than the API. Same-origin (default) needs nothing. |
-| `MOONRAKER_URLS` / `DAPS_ALLOW_PRIVATE_MACHINE_URLS` | Machine control SSRF policy — see below. |
+| `FORGE_CORS_ORIGINS` | Only if the SPA is hosted on a different origin than the API. Same-origin (default) needs nothing. |
+| `MOONRAKER_URLS` / `FORGE_ALLOW_PRIVATE_MACHINE_URLS` | Machine control SSRF policy — see below. |
 
 ## Security posture (enforced in code)
 
@@ -84,7 +84,7 @@ docker compose up -d          # brings up postgres + backend (edit compose for p
 - **SSRF protection**: outbound machine-control requests are validated
   (`app/services/machine/url_guard.py`). On a hosted deployment set
   `MOONRAKER_URLS` to an **allowlist** of printer hosts. On a self-hosted LAN box,
-  set `DAPS_ALLOW_PRIVATE_MACHINE_URLS=1` to reach local printers; loopback and
+  set `FORGE_ALLOW_PRIVATE_MACHINE_URLS=1` to reach local printers; loopback and
   cloud-metadata addresses are always blocked.
 - **Headers**: CSP, `X-Content-Type-Options`, `X-Frame-Options: DENY`,
   `Referrer-Policy`, COOP on every response.

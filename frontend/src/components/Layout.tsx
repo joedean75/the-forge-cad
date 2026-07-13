@@ -46,7 +46,7 @@ export function Layout() {
   if (!ready) {
     return (
       <div className="h-full flex items-center justify-center bg-cad-bg text-cad-text gap-2 text-sm">
-        <Loader2 size={16} className="animate-spin" /> Loading DAPS…
+        <Loader2 size={16} className="animate-spin" /> Loading Forge…
       </div>
     )
   }

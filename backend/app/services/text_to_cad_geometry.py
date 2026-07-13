@@ -1,4 +1,4 @@
-"""Prompt-driven geometry parser for the DAPS CAD kernel.
+"""Prompt-driven geometry parser for the Forge CAD kernel.
 
 Turns natural-language shape descriptions into a kernel FeatureTree that can be
 evaluated by the SDF evaluator.  The parser is intentionally rule-based so it

@@ -1,4 +1,4 @@
-"""Boundary-representation topology for the DAPS CAD kernel.
+"""Boundary-representation topology for the Forge CAD kernel.
 
 This is a lightweight, mesh-backed B-rep.  Each face carries both its
 underlying parametric surface and a triangulation of its geometric extent,

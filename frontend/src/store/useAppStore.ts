@@ -9,7 +9,7 @@ import type {
 } from '../../../shared/types'
 
 export const DEFAULT_SPEC: DesignSpec = {
-  name: 'DAPS Chassis Node',
+  name: 'Forge Chassis Node',
   design_space: { size: { x: 3, y: 2, z: 1.5 }, center: { x: 0, y: 0, z: 0 } },
   preserve_regions: [
     { id: 'p1', name: 'Mount A', type: 'sphere', center: { x: -1, y: 0, z: 0 }, radius: 0.35 },

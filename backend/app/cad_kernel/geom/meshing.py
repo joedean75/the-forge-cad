@@ -1,4 +1,4 @@
-"""Mesh utilities for the DAPS CAD kernel.
+"""Mesh utilities for the Forge CAD kernel.
 
 All functions operate on plain numpy arrays so they can be used both for
 individual faces and for evaluated solids.

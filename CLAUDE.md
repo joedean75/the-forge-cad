@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A browser-based replica of the DAPS (Divergent Adaptive Production System) generative-design workflow. The UI is a presentation-layer mockup, but the backend runs a **real 3D SIMP topology optimizer** and a **from-scratch SDF-based CAD kernel** — those are the parts with real substance, not stubs.
+A browser-based replica of the Forge (The Forge) generative-design workflow. The UI is a presentation-layer mockup, but the backend runs a **real 3D SIMP topology optimizer** and a **from-scratch SDF-based CAD kernel** — those are the parts with real substance, not stubs.
 
 ## Commands
 
@@ -45,7 +45,7 @@ There is no frontend test suite; `npm run build` is the type-check gate.
 
 **Text-to-CAD has two engines.** `services/design_intent.classify_and_generate` decides part vs. assembly. Geometry comes from a rule-based, credential-free parser (`services/text_to_cad_geometry.py`) by default; an **optional** OpenAI-style LLM client (`services/llm_client.py`) is used only when configured. Anything touching this must degrade gracefully when no LLM key is set.
 
-**State & persistence.** The durable source of truth is a **SQLAlchemy datastore** (`app/db.py`): accounts, documents, candidates and assemblies persist as transactional rows via `services/persistence.py` (same function signatures as before — the file-JSON backing was swapped out underneath). Dev/tests use embedded **SQLite** (WAL mode) at `backend/data/daps.db`; set `DATABASE_URL` to a `postgresql+psycopg://…` URL for production (MVCC concurrent writers, pooling, TLS, horizontal scale) — no code change. On startup `main.py` calls `init_db()` + `migrate_json_files()` (one-time lossless import of any legacy `backend/data/*/*.json`). Purely in-memory (rebuilt/lazily re-derived, lost on restart): the optimize job dicts (`_jobs`/`_results`), the evaluated-solid cache `_SOLID_CACHE`, and the `CANDIDATE_DATA`/`ASSEMBLY_DATA` working caches; on startup only candidate/assembly **metadata** is restored and solids are re-evaluated lazily. Tests run against an isolated temp DB (`tests/conftest.py` sets `DATABASE_URL` before app import).
+**State & persistence.** The durable source of truth is a **SQLAlchemy datastore** (`app/db.py`): accounts, documents, candidates and assemblies persist as transactional rows via `services/persistence.py` (same function signatures as before — the file-JSON backing was swapped out underneath). Dev/tests use embedded **SQLite** (WAL mode) at `backend/data/forge.db`; set `DATABASE_URL` to a `postgresql+psycopg://…` URL for production (MVCC concurrent writers, pooling, TLS, horizontal scale) — no code change. On startup `main.py` calls `init_db()` + `migrate_json_files()` (one-time lossless import of any legacy `backend/data/*/*.json`). Purely in-memory (rebuilt/lazily re-derived, lost on restart): the optimize job dicts (`_jobs`/`_results`), the evaluated-solid cache `_SOLID_CACHE`, and the `CANDIDATE_DATA`/`ASSEMBLY_DATA` working caches; on startup only candidate/assembly **metadata** is restored and solids are re-evaluated lazily. Tests run against an isolated temp DB (`tests/conftest.py` sets `DATABASE_URL` before app import).
 
 ## LLM configuration
 
@@ -53,7 +53,7 @@ Optional, opt-in via `backend/.env`: `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` 
 
 ## Subscription & billing configuration
 
-Accounts/plans/entitlements always run; `services/billing.py` is a pluggable payment provider following the same opt-in pattern. With **no** `STRIPE_API_KEY`, plan changes apply immediately (local self-serve) so dev needs no payment credentials. Set these in `backend/.env` to go live: `STRIPE_API_KEY` (secret key), `STRIPE_WEBHOOK_SECRET` (`whsec_…`, required to accept webhooks), `STRIPE_PRICE_PRO` / `STRIPE_PRICE_ENTERPRISE` (recurring price ids), `PUBLIC_BASE_URL` (post-checkout redirect base). In live mode a paid upgrade returns a Stripe Checkout URL and the plan is granted **only** by the signature-verified webhook at `POST /api/auth/webhook/stripe` — never trusted from the browser redirect. Stripe calls go through `httpx` (no `stripe` SDK). `DAPS_AUTH_REQUIRED=1` flips the whole API from dev-account fallback to enforced auth. Documents are owner-scoped and isolated per account (see `document_service.can_access`).
+Accounts/plans/entitlements always run; `services/billing.py` is a pluggable payment provider following the same opt-in pattern. With **no** `STRIPE_API_KEY`, plan changes apply immediately (local self-serve) so dev needs no payment credentials. Set these in `backend/.env` to go live: `STRIPE_API_KEY` (secret key), `STRIPE_WEBHOOK_SECRET` (`whsec_…`, required to accept webhooks), `STRIPE_PRICE_PRO` / `STRIPE_PRICE_ENTERPRISE` (recurring price ids), `PUBLIC_BASE_URL` (post-checkout redirect base). In live mode a paid upgrade returns a Stripe Checkout URL and the plan is granted **only** by the signature-verified webhook at `POST /api/auth/webhook/stripe` — never trusted from the browser redirect. Stripe calls go through `httpx` (no `stripe` SDK). `FORGE_AUTH_REQUIRED=1` flips the whole API from dev-account fallback to enforced auth. Documents are owner-scoped and isolated per account (see `document_service.can_access`).
 
 ## gstack skills
 

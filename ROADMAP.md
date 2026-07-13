@@ -1,7 +1,7 @@
-# DAPS → Professional CAD Suite — Roadmap
+# Forge → Professional CAD Suite — Roadmap
 
-A staged plan from the current implicit-kernel parametric editor to an
-Onshape/SolidWorks/Fusion-class CAD suite, with an **AI-native operation API**
+A staged plan from the current implicit-kernel parametric editor to a
+professional-grade parametric + generative CAD suite, with an **AI-native operation API**
 maintained as a first-class concern throughout.
 
 ## Where we are
@@ -15,7 +15,7 @@ A **document-centric parametric editor** on an **implicit (SDF) kernel**:
 - Dimensions/measure with feature snapping; part library.
 - The **feature tree is JSON** — already the AI's interface.
 
-## Gaps vs. Onshape / SolidWorks / Fusion
+## Gaps vs. established CAD suites
 
 1. **Kernel is implicit, not B-rep.** No exact NURBS faces, no stable topological
    entities (faces/edges/vertices) to name, select, and reference. Blocks
@@ -61,7 +61,7 @@ Stay on the current kernel; make it a real editor and lock in the AI interface.
 - **AI-native surface (the differentiator):**
   - **Operation API** — discrete, typed CAD operations (`add_primitive`, `set_feature_params`,
     `fillet`, `measure`, `query_features`…) that both the UI and an agent call. *(in progress)*
-  - **MCP server** wrapping the operation API so any agent (Claude, etc.) drives DAPS natively.
+  - **MCP server** wrapping the operation API so any agent (Claude, etc.) drives Forge natively.
   - **Versioned, LLM-legible document schema**; reference entities by name/tag.
 - Harden export (STL/3MF/STEP), materials, appearances.
 
@@ -83,7 +83,7 @@ Stay on the current kernel; make it a real editor and lock in the AI interface.
   feed the generative optimizer for a closed sim-driven-design loop.
 - **Full CAM:** 3–5 axis, sheet-metal flatten/bend, toolpath sim, post-processor library.
 - **Drawings / PMI / GD&T** complete.
-- **Cloud collaboration** (Onshape parity): real-time multiplayer, CAD branching/merging,
+- **Cloud collaboration**: real-time multiplayer, CAD branching/merging,
   PDM, permissions — a deliberate infra pivot, decoupled from kernel work.
 - Extensibility (FeatureScript-like DSL), marketplace, rendering/appearances.
 

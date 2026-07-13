@@ -8,12 +8,12 @@ may connect to.
 
 Policy (most restrictive that still works wins):
   1. If an allowlist is configured (`MOONRAKER_URLS` printers and/or
-     `DAPS_MACHINE_URL_ALLOWLIST`), only hosts on it are permitted — the right
+     `FORGE_MACHINE_URL_ALLOWLIST`), only hosts on it are permitted — the right
      posture for a hosted/multi-tenant deployment.
   2. Otherwise, deny requests that resolve to loopback / link-local / cloud
      metadata / other non-global addresses. Private LAN ranges (where hobby
      printers live) are additionally blocked unless
-     `DAPS_ALLOW_PRIVATE_MACHINE_URLS=1` is set — the opt-in for a self-hosted,
+     `FORGE_ALLOW_PRIVATE_MACHINE_URLS=1` is set — the opt-in for a self-hosted,
      single-tenant box on the same LAN as the printer.
 
 DNS is resolved and every resolved address is checked, so a hostname that
@@ -34,7 +34,7 @@ class UrlNotAllowed(Exception):
 
 def _allowlist() -> set[str]:
     hosts: set[str] = set()
-    for var in ("MOONRAKER_URLS", "DAPS_MACHINE_URL_ALLOWLIST"):
+    for var in ("MOONRAKER_URLS", "FORGE_MACHINE_URL_ALLOWLIST"):
         raw = os.environ.get(var, "").strip()
         if not raw:
             continue
@@ -51,7 +51,7 @@ def _allowlist() -> set[str]:
 
 
 def _allow_private() -> bool:
-    return os.environ.get("DAPS_ALLOW_PRIVATE_MACHINE_URLS", "").lower() in ("1", "true", "yes")
+    return os.environ.get("FORGE_ALLOW_PRIVATE_MACHINE_URLS", "").lower() in ("1", "true", "yes")
 
 
 def _resolved_addresses(host: str) -> list[ipaddress._BaseAddress]:
@@ -93,7 +93,7 @@ def validate_url(url: str) -> str:
         if ip.is_private and not allow_private:
             raise UrlNotAllowed(
                 "machine URL resolves to a private address; set "
-                "DAPS_ALLOW_PRIVATE_MACHINE_URLS=1 to allow LAN printers, or configure "
+                "FORGE_ALLOW_PRIVATE_MACHINE_URLS=1 to allow LAN printers, or configure "
                 "MOONRAKER_URLS as an allowlist"
             )
     return url

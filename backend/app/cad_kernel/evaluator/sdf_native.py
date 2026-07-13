@@ -1,4 +1,4 @@
-"""Native fast-path for SDF grid evaluation (Rust extension `daps_sdf`).
+"""Native fast-path for SDF grid evaluation (Rust extension `forge_sdf`).
 
 Compiles a feature tree of box/sphere/cylinder + booleans into a JSON program the
 Rust sampler evaluates in parallel — the measured hot path (~97% of eval time).
@@ -22,7 +22,7 @@ from app.cad_kernel.evaluator.sdf import (
 )
 
 try:
-    import daps_sdf as _native  # built via native/daps_sdf (maturin)
+    import forge_sdf as _native  # built via native/forge_sdf (maturin)
 
     AVAILABLE = True
 except Exception:  # pragma: no cover

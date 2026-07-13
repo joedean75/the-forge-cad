@@ -5,7 +5,7 @@ Two credential forms are accepted so both humans and agents are first-class:
   * ``Authorization: Bearer <jwt>``  — browser sessions (login)
   * ``X-API-Key: dps_live_...``      — programmatic / MCP-agent access
 
-`AUTH_REQUIRED` (env `DAPS_AUTH_REQUIRED`, default off in dev) controls whether an
+`AUTH_REQUIRED` (env `FORGE_AUTH_REQUIRED`, default off in dev) controls whether an
 unauthenticated request is rejected or transparently attributed to a shared local
 "dev" account, so the app still runs credential-free during development while the
 production posture is a one-flag flip.
@@ -20,9 +20,9 @@ from fastapi import Depends, Header, HTTPException
 
 from app.services import accounts, plans
 
-AUTH_REQUIRED = os.environ.get("DAPS_AUTH_REQUIRED", "").lower() in ("1", "true", "yes")
+AUTH_REQUIRED = os.environ.get("FORGE_AUTH_REQUIRED", "").lower() in ("1", "true", "yes")
 
-_DEV_EMAIL = "dev@daps.local"
+_DEV_EMAIL = "dev@forge.local"
 _DEV_PASSWORD = "dev-password-0"
 
 

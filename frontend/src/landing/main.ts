@@ -1,6 +1,6 @@
 // @ts-nocheck — self-contained vanilla canvas/reveal script for the marketing
 // landing page; not part of the typed app surface.
-// DAPS landing page entry. Fonts + styles are bundled by Vite (same-origin),
+// Forge landing page entry. Fonts + styles are bundled by Vite (same-origin),
 // so the page is served CSP-clean by the app's StaticFiles mount.
 import './landing.css'
 import '@fontsource/space-grotesk/500.css'

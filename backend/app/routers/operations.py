@@ -3,7 +3,7 @@
 - GET  /api/operations                     -> self-describing tool catalog
 - POST /api/documents/{doc_id}/op          -> dispatch one operation
 
-This is the substrate the MCP server wraps so any agent can drive DAPS.
+This is the substrate the MCP server wraps so any agent can drive Forge.
 """
 
 from typing import Any, Dict, Optional

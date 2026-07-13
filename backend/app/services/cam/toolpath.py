@@ -170,7 +170,7 @@ def _emit_gcode(rough_by_level, finish_by_level, safe_z, tool: ToolParams) -> Tu
     fr, pl = tool.feed_mm_min, tool.plunge_mm_min
 
     L += [
-        "; DAPS 2.5D CAM — roughing + finishing",
+        "; Forge 2.5D CAM — roughing + finishing",
         f"; tool Ø{tool.diameter_mm:g}mm flat endmill, stepdown {tool.stepdown_mm:g}mm, stepover {tool.stepover_mm:g}mm",
         "G21 ; mm",
         "G90 ; absolute",

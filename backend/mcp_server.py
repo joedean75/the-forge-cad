@@ -1,14 +1,14 @@
-"""DAPS MCP server — lets any MCP agent (Claude, etc.) drive DAPS CAD natively.
+"""Forge MCP server — lets any MCP agent (Claude, etc.) drive Forge CAD natively.
 
-It wraps the running DAPS backend's operation API over HTTP, exposing CAD as a
+It wraps the running Forge backend's operation API over HTTP, exposing CAD as a
 small set of tools: create/list/get parts and run any catalog operation
 (add_primitive, set_feature_params, fillet, hole, measure, ai_edit, …).
 
-Run (with the DAPS backend already up on :8000):
+Run (with the Forge backend already up on :8000):
     cd backend && .venv/bin/python mcp_server.py
 
 Register with Claude Code / Desktop by pointing an MCP stdio server at that command.
-Configure the backend URL with DAPS_API (default http://localhost:8000/api).
+Configure the backend URL with FORGE_API (default http://localhost:8000/api).
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ from typing import Any, Optional
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-API = os.environ.get("DAPS_API", "http://localhost:8000/api")
+API = os.environ.get("FORGE_API", "http://localhost:8000/api")
 
-mcp = FastMCP("daps-cad")
+mcp = FastMCP("forge-cad")
 
 
 def _client() -> httpx.Client:

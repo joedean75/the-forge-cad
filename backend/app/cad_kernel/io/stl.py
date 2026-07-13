@@ -1,4 +1,4 @@
-"""STL exporters for the DAPS CAD kernel."""
+"""STL exporters for the Forge CAD kernel."""
 
 from __future__ import annotations
 

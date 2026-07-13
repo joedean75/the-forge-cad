@@ -45,8 +45,8 @@ export function SignInScreen() {
         <div className="flex items-center gap-3 mb-6">
           <TrussMark />
           <div className="leading-none">
-            <h1 className="font-display text-cad-text-heading font-semibold text-xl tracking-tight">DAPS</h1>
-            <p className="eyebrow text-cad-text mt-1.5">Divergent Adaptive Production</p>
+            <h1 className="font-display text-cad-text-heading font-semibold text-xl tracking-tight">The Forge</h1>
+            <p className="eyebrow text-cad-text mt-1.5">Generative CAD · CAM</p>
           </div>
         </div>
 
@@ -112,7 +112,7 @@ export function SignInScreen() {
         </div>
 
         <p className="text-[10px] text-cad-text/50 text-center mt-4">
-          {mode === 'login' ? "New to DAPS? " : 'Already have an account? '}
+          {mode === 'login' ? "New to Forge? " : 'Already have an account? '}
           <button onClick={() => setMode(mode === 'login' ? 'signup' : 'login')} className="text-cad-accent-hot hover:underline">
             {mode === 'login' ? 'Create an account' : 'Sign in'}
           </button>

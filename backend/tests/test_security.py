@@ -15,7 +15,7 @@ client = TestClient(app)
 
 def test_guard_blocks_non_http_scheme(monkeypatch):
     monkeypatch.delenv("MOONRAKER_URLS", raising=False)
-    monkeypatch.delenv("DAPS_MACHINE_URL_ALLOWLIST", raising=False)
+    monkeypatch.delenv("FORGE_MACHINE_URL_ALLOWLIST", raising=False)
     with pytest.raises(UrlNotAllowed):
         validate_url("file:///etc/passwd")
     with pytest.raises(UrlNotAllowed):
@@ -24,8 +24,8 @@ def test_guard_blocks_non_http_scheme(monkeypatch):
 
 def test_guard_blocks_loopback_and_metadata(monkeypatch):
     monkeypatch.delenv("MOONRAKER_URLS", raising=False)
-    monkeypatch.delenv("DAPS_MACHINE_URL_ALLOWLIST", raising=False)
-    monkeypatch.delenv("DAPS_ALLOW_PRIVATE_MACHINE_URLS", raising=False)
+    monkeypatch.delenv("FORGE_MACHINE_URL_ALLOWLIST", raising=False)
+    monkeypatch.delenv("FORGE_ALLOW_PRIVATE_MACHINE_URLS", raising=False)
     for bad in ("http://127.0.0.1:7125", "http://169.254.169.254/latest/meta-data/", "http://[::1]:80"):
         with pytest.raises(UrlNotAllowed):
             validate_url(bad)
@@ -33,11 +33,11 @@ def test_guard_blocks_loopback_and_metadata(monkeypatch):
 
 def test_guard_private_requires_optin(monkeypatch):
     monkeypatch.delenv("MOONRAKER_URLS", raising=False)
-    monkeypatch.delenv("DAPS_MACHINE_URL_ALLOWLIST", raising=False)
-    monkeypatch.delenv("DAPS_ALLOW_PRIVATE_MACHINE_URLS", raising=False)
+    monkeypatch.delenv("FORGE_MACHINE_URL_ALLOWLIST", raising=False)
+    monkeypatch.delenv("FORGE_ALLOW_PRIVATE_MACHINE_URLS", raising=False)
     with pytest.raises(UrlNotAllowed):
         validate_url("http://192.168.1.50:7125")
-    monkeypatch.setenv("DAPS_ALLOW_PRIVATE_MACHINE_URLS", "1")
+    monkeypatch.setenv("FORGE_ALLOW_PRIVATE_MACHINE_URLS", "1")
     assert validate_url("http://192.168.1.50:7125").startswith("http://192.168")
 
 
@@ -53,7 +53,7 @@ def test_guard_allowlist_is_strict(monkeypatch):
 def test_machine_endpoint_rejects_ssrf(monkeypatch):
     # Reaches the guard through the HTTP surface (dev account passes auth).
     monkeypatch.delenv("MOONRAKER_URLS", raising=False)
-    monkeypatch.delenv("DAPS_ALLOW_PRIVATE_MACHINE_URLS", raising=False)
+    monkeypatch.delenv("FORGE_ALLOW_PRIVATE_MACHINE_URLS", raising=False)
     r = client.post("/api/machine/status", json={"url": "http://169.254.169.254/"})
     assert r.status_code == 400
 
