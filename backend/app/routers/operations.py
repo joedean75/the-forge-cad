@@ -36,6 +36,43 @@ def list_operations():
     return {"operations": cad_operations.catalog()}
 
 
+@router.get("/api/platform")
+def platform_manifest():
+    """Discovery manifest for the agent platform: how to authenticate, what to call.
+
+    Public by design — it describes the surface, never data. Agents (or humans)
+    hit this first, then /api/operations for the op catalog and /docs for OpenAPI.
+    """
+    return {
+        "name": "The Forge — agent-native CAD platform",
+        "version": "1",
+        "auth": {
+            "api_key": "Send 'X-Api-Key: <key>'. Create keys under Account → API keys (Pro plan).",
+            "session": "Send 'Authorization: Bearer <jwt>' from /api/auth/login.",
+        },
+        "endpoints": {
+            "operation_catalog": "GET /api/operations",
+            "run_operation": "POST /api/documents/{id}/op {op, args}",
+            "copilot": "POST /api/documents/{id}/copilot {goal, max_steps} — agentic multi-step loop",
+            "create_document": "POST /api/documents {prompt?, name?} — text-to-CAD or blank",
+            "import": "POST /api/documents/import (multipart: file, units, resolution)",
+            "quotes": "POST /api/documents/{id}/quotes {quantity}",
+            "orders": "POST /api/documents/{id}/orders {process, quantity, notes}",
+            "export_step": "GET /api/documents/{id}/step",
+            "openapi": "GET /openapi.json (interactive: /docs)",
+        },
+        "mcp": {
+            "server": "backend/mcp_server.py (stdio)",
+            "env": {"FORGE_API": "backend base URL + /api", "FORGE_API_KEY": "an account API key"},
+            "tools": [
+                "list_operations", "create_part", "list_parts", "get_part", "run_operation",
+                "copilot", "import_part", "quote_part", "order_part", "export_part_step",
+            ],
+        },
+        "conventions": {"units": "metres in op args; UI displays mm", "mesh": "derived.mesh_url is a binary-STL data URI"},
+    }
+
+
 @router.post("/api/documents/{doc_id}/op", response_model=OperationResponse)
 def run_operation(doc_id: str, body: OperationRequest, acc: accounts.Account = Depends(current_account)):
     op = cad_operations.OPERATIONS.get(body.op)

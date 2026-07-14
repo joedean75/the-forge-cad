@@ -8,25 +8,30 @@ Run (with the Forge backend already up on :8000):
     cd backend && .venv/bin/python mcp_server.py
 
 Register with Claude Code / Desktop by pointing an MCP stdio server at that command.
-Configure the backend URL with FORGE_API (default http://localhost:8000/api).
+Configure the backend URL with FORGE_API (default http://localhost:8000/api) and
+authenticate with FORGE_API_KEY (create one under Account → API keys; required
+when the deployment runs with FORGE_AUTH_REQUIRED=1).
 """
 
 from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Optional
 
 import httpx
 from mcp.server.fastmcp import FastMCP
 
 API = os.environ.get("FORGE_API", "http://localhost:8000/api")
+API_KEY = os.environ.get("FORGE_API_KEY")
 
 mcp = FastMCP("forge-cad")
 
 
 def _client() -> httpx.Client:
-    return httpx.Client(base_url=API, timeout=120.0)
+    headers = {"X-Api-Key": API_KEY} if API_KEY else {}
+    return httpx.Client(base_url=API, timeout=300.0, headers=headers)
 
 
 def _size(doc: dict) -> Optional[dict]:
@@ -106,6 +111,93 @@ def run_operation(doc_id: str, op: str, args: Optional[dict] = None) -> str:
         out["mass_kg"] = data["document"]["derived"]["mass"]
         out["error"] = data["document"]["derived"]["error"]
     return json.dumps(out)
+
+
+@mcp.tool()
+def copilot(doc_id: str, goal: str, max_steps: int = 8) -> str:
+    """Run Forge Copilot: an agentic loop that plans and executes multiple CAD
+    operations toward a natural-language goal, verifying as it goes.
+
+    Example goals: "turn this into an 80x40x10 mm plate with 4 corner holes",
+    "shell the body to 2 mm and fillet the top edges".
+    """
+    with _client() as c:
+        r = c.post(f"/documents/{doc_id}/copilot", json={"goal": goal, "max_steps": max_steps})
+    if r.status_code >= 400:
+        return f"Error {r.status_code}: {r.text}"
+    data = r.json()
+    steps = [
+        {k: s.get(k) for k in ("op", "ok", "rationale", "error")}
+        for s in data["steps"] if s.get("kind") == "op"
+    ]
+    out = {"summary": data["summary"], "steps": steps}
+    if data.get("document"):
+        out["size_mm"] = _size(data["document"])
+        out["mass_kg"] = data["document"]["derived"]["mass"]
+    return json.dumps(out, indent=2)
+
+
+@mcp.tool()
+def import_part(file_path: str, name: str = "", units: str = "auto") -> str:
+    """Import a local STL/OBJ/PLY/GLB/OFF or faceted STEP file as an editable part.
+
+    units: auto (default, detects mm vs m), or explicit m/mm/cm/inch.
+    Returns the new document id and size.
+    """
+    p = Path(file_path).expanduser()
+    if not p.is_file():
+        return f"Error: file not found: {file_path}"
+    form: dict[str, Any] = {"units": units}
+    if name:
+        form["name"] = name
+    with _client() as c:
+        r = c.post(
+            "/documents/import",
+            files={"file": (p.name, p.read_bytes(), "application/octet-stream")},
+            data=form,
+        )
+    if r.status_code >= 400:
+        return f"Error {r.status_code}: {r.text}"
+    d = r.json()
+    return json.dumps({"id": d["id"], "name": d["name"], "size_mm": _size(d),
+                       "mass_kg": d["derived"]["mass"], "error": d["derived"]["error"]})
+
+
+@mcp.tool()
+def quote_part(doc_id: str, quantity: int = 1) -> str:
+    """Get instant manufacturing quotes (CNC / FDM / SLA / metal printing) for a part."""
+    with _client() as c:
+        r = c.post(f"/documents/{doc_id}/quotes", json={"quantity": quantity})
+    if r.status_code >= 400:
+        return f"Error {r.status_code}: {r.text}"
+    return json.dumps(r.json(), indent=2)
+
+
+@mcp.tool()
+def order_part(doc_id: str, process: str, quantity: int = 1, notes: str = "") -> str:
+    """Place a manufacturing order (RFQ) for a quoted process (see quote_part)."""
+    with _client() as c:
+        r = c.post(f"/documents/{doc_id}/orders",
+                   json={"process": process, "quantity": quantity, "notes": notes})
+    if r.status_code >= 400:
+        return f"Error {r.status_code}: {r.text}"
+    o = r.json()
+    return json.dumps({"order_id": o["id"], "status": o["status"], "process": o["process"],
+                       "quantity": o["quantity"], "total_usd": o["quote"]["total"],
+                       "lead_time_days": o["quote"].get("lead_time_days")})
+
+
+@mcp.tool()
+def export_part_step(doc_id: str, out_path: str) -> str:
+    """Export a part as STEP to a local file path."""
+    with _client() as c:
+        r = c.get(f"/documents/{doc_id}/step", params={"resolution": 128})
+    if r.status_code >= 400:
+        return f"Error {r.status_code}: {r.text}"
+    p = Path(out_path).expanduser()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(r.text)
+    return f"Wrote {len(r.text)} chars of STEP to {p}"
 
 
 if __name__ == "__main__":
