@@ -1,7 +1,115 @@
 import { useState } from 'react'
-import { Loader2, Factory, Download, Check, AlertTriangle, X, Route } from 'lucide-react'
+import { Loader2, Factory, Download, Check, AlertTriangle, X, Route, ShoppingCart, PackageCheck } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
-import type { DfmCheck } from '../../../../shared/types'
+import { api } from '../../api/client'
+import type { DfmCheck, QuoteBundle, ManufacturingOrder } from '../../../../shared/types'
+
+const PROCESS_LABEL: Record<string, string> = {
+  'cnc-3axis': 'CNC machining · Al 6061',
+  fdm: 'FDM printing · PLA',
+  sla: 'SLA printing · resin',
+  'lpbf-metal': 'Metal printing · AlSi10Mg',
+}
+
+function GetItMade({ docId }: { docId: string }) {
+  const [quantity, setQuantity] = useState(1)
+  const [bundle, setBundle] = useState<QuoteBundle | null>(null)
+  const [order, setOrder] = useState<ManufacturingOrder | null>(null)
+  const [working, setWorking] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const getQuotes = async () => {
+    setWorking(true)
+    setError(null)
+    setOrder(null)
+    try {
+      setBundle(await api.quoteDocument(docId, quantity))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Quoting failed')
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const place = async (process: string) => {
+    setWorking(true)
+    setError(null)
+    try {
+      setOrder(await api.placeOrder(docId, process, quantity))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Order failed')
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  return (
+    <div className="pt-4 border-t border-cad-border space-y-3">
+      <h3 className="sec-head">Get it made</h3>
+      <div className="flex items-end gap-2">
+        <label className="text-[10px] text-cad-text flex flex-col gap-1 w-20">
+          <span className="tabular">Quantity</span>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={quantity}
+            onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+            className="tabular px-2 py-1 rounded-sm bg-cad-bg border border-cad-border text-xs text-cad-text-heading outline-none focus:border-cad-accent"
+          />
+        </label>
+        <button
+          onClick={getQuotes}
+          disabled={working}
+          className="flex-1 flex items-center justify-center gap-2 py-2 rounded-sm bg-cad-accent text-cad-bg text-xs font-semibold hover:bg-cad-accent-hot transition-colors disabled:opacity-50"
+        >
+          {working ? <Loader2 size={14} className="animate-spin" /> : <ShoppingCart size={14} />}
+          {working ? 'Working…' : 'Get instant quotes'}
+        </button>
+      </div>
+
+      {error && <p className="text-[11px] text-cad-danger">{error}</p>}
+
+      {order ? (
+        <div className="p-3 rounded-sm border border-cad-success/50 bg-cad-success/5 space-y-1">
+          <div className="flex items-center gap-2 text-cad-success text-xs font-semibold">
+            <PackageCheck size={14} /> Order submitted
+          </div>
+          <p className="tabular text-[11px] text-cad-text">
+            {PROCESS_LABEL[order.process] ?? order.process} · qty {order.quantity} · ${order.quote.total.toFixed(2)}
+            {order.quote.lead_time_days != null && ` · ~${order.quote.lead_time_days} days`}
+          </p>
+          <p className="text-[10px] text-cad-text/60">Ref {order.id.slice(0, 8)} · {order.provider}</p>
+        </div>
+      ) : (
+        bundle && (
+          <div className="space-y-1.5">
+            <p className="tabular text-[10px] text-cad-text/60">
+              {bundle.volume_cm3.toFixed(1)} cm³ · {bundle.bbox_mm.map((v) => v.toFixed(0)).join('×')} mm · {bundle.provider}
+            </p>
+            {bundle.quotes.map((q) => (
+              <div key={q.process} className="flex items-center justify-between p-2 rounded-sm border border-cad-border bg-cad-bg/50">
+                <div>
+                  <div className="text-[11px] text-cad-text-heading font-medium">{PROCESS_LABEL[q.process] ?? q.process}</div>
+                  <div className="tabular text-[10px] text-cad-text/60">
+                    ${q.total.toFixed(2)}{q.lead_time_days != null && ` · ${q.lead_time_days} days`}
+                  </div>
+                </div>
+                <button
+                  onClick={() => place(q.process)}
+                  disabled={working}
+                  className="px-2.5 py-1 rounded-sm border border-cad-accent/50 text-cad-accent-hot text-[10px] font-semibold hover:bg-cad-accent/10 transition-colors disabled:opacity-40"
+                >
+                  Order
+                </button>
+              </div>
+            ))}
+          </div>
+        )
+      )}
+    </div>
+  )
+}
 
 const STATUS_ICON = { pass: Check, warn: AlertTriangle, fail: X }
 const STATUS_TONE = { pass: 'text-cad-success', warn: 'text-cad-warning', fail: 'text-cad-danger' }
@@ -87,6 +195,8 @@ export function MakePanel() {
           )}
         </>
       )}
+
+      <GetItMade docId={doc.id} />
 
       {/* CAM — 2.5D profiling */}
       <div className="pt-4 border-t border-cad-border space-y-3">

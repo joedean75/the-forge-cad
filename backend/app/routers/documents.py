@@ -177,6 +177,49 @@ def simulate_document(
     return document_analysis.simulate_document(doc.id, resolution=resolution)
 
 
+class QuoteRequest(BaseModel):
+    quantity: int = 1
+
+
+class OrderRequest(BaseModel):
+    process: str
+    quantity: int = 1
+    notes: str = ""
+
+
+@router.post("/{doc_id}/quotes")
+def quote_document(body: QuoteRequest, doc: DesignDocument = Depends(readable_document)):
+    """Instant manufacturing quotes across every viable process ("Get it made")."""
+    from app.services import quotes
+
+    try:
+        return quotes.quote_document(doc.id, quantity=body.quantity)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/{doc_id}/orders")
+def place_order(
+    body: OrderRequest,
+    acc: accounts.Account = Depends(current_account),
+    doc: DesignDocument = Depends(editable_document),
+):
+    """Submit a manufacturing order (RFQ) for a selected process quote."""
+    from app.services import quotes
+
+    try:
+        return quotes.place_order(doc.id, body.process, body.quantity, owner_id=acc.id, notes=body.notes)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/{doc_id}/orders")
+def list_orders(doc: DesignDocument = Depends(readable_document)):
+    from app.services import quotes
+
+    return {"orders": quotes.list_orders(doc.id)}
+
+
 @router.post("/{doc_id}/dfm", response_model=DfmReport)
 def dfm_document(
     build_axis: str = Query("auto"),

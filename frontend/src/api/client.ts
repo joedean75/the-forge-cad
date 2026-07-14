@@ -26,6 +26,8 @@ import type {
   AssemblySummary,
   ComponentTransform,
   CopilotResult,
+  QuoteBundle,
+  ManufacturingOrder,
 } from '../../../shared/types'
 
 const API_BASE = '/api'
@@ -176,6 +178,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ instruction, resolution }),
     }),
+  /** Instant manufacturing quotes across viable processes ("Get it made"). */
+  quoteDocument: (id: string, quantity = 1) =>
+    fetchJson<QuoteBundle>(`/documents/${id}/quotes`, {
+      method: 'POST',
+      body: JSON.stringify({ quantity }),
+    }),
+  placeOrder: (id: string, process: string, quantity = 1, notes = '') =>
+    fetchJson<ManufacturingOrder>(`/documents/${id}/orders`, {
+      method: 'POST',
+      body: JSON.stringify({ process, quantity, notes }),
+    }),
+  listOrders: (id: string) =>
+    fetchJson<{ orders: ManufacturingOrder[] }>(`/documents/${id}/orders`),
   /** Forge Copilot: an agentic loop that plans + executes a sequence of operations. */
   runCopilot: (id: string, goal: string, maxSteps = 8) =>
     fetchJson<CopilotResult>(`/documents/${id}/copilot`, {

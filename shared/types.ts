@@ -307,6 +307,28 @@ export interface DocumentSummary {
   shared: boolean
 }
 
+// --- Instant quotes + orders ("Get it made") ---
+export interface QuoteBundle {
+  document_id: string
+  quantity: number
+  volume_cm3: number
+  bbox_mm: number[]
+  provider: string
+  quotes: Quote[]
+}
+
+export interface ManufacturingOrder {
+  id: string
+  document_id: string
+  process: string
+  quantity: number
+  quote: Quote
+  notes: string
+  status: string
+  provider: string
+  created_at: string
+}
+
 // --- Forge Copilot: agentic operation loop ---
 export interface CopilotStep {
   kind: 'op' | 'error' | 'done'

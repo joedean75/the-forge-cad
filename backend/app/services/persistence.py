@@ -26,6 +26,7 @@ _CANDIDATE = "candidate"
 _ASSEMBLY = "assembly"  # legacy generated AssemblyResult (trusses/frames)
 _DOCUMENT = "document"
 _ASSEMBLY_DOC = "assembly_doc"  # parts-composition assembly
+_ORDER = "order"  # manufacturing orders / RFQs
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +151,22 @@ def list_assembly_docs() -> List[str]:
 
 def delete_assembly_doc(assembly_id: str) -> bool:
     return _delete(_ASSEMBLY_DOC, assembly_id)
+
+
+# ---------------------------------------------------------------------------
+# Manufacturing orders (RFQs)
+# ---------------------------------------------------------------------------
+
+def save_order(order_id: str, order: dict) -> None:
+    _save(_ORDER, order_id, order, owner_id=order.get("owner_id"))
+
+
+def load_order(order_id: str) -> Optional[dict]:
+    return _load(_ORDER, order_id)
+
+
+def list_orders() -> List[str]:
+    return _list(_ORDER)
 
 
 # ---------------------------------------------------------------------------
