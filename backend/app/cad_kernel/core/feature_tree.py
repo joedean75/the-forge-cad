@@ -53,6 +53,7 @@ class Feature:
             TransformFeature,
         )
         from app.cad_kernel.ops.generative import OptimizeFeature
+        from app.cad_kernel.ops.imported import ImportFeature
         from app.cad_kernel.ops.sketch import ExtrudeFeature
 
         registry = {
@@ -68,6 +69,7 @@ class Feature:
             "PatternFeature": PatternFeature,
             "TransformFeature": TransformFeature,
             "OptimizeFeature": OptimizeFeature,
+            "ImportFeature": ImportFeature,
             "ExtrudeFeature": ExtrudeFeature,
         }
         cls = registry.get(data["type"])

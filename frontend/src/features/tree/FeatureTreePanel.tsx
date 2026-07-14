@@ -2,7 +2,7 @@ import { useState } from 'react'
 import {
   Box, Circle, Cylinder, Cone, Combine, Trash2, Plus, Minus,
   Blend, Triangle, Shell, CircleDot, Grid3x3, Move3d,
-  Eye, EyeOff, ChevronUp, ChevronDown, PencilRuler,
+  Eye, EyeOff, ChevronUp, ChevronDown, PencilRuler, Upload,
 } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
 import {
@@ -43,6 +43,7 @@ const TYPE_ICON: Record<string, typeof Box> = {
   PatternFeature: Grid3x3,
   TransformFeature: Move3d,
   ExtrudeFeature: PencilRuler,
+  ImportFeature: Upload,
 }
 
 const MODIFIERS: { type: ModifierType; label: string; icon: typeof Box }[] = [

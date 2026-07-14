@@ -7,7 +7,7 @@ simulate, DFM and CAM endpoints are added by their respective phases.
 import asyncio
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
@@ -105,6 +105,36 @@ def create_document(body: CreateDocumentRequest, acc: accounts.Account = Depends
 @router.get("", response_model=list[DocumentSummary])
 def list_documents(acc: accounts.Account = Depends(current_account)):
     return docs.list_documents(owner_id=acc.id)
+
+
+@router.post("/import", response_model=DesignDocument)
+async def import_document(
+    file: UploadFile = File(...),
+    name: str | None = Form(None),
+    units: str = Form("auto"),
+    resolution: int = Form(96),
+    acc: accounts.Account = Depends(current_account),
+):
+    """Universal import: STL/OBJ/PLY/GLB/OFF or faceted STEP → editable document."""
+    from app.services import import_service
+
+    data = await file.read()
+    try:
+        return import_service.import_document(
+            filename=file.filename or "part",
+            data=data,
+            name=name,
+            resolution=resolution,
+            units=units,
+            owner_id=acc.id,
+        )
+    except import_service.ImportError_ as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("import failed")
+        raise HTTPException(status_code=400, detail="Could not import this file")
 
 
 @router.get("/{doc_id}", response_model=DesignDocument)

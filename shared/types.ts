@@ -276,7 +276,7 @@ export interface Dimension {
   source: 'user' | 'llm'
 }
 
-export type DocumentProvenance = 'text_to_cad' | 'manual' | 'generative' | 'mixed'
+export type DocumentProvenance = 'text_to_cad' | 'manual' | 'generative' | 'mixed' | 'imported'
 
 export interface DesignDocument {
   id: string

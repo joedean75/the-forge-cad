@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Package, Boxes, Plus, Trash2, Loader2, Search, UserCircle2, Users,
+  Package, Boxes, Plus, Trash2, Loader2, Search, UserCircle2, Users, Upload,
 } from 'lucide-react'
 import { api } from '../api/client'
 import { useDocumentStore } from '../store/useDocumentStore'
@@ -44,6 +44,9 @@ export function LibraryScreen() {
   const [query, setQuery] = useState('')
   const [accountOpen, setAccountOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState<string | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
 
   const reload = () => {
     setLoading(true)
@@ -63,6 +66,21 @@ export function LibraryScreen() {
     setCreating(true)
     try { const id = await createAndOpen(); if (id) go('assembly') } finally { setCreating(false) }
   }
+  const importFile = async (file: File) => {
+    setImporting(true)
+    setImportError(null)
+    try {
+      const doc = await api.importDocument(file)
+      await openDocument(doc.id)
+      go('editor')
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : 'Import failed')
+    } finally {
+      setImporting(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
   const removePart = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
     setParts((p) => p.filter((i) => i.id !== id))
@@ -122,6 +140,27 @@ export function LibraryScreen() {
           </button>
         ))}
         <div className="flex-1" />
+        {importError && <span className="text-[10px] text-cad-danger mr-3 max-w-xs truncate" title={importError}>{importError}</span>}
+        {tab === 'parts' && (
+          <>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".stl,.obj,.ply,.glb,.off,.step,.stp"
+              className="hidden"
+              onChange={(e) => e.target.files?.[0] && importFile(e.target.files[0])}
+            />
+            <button
+              onClick={() => fileRef.current?.click()}
+              disabled={importing}
+              title="Import STL / OBJ / PLY / GLB / faceted STEP as an editable part"
+              className="flex items-center gap-1.5 px-3 py-1.5 mr-2 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-cad-accent/50 text-[11px] font-medium transition-colors disabled:opacity-40"
+            >
+              {importing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={13} />}
+              {importing ? 'Importing…' : 'Import'}
+            </button>
+          </>
+        )}
         <button
           onClick={tab === 'parts' ? newPart : newAssembly}
           disabled={creating}

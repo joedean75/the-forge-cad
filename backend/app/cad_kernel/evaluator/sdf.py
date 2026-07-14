@@ -409,6 +409,7 @@ def sdf_from_feature(feature) -> SDF:
         TransformFeature,
     )
     from app.cad_kernel.ops.generative import OptimizeFeature
+    from app.cad_kernel.ops.imported import ImportFeature
     from app.cad_kernel.ops.sketch import ExtrudeFeature
 
     if isinstance(feature, BoxFeature):
@@ -461,6 +462,20 @@ def sdf_from_feature(feature) -> SDF:
         if feature.children:
             return sdf_from_feature(feature.children[0])
         raise ValueError("OptimizeFeature has no cache and no input body")
+    if isinstance(feature, ImportFeature):
+        cache = feature.cache
+        if cache and cache.get("density_packed"):
+            from app.services.import_service import unpack_density
+
+            origin = cache["origin"]
+            size = cache["size"]
+            return GridSDF(
+                unpack_density(cache),
+                [origin["x"], origin["y"], origin["z"]],
+                [size["x"], size["y"], size["z"]],
+                cache.get("threshold", 0.5),
+            )
+        raise ValueError("ImportFeature has no voxel cache")
     raise ValueError(f"Feature {type(feature).__name__} cannot be converted to SDF")
 
 

@@ -306,7 +306,7 @@ class DesignDocument(BaseModel):
     feature_tree: dict
     optimization: Optional[OptimizationSetup] = None
     derived: DerivedCache = Field(default_factory=DerivedCache)
-    provenance: Literal["text_to_cad", "manual", "generative", "mixed"] = "manual"
+    provenance: Literal["text_to_cad", "manual", "generative", "mixed", "imported"] = "manual"
     created_at: str
     updated_at: str
     version_history: List[DocumentVersion] = []

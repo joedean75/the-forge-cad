@@ -150,6 +150,20 @@ export const api = {
   createDocument: (body: { name?: string; prompt?: string; units?: 'mm' | 'm'; resolution?: number }) =>
     fetchJson<DesignDocument>('/documents', { method: 'POST', body: JSON.stringify(body) }),
   listDocuments: () => fetchJson<DocumentSummary[]>('/documents'),
+  /** Universal import: STL/OBJ/PLY/GLB/OFF or faceted STEP → editable document. */
+  importDocument: async (file: File, opts?: { units?: string; resolution?: number }) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (opts?.units) form.append('units', opts.units)
+    if (opts?.resolution) form.append('resolution', String(opts.resolution))
+    const res = await fetch('/api/documents/import', { method: 'POST', body: form, headers: authHeaders() })
+    if (!res.ok) {
+      let detail = res.statusText
+      try { detail = (await res.json())?.detail ?? detail } catch { /* non-JSON */ }
+      throw new Error(detail)
+    }
+    return res.json() as Promise<DesignDocument>
+  },
   getDocument: (id: string) => fetchJson<DesignDocument>(`/documents/${id}`),
   updateDocument: (
     id: string,
