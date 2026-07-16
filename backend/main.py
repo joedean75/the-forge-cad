@@ -13,54 +13,25 @@ from fastapi.staticfiles import StaticFiles
 
 from app.routers import materials, optimize, simulate, manufacturing, text_to_cad, assembly, export, cad, design, llm, documents, machine, operations, sketch, auth, assemblies, collab
 from app.services import accounts, persistence
-from app.services.persistence import list_candidates, load_candidate, list_assemblies, load_assembly
-from app.services.mesh_generator import CANDIDATE_DATA
-from app.services.assembly_generator import ASSEMBLY_DATA
-from app.services import document_service
-from app.models.schemas import Candidate, AssemblyResult
 
 
 def _load_persisted_data():
-    """Restore candidate and assembly metadata from the datastore on startup.
+    """Prepare the datastore on startup.
 
-    Solids are not re-evaluated here to keep startup fast; they are generated
-    lazily when export/manufacturing endpoints need them.
+    Nothing heavy is loaded eagerly: documents, candidates and assemblies are
+    restored lazily on first access (their payloads embed meshes and would cost
+    gigabytes of RAM up front). Only the small account records come into memory.
     """
     # Ensure the schema exists and fold any legacy JSON files into the database
-    # before anything reads from it.
+    # before anything reads from it (both passes are marker-gated one-time work).
     persistence.init_db()
     migrated = persistence.migrate_json_files()
     if migrated:
         logging.getLogger(__name__).info("Migrated %d legacy JSON records into the database", migrated)
+    stripped = persistence.strip_document_meshes()
+    if stripped:
+        logging.getLogger(__name__).info("Slimmed %d document rows (derived meshes now re-evaluated on demand)", stripped)
 
-    for candidate_id in list_candidates():
-        data = load_candidate(candidate_id)
-        if not data:
-            continue
-        try:
-            candidate = Candidate(**data["candidate"])
-            CANDIDATE_DATA[candidate_id] = {
-                "spec": None,
-                "material": None,
-                "kernel_solid": None,
-                "feature_tree": data["feature_tree"],
-                "candidate_mesh": None,
-                "threshold": 0.0,
-                "candidate": candidate,
-            }
-        except Exception:
-            continue
-
-    for assembly_id in list_assemblies():
-        data = load_assembly(assembly_id)
-        if not data:
-            continue
-        try:
-            ASSEMBLY_DATA[assembly_id] = AssemblyResult(**data)
-        except Exception:
-            continue
-
-    document_service.restore_documents()
     accounts.restore_accounts()
 
 

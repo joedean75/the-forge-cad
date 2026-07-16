@@ -18,7 +18,7 @@ from typing import List, Optional
 
 from sqlalchemy import delete as sql_delete, select
 
-from app.db import DATA_DIR, Record, SessionLocal, init_db
+from app.db import DATA_DIR, Record, SessionLocal, engine, init_db
 
 # Kinds (row namespaces in the `records` table).
 _ACCOUNT = "account"
@@ -27,6 +27,10 @@ _ASSEMBLY = "assembly"  # legacy generated AssemblyResult (trusses/frames)
 _DOCUMENT = "document"
 _ASSEMBLY_DOC = "assembly_doc"  # parts-composition assembly
 _ORDER = "order"  # manufacturing orders / RFQs
+_META = "meta"  # one-time migration markers etc.
+
+_MIGRATION_MARKER = "json_files_migrated"
+_MESH_STRIP_MARKER = "document_meshes_stripped_v1"
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +137,56 @@ def delete_document(document_id: str) -> bool:
     return _delete(_DOCUMENT, document_id)
 
 
+def list_document_summaries() -> List[dict]:
+    """Lightweight listing fields for every document, extracted in SQL.
+
+    Returns dicts with id/owner_id/name/provenance/updated_at/collaborators
+    without ever deserializing full document payloads (feature trees, meshes,
+    version history) into Python.
+    """
+    from sqlalchemy import text
+
+    if engine.dialect.name == "sqlite":
+        sql = text(
+            "SELECT id, owner_id,"
+            " json_extract(data, '$.name'),"
+            " json_extract(data, '$.provenance'),"
+            " json_extract(data, '$.updated_at'),"
+            " json_extract(data, '$.collaborators')"
+            " FROM records WHERE kind = :kind"
+        )
+    else:  # postgres
+        sql = text(
+            "SELECT id, owner_id,"
+            " data::json ->> 'name',"
+            " data::json ->> 'provenance',"
+            " data::json ->> 'updated_at',"
+            " data::json ->> 'collaborators'"
+            " FROM records WHERE kind = :kind"
+        )
+    out: List[dict] = []
+    with SessionLocal() as s:
+        for rec_id, owner_id, name, provenance, updated_at, collaborators in s.execute(
+            sql, {"kind": _DOCUMENT}
+        ):
+            if isinstance(collaborators, str):
+                try:
+                    collaborators = json.loads(collaborators)
+                except ValueError:
+                    collaborators = []
+            out.append(
+                {
+                    "id": rec_id,
+                    "owner_id": owner_id,
+                    "name": name or "Untitled Part",
+                    "provenance": provenance or "manual",
+                    "updated_at": updated_at or "",
+                    "collaborators": collaborators or [],
+                }
+            )
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Assembly documents (parts composition)
 # ---------------------------------------------------------------------------
@@ -176,22 +230,31 @@ def list_orders() -> List[str]:
 def migrate_json_files() -> int:
     """Import any legacy `data/<kind>s/*.json` records into the database.
 
-    Idempotent: a record already present in the DB is left untouched. Returns the
-    number of records imported. Legacy files are kept (not deleted) as a backup.
+    Runs once per database: a marker row is written on completion, so later
+    startups skip the (potentially multi-gigabyte) directory walk entirely.
+    Records already present are left untouched — presence is checked against an
+    id-only index scan, never by loading row payloads. Legacy files are kept
+    (not deleted) as a backup.
     """
     init_db()
+    if _load(_META, _MIGRATION_MARKER) is not None:
+        return 0
     mapping = {
         _ACCOUNT: DATA_DIR / "accounts",
         _CANDIDATE: DATA_DIR / "candidates",
         _ASSEMBLY: DATA_DIR / "assemblies",
         _DOCUMENT: DATA_DIR / "documents",
     }
+    with SessionLocal() as s:
+        existing = set(
+            s.execute(select(Record.kind, Record.id).where(Record.kind.in_(mapping.keys()))).all()
+        )
     imported = 0
     for kind, folder in mapping.items():
         if not folder.exists():
             continue
         for path in folder.glob("*.json"):
-            if _load(kind, path.stem) is not None:
+            if (kind, path.stem) in existing:
                 continue
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -201,4 +264,30 @@ def migrate_json_files() -> int:
             owner_id = data.get("owner_id") if kind == _DOCUMENT else None
             _save(kind, path.stem, data, owner_id=owner_id)
             imported += 1
+    _save(_META, _MIGRATION_MARKER, {"imported": imported})
     return imported
+
+
+def strip_document_meshes() -> int:
+    """One-time slimming pass: drop persisted derived meshes from document rows.
+
+    Meshes are derived data (re-evaluated on demand), but historical rows carry
+    multi-MB base64 STLs that make every read and listing expensive. Marker-gated
+    so the full-table rewrite happens exactly once per database.
+    """
+    if _load(_META, _MESH_STRIP_MARKER) is not None:
+        return 0
+    stripped = 0
+    for doc_id in _list(_DOCUMENT):
+        data = _load(_DOCUMENT, doc_id)
+        if not data:
+            continue
+        derived = data.get("derived") or {}
+        if derived.get("mesh_url") or derived.get("step_url"):
+            derived["mesh_url"] = None
+            derived["step_url"] = None
+            data["derived"] = derived
+            _save(_DOCUMENT, doc_id, data, owner_id=data.get("owner_id"))
+            stripped += 1
+    _save(_META, _MESH_STRIP_MARKER, {"stripped": stripped})
+    return stripped

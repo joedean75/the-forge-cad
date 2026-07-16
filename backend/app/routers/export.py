@@ -5,8 +5,8 @@ from app.cad_kernel.core.feature_tree import FeatureTree
 from app.cad_kernel.kernel import Kernel
 from app.cad_kernel.ops.booleans import BooleanFeature
 from app.services.cad_service import solid_to_step_string
-from app.services.mesh_generator import CANDIDATE_DATA
-from app.services.assembly_generator import ASSEMBLY_DATA
+from app.services.mesh_generator import get_candidate_entry
+from app.services.assembly_generator import get_assembly
 
 router = APIRouter(prefix="/api/export", tags=["export"])
 
@@ -44,7 +44,7 @@ def _get_solid(data: dict, resolution: int = 128):
 
 @router.get("/{candidate_id}/step", response_class=PlainTextResponse)
 def export_step(candidate_id: str):
-    data = CANDIDATE_DATA.get(candidate_id)
+    data = get_candidate_entry(candidate_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Candidate not found")
 
@@ -62,13 +62,13 @@ def export_step(candidate_id: str):
 
 @router.get("/assembly/{assembly_id}/step", response_class=PlainTextResponse)
 def export_assembly_step(assembly_id: str):
-    assembly = ASSEMBLY_DATA.get(assembly_id)
+    assembly = get_assembly(assembly_id)
     if assembly is None:
         raise HTTPException(status_code=404, detail="Assembly not found")
 
     features = []
     for node in assembly.nodes:
-        node_data = CANDIDATE_DATA.get(node.candidate_id or "")
+        node_data = get_candidate_entry(node.candidate_id or "")
         if node_data is None:
             continue
         feature_tree = node_data.get("feature_tree")

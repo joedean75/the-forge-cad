@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.models.schemas import ManufacturingResult, Vector3
 from app.services.cad_service import kernel_manufacturing_analysis
-from app.services.mesh_generator import CANDIDATE_DATA
+from app.services.mesh_generator import get_candidate_entry
 from app.cad_kernel.kernel import Kernel
 
 router = APIRouter(prefix="/api/manufacturing", tags=["manufacturing"])
@@ -35,7 +35,7 @@ def _auto_build_axis(solid):
 
 
 def _compute_manufacturing_result(candidate_id: str, build_axis: str = "auto") -> ManufacturingResult:
-    data = CANDIDATE_DATA.get(candidate_id)
+    data = get_candidate_entry(candidate_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Candidate not found")
 

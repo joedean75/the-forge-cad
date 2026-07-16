@@ -18,6 +18,11 @@ for _suffix in ("", "-wal", "-shm"):
     except FileNotFoundError:
         pass
 os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_PATH}"
+# Point legacy-JSON migration at an empty directory: without this, any lifespan-
+# managed TestClient imports the developer's real backend/data/*.json (gigabytes,
+# and its owner_id=None documents leak into every tenant's listing).
+_TEST_DATA_DIR = tempfile.mkdtemp(prefix="forge_pytest_data_")
+os.environ["FORGE_DATA_DIR"] = _TEST_DATA_DIR
 # Rate limiting is exercised explicitly in test_security.py; keep it off for the
 # rest of the suite, which signs up/logs in many times from one client IP.
 os.environ.setdefault("FORGE_RATE_LIMIT", "0")

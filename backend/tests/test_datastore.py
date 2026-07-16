@@ -52,6 +52,9 @@ def test_document_owner_id_is_an_indexed_column():
 def test_migrate_json_files_is_lossless_and_idempotent(tmp_path, monkeypatch):
     # A legacy documents/<id>.json is imported exactly once.
     monkeypatch.setattr(persistence, "DATA_DIR", tmp_path)
+    # Migration is one-time per database (marker row); clear any marker another
+    # test's app startup may have written so this test exercises a fresh import.
+    persistence._delete(persistence._META, persistence._MIGRATION_MARKER)
     docs_dir = tmp_path / "documents"
     docs_dir.mkdir()
     (docs_dir / "legacy-doc.json").write_text(

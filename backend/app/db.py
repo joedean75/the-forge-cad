@@ -24,7 +24,9 @@ from typing import Optional
 from sqlalchemy import String, Text, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+# Overridable so tests / alternate deployments can point legacy-JSON migration
+# (and the default SQLite location) away from the developer's real data.
+DATA_DIR = Path(os.environ.get("FORGE_DATA_DIR") or Path(__file__).resolve().parent.parent / "data")
 
 
 def _default_url() -> str:

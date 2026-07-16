@@ -5,8 +5,7 @@ from pydantic import BaseModel, Field
 
 from app.models.schemas import Candidate, AssemblyResult
 from app.cad_kernel.core.feature_tree import FeatureTree
-from app.services.mesh_generator import reevaluate_candidate, CANDIDATE_DATA
-from app.services.assembly_generator import ASSEMBLY_DATA
+from app.services.mesh_generator import reevaluate_candidate
 from app.services import persistence
 
 router = APIRouter(prefix="/api/cad", tags=["cad"])

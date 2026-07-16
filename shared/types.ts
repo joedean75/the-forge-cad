@@ -300,7 +300,6 @@ export interface DocumentSummary {
   name: string
   provenance: string
   updated_at: string
-  mesh_url?: string
   /** The caller's access level on this document. */
   role: 'owner' | 'editor' | 'viewer'
   /** True when the document is shared with the caller (they are not the owner). */

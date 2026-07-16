@@ -5,7 +5,7 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
 
 from app.models.schemas import SimulationResult, Material
-from app.services.mesh_generator import CANDIDATE_DATA
+from app.services.mesh_generator import get_candidate_entry
 from app.services.simp_optimizer import _hex_shape_deriv, _world_to_grid, _node_index
 from app.cad_kernel.kernel import Kernel
 from app.cad_kernel.geom.meshing import mesh_volume, solid_to_mesh
@@ -102,7 +102,7 @@ def _approximate_simulation(solid, spec: dict, mat: Material) -> SimulationResul
 
 
 def _compute_simulation_result(candidate_id: str) -> SimulationResult:
-    data = CANDIDATE_DATA.get(candidate_id)
+    data = get_candidate_entry(candidate_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Candidate not found")
 

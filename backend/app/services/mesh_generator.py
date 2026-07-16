@@ -190,13 +190,43 @@ def candidate_from_feature_tree(
     return candidate
 
 
+def get_candidate_entry(candidate_id: str) -> Optional[dict]:
+    """CANDIDATE_DATA lookup with lazy restore from the datastore.
+
+    Candidates are no longer loaded eagerly at startup (their persisted payloads
+    embed meshes and cost gigabytes of RAM); the first access after a restart
+    rebuilds the working-cache entry, with the solid re-derived lazily as before.
+    """
+    entry = CANDIDATE_DATA.get(candidate_id)
+    if entry is not None:
+        return entry
+    data = persistence.load_candidate(candidate_id)
+    if not data:
+        return None
+    try:
+        candidate = Candidate(**data["candidate"])
+    except Exception:
+        return None
+    entry = {
+        "spec": None,
+        "material": None,
+        "kernel_solid": None,
+        "feature_tree": data.get("feature_tree"),
+        "candidate_mesh": None,
+        "threshold": 0.0,
+        "candidate": candidate,
+    }
+    CANDIDATE_DATA[candidate_id] = entry
+    return entry
+
+
 def reevaluate_candidate(candidate_id: str, tree: FeatureTree, resolution: int = 128) -> Candidate:
     """Re-evaluate a feature tree for an existing candidate id.
 
     The candidate is updated in-place in CANDIDATE_DATA so that downstream
     export/manufacturing endpoints continue to work without changing URLs.
     """
-    existing = CANDIDATE_DATA.get(candidate_id, {})
+    existing = get_candidate_entry(candidate_id) or {}
     name = "Prompt Part"
     if existing and "candidate" in existing:
         name = existing["candidate"].name

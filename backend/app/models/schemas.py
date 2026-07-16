@@ -320,7 +320,6 @@ class DocumentSummary(BaseModel):
     name: str
     provenance: str
     updated_at: str
-    mesh_url: Optional[str] = None
     # The caller's access level: "owner" | "editor" | "viewer".
     role: str = "owner"
     # True when the document is shared with the caller (they are not the owner).

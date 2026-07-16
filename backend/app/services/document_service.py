@@ -72,7 +72,12 @@ def _default_tree_dict() -> dict:
 
 def _persist(doc: DesignDocument) -> None:
     try:
-        persistence.save_document(doc.id, doc.model_dump())
+        data = doc.model_dump()
+        # Derived meshes are pure evaluation products, re-created on demand
+        # (see ensure_derived) — writing them would add multiple MB per save.
+        data["derived"]["mesh_url"] = None
+        data["derived"]["step_url"] = None
+        persistence.save_document(doc.id, data)
     except Exception as exc:  # persistence must never break the request
         _LOGGER.warning("Failed to persist document %s: %s", doc.id, exc)
     # Announce the change to live collaborators (no-op when nobody is connected).
@@ -285,25 +290,52 @@ def get_document(doc_id: str) -> Optional[DesignDocument]:
         return None
 
 
+def ensure_derived(doc: DesignDocument, resolution: int = 128) -> DesignDocument:
+    """Re-evaluate a document whose derived mesh is missing (meshes are not
+    persisted). Called where a caller actually needs geometry — not on every
+    load — so a restart stays cheap."""
+    if doc.derived.mesh_url is None and doc.derived.error is None:
+        evaluate_document(doc, resolution=resolution)
+    return doc
+
+
+def _summary_role(owner_id: Optional[str], collaborators: list, account_id: Optional[str]) -> Optional[str]:
+    """access_role() over raw summary fields (no full document load)."""
+    if owner_id is None or owner_id == account_id:
+        return "owner"
+    for c in collaborators or []:
+        if c.get("account_id") == account_id:
+            return c.get("role")
+    return None
+
+
 def list_documents(owner_id: Optional[str] = None) -> List[DocumentSummary]:
-    ids = set(DOCUMENTS.keys()) | set(persistence.list_documents())
+    # Listing fields come straight from SQL — full documents (feature trees,
+    # meshes, version history) are never deserialized here. In-memory documents
+    # overlay the stored rows: they are at least as fresh.
+    rows = {r["id"]: r for r in persistence.list_document_summaries()}
+    for doc_id, doc in DOCUMENTS.items():
+        rows[doc_id] = {
+            "id": doc.id,
+            "owner_id": doc.owner_id,
+            "name": doc.name,
+            "provenance": doc.provenance,
+            "updated_at": doc.updated_at,
+            "collaborators": [c.model_dump() for c in doc.collaborators],
+        }
     summaries: List[DocumentSummary] = []
-    for doc_id in ids:
-        doc = get_document(doc_id)
-        if doc is None:
-            continue
-        role = access_role(doc, owner_id) if owner_id is not None else "owner"
+    for r in rows.values():
+        role = _summary_role(r["owner_id"], r["collaborators"], owner_id) if owner_id is not None else "owner"
         if owner_id is not None and role is None:
             continue
         summaries.append(
             DocumentSummary(
-                id=doc.id,
-                name=doc.name,
-                provenance=doc.provenance,
-                updated_at=doc.updated_at,
-                mesh_url=doc.derived.mesh_url,
+                id=r["id"],
+                name=r["name"],
+                provenance=r["provenance"],
+                updated_at=r["updated_at"],
                 role=role or "owner",
-                shared=bool(owner_id is not None and doc.owner_id not in (None, owner_id)),
+                shared=bool(owner_id is not None and r["owner_id"] not in (None, owner_id)),
             )
         )
     summaries.sort(key=lambda s: s.updated_at, reverse=True)
@@ -524,13 +556,3 @@ def run_document_optimize(doc_id: str, setup, resolution: int = 128, progress=No
     return doc
 
 
-def restore_documents() -> None:
-    """Load persisted document metadata into memory on startup (lazy solids)."""
-    for doc_id in persistence.list_documents():
-        data = persistence.load_document(doc_id)
-        if not data:
-            continue
-        try:
-            DOCUMENTS[doc_id] = DesignDocument(**data)
-        except Exception as exc:
-            _LOGGER.warning("Skipping unloadable document %s: %s", doc_id, exc)

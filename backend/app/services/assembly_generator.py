@@ -25,6 +25,26 @@ from app.services import persistence
 ASSEMBLY_DATA: Dict[str, AssemblyResult] = {}
 
 
+def get_assembly(assembly_id: str) -> Optional[AssemblyResult]:
+    """ASSEMBLY_DATA lookup with lazy restore from the datastore.
+
+    Assemblies are no longer loaded eagerly at startup (their persisted payloads
+    embed per-node meshes and cost gigabytes of RAM up front).
+    """
+    result = ASSEMBLY_DATA.get(assembly_id)
+    if result is not None:
+        return result
+    data = persistence.load_assembly(assembly_id)
+    if not data:
+        return None
+    try:
+        result = AssemblyResult(**data)
+    except Exception:
+        return None
+    ASSEMBLY_DATA[assembly_id] = result
+    return result
+
+
 @dataclass
 class LayoutNode:
     id: str

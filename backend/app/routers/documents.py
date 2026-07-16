@@ -139,7 +139,8 @@ async def import_document(
 
 @router.get("/{doc_id}", response_model=DesignDocument)
 def get_document(doc: DesignDocument = Depends(readable_document)):
-    return doc
+    # Meshes are not persisted; the first open after a restart re-evaluates.
+    return docs.ensure_derived(doc)
 
 
 @router.put("/{doc_id}", response_model=DesignDocument)

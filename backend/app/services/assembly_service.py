@@ -53,6 +53,7 @@ def _resolve(asm: AssemblyDoc) -> AssemblyDoc:
             c.mesh_url = None
             c.bbox = None
             continue
+        document_service.ensure_derived(part)  # meshes are not persisted
         c.missing = False
         c.name = part.name
         c.mesh_url = part.derived.mesh_url
