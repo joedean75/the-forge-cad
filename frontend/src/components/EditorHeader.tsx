@@ -143,10 +143,11 @@ function LlmSelector() {
   )
 }
 
-export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOpenCopilot, copilotOpen }: { onOpenLibrary: () => void; onOpenAccount: () => void; onOpenHistory: () => void; onOpenCopilot: () => void; copilotOpen: boolean }) {
+export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOpenCopilot, copilotOpen, peers = [] }: { onOpenLibrary: () => void; onOpenAccount: () => void; onOpenHistory: () => void; onOpenCopilot: () => void; copilotOpen: boolean; peers?: { id: string; email: string }[] }) {
   const { busy, createFromPrompt, newBlank, doc, undo, redo, past, future } = useDocumentStore()
   const account = useAuthStore((s) => s.account)
   const [prompt, setPrompt] = useState('')
+  const others = peers.filter((p) => p.id !== account?.id)
 
   const submit = () => {
     if (!prompt.trim() || busy) return
@@ -233,6 +234,19 @@ export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOp
         </button>
         <LlmSelector />
       </div>
+
+      {/* live collaborators on this document */}
+      {others.length > 0 && (
+        <div
+          className="flex items-center gap-1.5 h-9 px-2.5 rounded-sm border border-cad-success/40 bg-cad-success/5 shrink-0"
+          title={`Also here: ${others.map((p) => p.email).join(', ')}`}
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-cad-success animate-pulse" />
+          <span className="text-[10px] text-cad-success font-medium">
+            {others.length === 1 ? others[0].email.split('@')[0] : `${others.length} online`}
+          </span>
+        </div>
+      )}
 
       {/* version history & sharing */}
       <button

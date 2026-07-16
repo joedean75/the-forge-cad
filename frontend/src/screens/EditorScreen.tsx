@@ -14,6 +14,7 @@ import { MakePanel } from '../features/make/MakePanel'
 import { MachinePanel } from '../features/machine/MachinePanel'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { useNavStore } from '../store/useNavStore'
+import { useCollab } from '../hooks/useCollab'
 import type { EditorMode } from '../../../shared/types'
 
 const MODE_TITLE: Record<EditorMode, string> = {
@@ -96,6 +97,8 @@ export function EditorScreen() {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [copilotOpen, setCopilotOpen] = useState(false)
   const go = useNavStore((s) => s.go)
+  const docId = useDocumentStore((s) => s.doc?.id)
+  const peers = useCollab(docId)
 
   return (
     <div className="flex flex-col h-full">
@@ -105,6 +108,7 @@ export function EditorScreen() {
         onOpenHistory={() => setHistoryOpen(true)}
         onOpenCopilot={() => setCopilotOpen((v) => !v)}
         copilotOpen={copilotOpen}
+        peers={peers}
       />
       <div className="flex flex-1 min-h-0">
         <ModeSpine />

@@ -75,6 +75,8 @@ interface DocumentState {
 
   /** Explicit save: geometry autosaves on every edit; this drops a named restore point. */
   saveCheckpoint: (label?: string) => Promise<boolean>
+  /** Silent re-fetch after a collaborator's change — keeps selection/undo intact. */
+  refreshDoc: () => Promise<void>
   createFromPrompt: (prompt: string) => Promise<void>
   newBlank: () => Promise<void>
   openDocument: (id: string) => Promise<void>
@@ -332,6 +334,17 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Save failed' })
       return false
+    }
+  },
+
+  refreshDoc: async () => {
+    const { doc, busy } = get()
+    if (!doc || busy) return
+    try {
+      const updated = withIds(await api.getDocument(doc.id))
+      set({ doc: updated, error: updated.derived.error ?? null })
+    } catch {
+      /* transient — next event or action reconciles */
     }
   },
 

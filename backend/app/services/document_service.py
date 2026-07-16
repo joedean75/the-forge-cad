@@ -75,6 +75,10 @@ def _persist(doc: DesignDocument) -> None:
         persistence.save_document(doc.id, doc.model_dump())
     except Exception as exc:  # persistence must never break the request
         _LOGGER.warning("Failed to persist document %s: %s", doc.id, exc)
+    # Announce the change to live collaborators (no-op when nobody is connected).
+    from app.services import realtime
+
+    realtime.notify_document_updated(doc.id, doc.updated_at)
 
 
 # ---------------------------------------------------------------------------

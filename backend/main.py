@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.routers import materials, optimize, simulate, manufacturing, text_to_cad, assembly, export, cad, design, llm, documents, machine, operations, sketch, auth, assemblies
+from app.routers import materials, optimize, simulate, manufacturing, text_to_cad, assembly, export, cad, design, llm, documents, machine, operations, sketch, auth, assemblies, collab
 from app.services import accounts, persistence
 from app.services.persistence import list_candidates, load_candidate, list_assemblies, load_assembly
 from app.services.mesh_generator import CANDIDATE_DATA
@@ -84,6 +84,11 @@ def _check_production_posture() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
+
+    from app.services import realtime
+
+    realtime.set_loop(asyncio.get_running_loop())
     _load_persisted_data()
     _check_production_posture()
     yield
@@ -140,6 +145,7 @@ app.include_router(design.router)
 app.include_router(llm.router)
 app.include_router(documents.router)
 app.include_router(assemblies.router)
+app.include_router(collab.router)
 app.include_router(machine.router)
 app.include_router(operations.router)
 app.include_router(sketch.router)
