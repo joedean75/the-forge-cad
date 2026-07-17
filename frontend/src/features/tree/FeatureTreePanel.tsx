@@ -1,33 +1,11 @@
 import { useState } from 'react'
 import {
-  Box, Circle, Cylinder, Cone, Combine, Trash2, Plus, Minus,
+  Box, Circle, Cylinder, Cone, Combine, Trash2,
   Blend, Triangle, Shell, CircleDot, Grid3x3, Move3d,
   Eye, EyeOff, ChevronUp, ChevronDown, PencilRuler, Upload,
 } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
-import {
-  flatten,
-  isSuppressed,
-  isBoolean,
-  type PrimitiveType,
-  type BooleanOp,
-  type ModifierType,
-} from '../../util/featureTree'
-
-const SHAPE_OF: Record<PrimitiveType, string> = {
-  BoxFeature: 'box',
-  CylinderFeature: 'cylinder',
-  SphereFeature: 'sphere',
-  ConeFeature: 'cone',
-}
-const MODIFIER_OF: Record<ModifierType, string> = {
-  FilletFeature: 'fillet',
-  ChamferFeature: 'chamfer',
-  ShellFeature: 'shell',
-  HoleFeature: 'hole',
-  PatternFeature: 'pattern',
-  TransformFeature: 'transform',
-}
+import { flatten, isSuppressed, isBoolean } from '../../util/featureTree'
 import type { FeatureNode } from '../../../../shared/types'
 
 const TYPE_ICON: Record<string, typeof Box> = {
@@ -46,22 +24,6 @@ const TYPE_ICON: Record<string, typeof Box> = {
   ImportFeature: Upload,
 }
 
-const MODIFIERS: { type: ModifierType; label: string; icon: typeof Box }[] = [
-  { type: 'FilletFeature', label: 'Fillet', icon: Blend },
-  { type: 'ChamferFeature', label: 'Chamfer', icon: Triangle },
-  { type: 'ShellFeature', label: 'Shell', icon: Shell },
-  { type: 'HoleFeature', label: 'Hole', icon: CircleDot },
-  { type: 'PatternFeature', label: 'Pattern', icon: Grid3x3 },
-  { type: 'TransformFeature', label: 'Move', icon: Move3d },
-]
-
-const ADD_TYPES: { type: PrimitiveType; label: string; icon: typeof Box }[] = [
-  { type: 'BoxFeature', label: 'Box', icon: Box },
-  { type: 'CylinderFeature', label: 'Cyl', icon: Cylinder },
-  { type: 'SphereFeature', label: 'Sph', icon: Circle },
-  { type: 'ConeFeature', label: 'Cone', icon: Cone },
-]
-
 function nodeLabel(node: FeatureNode): string {
   if (isBoolean(node)) {
     const op = String(node.params.operation ?? 'union')
@@ -71,9 +33,8 @@ function nodeLabel(node: FeatureNode): string {
 }
 
 export function FeatureTreePanel() {
-  const { doc, selectedFeatureId, select, runOp, rename, busy,
-    sketchPick, startSketchPick, cancelSketchPick, pickSketchOnFace } = useDocumentStore()
-  const [op, setOp] = useState<BooleanOp>('union')
+  const { doc, selectedFeatureId, select, runOp, rename,
+    sketchPick, pickSketchOnFace } = useDocumentStore()
   const [editingName, setEditingName] = useState(false)
 
   if (!doc) {
@@ -91,20 +52,11 @@ export function FeatureTreePanel() {
 
   const nodes = flatten(doc.feature_tree)
 
-  // All geometry mutations flow through the shared operation API (runOp).
-  const addFeature = async (type: PrimitiveType) => {
-    const r = await runOp('add_primitive', { shape: SHAPE_OF[type], operation: op })
-    if (r?.feature_id) select(r.feature_id as string)
-  }
-
+  // Mutations flow through the shared operation API; creation tools live in
+  // the ToolRibbon above the viewport — this panel is pure history.
   const deleteFeature = async (id: string) => {
     await runOp('delete_feature', { feature_id: id })
     if (selectedFeatureId === id) select(null)
-  }
-
-  const modify = async (type: ModifierType) => {
-    const r = await runOp('add_modifier', { modifier: MODIFIER_OF[type] })
-    if (r?.feature_id) select(r.feature_id as string)
   }
 
   const toggleSuppress = (id: string, cur: boolean) => runOp('set_feature_suppressed', { feature_id: id, suppressed: !cur })
@@ -200,76 +152,13 @@ export function FeatureTreePanel() {
         })}
       </div>
 
-      {/* add / cut controls */}
-      <div className="border-t border-cad-border p-3 space-y-2">
-        <div className="flex items-center gap-1 p-0.5 rounded-sm bg-cad-bg border border-cad-border">
-          {(
-            [
-              { id: 'union', label: 'Add', icon: Plus },
-              { id: 'subtract', label: 'Cut', icon: Minus },
-            ] as const
-          ).map((o) => (
-            <button
-              key={o.id}
-              onClick={() => setOp(o.id)}
-              className={`flex-1 flex items-center justify-center gap-1 py-1 rounded-[3px] text-[11px] font-medium transition-colors ${
-                op === o.id ? 'bg-cad-accent/15 text-cad-accent-hot' : 'text-cad-text hover:text-cad-text-heading'
-              }`}
-            >
-              <o.icon size={12} />
-              {o.label}
-            </button>
-          ))}
+      {/* sketch-pick state rides the ribbon; here we only hint the tree's role in it */}
+      {sketchPick && (
+        <div className="border-t border-cad-border px-3 py-2 flex items-center gap-1.5 text-cad-accent-hot">
+          <PencilRuler size={12} className="shrink-0" />
+          <span className="text-[10px]">Click a feature to sketch on its top face — Esc cancels</span>
         </div>
-        <div className="grid grid-cols-4 gap-1">
-          {ADD_TYPES.map((t) => (
-            <button
-              key={t.type}
-              onClick={() => addFeature(t.type)}
-              disabled={busy}
-              title={`${op === 'subtract' ? 'Cut' : 'Add'} ${t.label}`}
-              className="flex flex-col items-center gap-1 py-2 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void transition disabled:opacity-40"
-            >
-              <t.icon size={15} />
-              <span className="text-[9px]">{t.label}</span>
-            </button>
-          ))}
-        </div>
-        {sketchPick ? (
-          <button
-            onClick={cancelSketchPick}
-            className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-sm border border-cad-accent/60 bg-cad-accent/10 text-cad-accent-hot transition"
-          >
-            <PencilRuler size={13} /> <span className="text-[10px]">Pick a face or plane… (cancel)</span>
-          </button>
-        ) : (
-          <button
-            onClick={startSketchPick}
-            disabled={busy}
-            title="Start a sketch — then click a face in the viewport, a feature here, or a base plane"
-            className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-sm border border-cad-accent/40 text-cad-accent-hot hover:bg-cad-accent/10 transition disabled:opacity-40"
-          >
-            <PencilRuler size={13} /> <span className="text-[10px]">New Sketch…</span>
-          </button>
-        )}
-
-        <div>
-          <span className="eyebrow text-cad-text/60 block mb-1.5">Modify body</span>
-          <div className="grid grid-cols-6 gap-1">
-            {MODIFIERS.map((m) => (
-              <button
-                key={m.type}
-                onClick={() => modify(m.type)}
-                disabled={busy}
-                title={m.label}
-                className="flex items-center justify-center py-1.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-accent-hot hover:border-cad-accent/50 transition disabled:opacity-40"
-              >
-                <m.icon size={14} />
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
+      )}
     </aside>
   )
 }

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { EditorHeader } from '../components/EditorHeader'
+import { ToolRibbon } from '../components/ToolRibbon'
 import { AccountDrawer } from '../components/AccountDrawer'
 import { HistoryShareDrawer } from '../components/HistoryShareDrawer'
 import { CopilotPanel } from '../components/CopilotPanel'
@@ -110,6 +111,7 @@ export function EditorScreen() {
         copilotOpen={copilotOpen}
         peers={peers}
       />
+      <ToolRibbon />
       <div className="flex flex-1 min-h-0">
         <ModeSpine />
         <FeatureTreePanel />
