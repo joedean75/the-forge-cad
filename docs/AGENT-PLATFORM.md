@@ -40,14 +40,19 @@ mesh/bbox/mass), so agents can verify each step.
 ## Copilot (multi-step agentic loop)
 
 ```bash
-curl -s -X POST $BASE/api/documents/$DOC/copilot \
+JOB=$(curl -s -X POST $BASE/api/documents/$DOC/copilot \
   -H 'X-Api-Key: fk_…' -H 'Content-Type: application/json' \
-  -d '{"goal":"turn this into an 80x40x10 mm plate with 4 corner M4 holes","max_steps":8}'
+  -d '{"goal":"turn this into an 80x40x10 mm plate with 4 corner M4 holes","max_steps":8}' \
+  | jq -r .job_id)
+
+# A run can span many LLM turns, so it executes as a background job — poll it:
+curl -s $BASE/api/documents/$DOC/copilot/$JOB -H 'X-Api-Key: fk_…'
 ```
 
-The response contains the executed step transcript (op, rationale, ok/error)
-and the final document. The backend plans with its configured LLM; every step
-is undoable and metered.
+Poll until `status` is no longer `"running"`. While running, `steps` is the
+live transcript (op, rationale, ok/error); when done, the response adds the
+summary and the final document. The backend plans with its configured LLM;
+every step is undoable and metered.
 
 ## Import / export / quotes
 

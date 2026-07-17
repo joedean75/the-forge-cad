@@ -52,7 +52,11 @@ export function CopilotPanel({ open, onClose }: { open: boolean; onClose: () => 
     setGoal('')
     const idx = turns.length
     setTurns((t) => [...t, { goal: text, running: true }])
-    const result = await runCopilot(text)
+    // Live progress: the copilot runs as a server-side job; each poll delivers
+    // the transcript so far.
+    const result = await runCopilot(text, (state) =>
+      setTurns((t) => t.map((x, i) => (i === idx ? { ...x, result: state } : x))),
+    )
     setTurns((t) => t.map((x, i) => (i === idx ? { ...x, running: false, result } : x)))
   }
 
@@ -100,18 +104,20 @@ export function CopilotPanel({ open, onClose }: { open: boolean; onClose: () => 
             </div>
             {/* agent activity */}
             <div className="bg-cad-bg/50 border border-cad-border rounded-md px-2.5 py-2 space-y-1.5">
-              {turn.running ? (
-                <div className="flex items-center gap-2 text-[11px] text-cad-accent-hot">
-                  <Loader2 size={12} className="animate-spin" /> Planning &amp; building…
-                </div>
-              ) : turn.result ? (
+              {turn.result && turn.result.steps.length > 0 && (
                 <>
                   <div className="flex items-center gap-1.5 text-[11px] text-cad-text/60">
                     <Wrench size={11} /> {turn.result.steps.filter((s) => s.kind === 'op').length} step(s)
                   </div>
                   {turn.result.steps.map((s, j) => <StepRow key={j} step={s} />)}
-                  <div className="text-[12px] text-cad-text-heading pt-1 border-t border-cad-border/60 mt-1">{turn.result.summary}</div>
                 </>
+              )}
+              {turn.running ? (
+                <div className="flex items-center gap-2 text-[11px] text-cad-accent-hot">
+                  <Loader2 size={12} className="animate-spin" /> Planning &amp; building…
+                </div>
+              ) : turn.result ? (
+                <div className="text-[12px] text-cad-text-heading pt-1 border-t border-cad-border/60 mt-1">{turn.result.summary}</div>
               ) : (
                 <div className="text-[11px] text-cad-danger">No response.</div>
               )}

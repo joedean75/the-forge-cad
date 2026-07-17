@@ -311,6 +311,43 @@ class GridSDF(SDF):
         return Bounds(self._lo.copy(), self._lo + self.size)
 
 
+# Building a GridSDF runs a full EDT over the voxel grid (expensive at 160³),
+# and an ImportFeature's grid never changes between edits to the rest of the
+# tree — cache a few recent grids keyed on the packed-density payload.
+from collections import OrderedDict  # noqa: E402
+
+_GRID_SDF_CACHE: "OrderedDict[tuple, GridSDF]" = OrderedDict()
+_GRID_SDF_CACHE_MAX = 4
+
+
+def _cached_import_grid_sdf(cache: dict) -> "GridSDF":
+    origin = cache["origin"]
+    size = cache["size"]
+    key = (
+        cache["density_packed"],
+        tuple(cache.get("dims") or ()),
+        origin["x"], origin["y"], origin["z"],
+        size["x"], size["y"], size["z"],
+        cache.get("threshold", 0.5),
+    )
+    hit = _GRID_SDF_CACHE.get(key)
+    if hit is not None:
+        _GRID_SDF_CACHE.move_to_end(key)
+        return hit
+    from app.services.import_service import unpack_density
+
+    sdf = GridSDF(
+        unpack_density(cache),
+        [origin["x"], origin["y"], origin["z"]],
+        [size["x"], size["y"], size["z"]],
+        cache.get("threshold", 0.5),
+    )
+    _GRID_SDF_CACHE[key] = sdf
+    while len(_GRID_SDF_CACHE) > _GRID_SDF_CACHE_MAX:
+        _GRID_SDF_CACHE.popitem(last=False)
+    return sdf
+
+
 _PLANE_NORMAL = {"xy": "z", "xz": "y", "yz": "x"}
 
 
@@ -465,16 +502,7 @@ def sdf_from_feature(feature) -> SDF:
     if isinstance(feature, ImportFeature):
         cache = feature.cache
         if cache and cache.get("density_packed"):
-            from app.services.import_service import unpack_density
-
-            origin = cache["origin"]
-            size = cache["size"]
-            return GridSDF(
-                unpack_density(cache),
-                [origin["x"], origin["y"], origin["z"]],
-                [size["x"], size["y"], size["z"]],
-                cache.get("threshold", 0.5),
-            )
+            return _cached_import_grid_sdf(cache)
         raise ValueError("ImportFeature has no voxel cache")
     raise ValueError(f"Feature {type(feature).__name__} cannot be converted to SDF")
 

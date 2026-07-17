@@ -223,6 +223,25 @@ def list_orders() -> List[str]:
     return _list(_ORDER)
 
 
+def list_orders_for_document(document_id: str) -> List[dict]:
+    """Orders for one document, filtered in SQL rather than loading every row."""
+    from sqlalchemy import text
+
+    if engine.dialect.name == "sqlite":
+        sql = text(
+            "SELECT data FROM records WHERE kind = :kind"
+            " AND json_extract(data, '$.document_id') = :doc"
+        )
+    else:  # postgres
+        sql = text(
+            "SELECT data FROM records WHERE kind = :kind"
+            " AND data::json ->> 'document_id' = :doc"
+        )
+    with SessionLocal() as s:
+        rows = s.execute(sql, {"kind": _ORDER, "doc": document_id}).scalars().all()
+    return [json.loads(r) for r in rows]
+
+
 # ---------------------------------------------------------------------------
 # One-time migration from the legacy JSON files
 # ---------------------------------------------------------------------------

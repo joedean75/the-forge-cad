@@ -2,14 +2,15 @@ fastapi>=0.139.0
 uvicorn>=0.49.0
 gunicorn>=21.2.0
 trimesh>=4.12.0
-numpy>=2.0.0
+# <2.6: scikit-image 0.26 marching cubes still sets ndarray.shape in place,
+# deprecated in numpy 2.5 — cap until skimage ships a fix or it hard-breaks.
+numpy>=2.0.0,<2.6
 scipy>=1.10.0
 scikit-image>=0.26.0
 torch>=2.0.0,<3.0.0
 pydantic>=2.13.0
 pytest>=8.0.0
 httpx>=0.28.0
-httpx2>=0.25.0
 mcp>=1.0
 sqlalchemy>=2.0
 pyjwt>=2.8.0

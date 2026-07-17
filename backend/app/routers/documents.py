@@ -277,6 +277,9 @@ async def optimize_document(
     docs._OPTIMIZE_JOBS[job_id] = OptimizeJob(
         id=job_id, status=JobStatus.PENDING, progress=0.0, message="Queued generative study"
     )
+    # Bound the job store so a long-lived process can't grow it forever.
+    while len(docs._OPTIMIZE_JOBS) > 200:
+        docs._OPTIMIZE_JOBS.pop(next(iter(docs._OPTIMIZE_JOBS)), None)
     background_tasks.add_task(_run_optimize_job, job_id, doc.id, setup, resolution)
     return docs._OPTIMIZE_JOBS[job_id]
 

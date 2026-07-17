@@ -6,9 +6,10 @@
 This is the substrate the MCP server wraps so any agent can drive Forge.
 """
 
+import uuid
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.models.schemas import DesignDocument
@@ -16,6 +17,12 @@ from app.security import current_account, meter_operation
 from app.services import accounts, cad_operations, copilot, document_service
 
 router = APIRouter(tags=["operations"])
+
+
+def prune_jobs(store: Dict[str, Any], cap: int = 200) -> None:
+    """Bound an in-memory job dict: drop oldest entries past the cap."""
+    while len(store) > cap:
+        store.pop(next(iter(store)), None)
 
 
 class OperationRequest(BaseModel):
@@ -53,7 +60,7 @@ def platform_manifest():
         "endpoints": {
             "operation_catalog": "GET /api/operations",
             "run_operation": "POST /api/documents/{id}/op {op, args}",
-            "copilot": "POST /api/documents/{id}/copilot {goal, max_steps} — agentic multi-step loop",
+            "copilot": "POST /api/documents/{id}/copilot {goal, max_steps} — starts a background job; poll GET /api/documents/{id}/copilot/{job_id} until status != 'running'",
             "create_document": "POST /api/documents {prompt?, name?} — text-to-CAD or blank",
             "import": "POST /api/documents/import (multipart: file, units, resolution)",
             "quotes": "POST /api/documents/{id}/quotes {quantity}",
@@ -73,7 +80,13 @@ def platform_manifest():
     }
 
 
-@router.post("/api/documents/{doc_id}/op", response_model=OperationResponse)
+@router.post(
+    "/api/documents/{doc_id}/op",
+    response_model=OperationResponse,
+    # The full version history (up to 100 snapshot trees) has no business riding
+    # along on every edit; the history drawer fetches /versions explicitly.
+    response_model_exclude={"document": {"version_history"}},
+)
 def run_operation(doc_id: str, body: OperationRequest, acc: accounts.Account = Depends(current_account)):
     op = cad_operations.OPERATIONS.get(body.op)
     if op is None:
@@ -105,27 +118,93 @@ class CopilotRequest(BaseModel):
     max_steps: int = copilot.MAX_STEPS_DEFAULT
 
 
-class CopilotResponse(BaseModel):
+class CopilotJobState(BaseModel):
     ok: bool
-    summary: str
+    job_id: str
+    status: str  # "running" | "done" | "error"
     steps: list[Dict[str, Any]]
+    summary: Optional[str] = None
     document: Optional[DesignDocument] = None
 
 
-@router.post("/api/documents/{doc_id}/copilot", response_model=CopilotResponse)
-def run_copilot(doc_id: str, body: CopilotRequest, acc: accounts.Account = Depends(current_account)):
-    """Forge Copilot: an agentic loop that plans + executes a sequence of operations.
+# In-memory copilot jobs (single-instance, like the optimize job store).
+_COPILOT_JOBS: Dict[str, Dict[str, Any]] = {}
 
-    Editor access required (it mutates the part). Each mutating sub-step is metered
-    against the plan quota via the ``meter`` callback, so the agent can't bypass limits.
-    """
+
+def _copilot_state(job: Dict[str, Any], document: Optional[DesignDocument]) -> CopilotJobState:
+    return CopilotJobState(
+        ok=job["status"] != "error",
+        job_id=job["id"],
+        status=job["status"],
+        steps=list(job["steps"]),
+        summary=job.get("summary"),
+        document=document,
+    )
+
+
+def _run_copilot_job(job: Dict[str, Any], doc_id: str, goal: str, max_steps: int, acc: accounts.Account) -> None:
+    try:
+        outcome = copilot.run(
+            doc_id,
+            goal,
+            max_steps=max_steps,
+            meter=lambda: meter_operation(acc),
+            on_step=lambda entry: job["steps"].append(entry),
+        )
+        job["summary"] = outcome["summary"]
+        job["status"] = "done"
+    except Exception as exc:  # noqa: BLE001 — job must always resolve
+        job["summary"] = f"Copilot failed: {exc}"
+        job["status"] = "error"
+
+
+def _copilot_access(doc_id: str, acc: accounts.Account) -> None:
     doc = document_service.get_document(doc_id)
     if doc is None or not document_service.can_access(doc, acc.id):
         raise HTTPException(status_code=404, detail="Document not found")
     if not document_service.can_edit(doc, acc.id):
         raise HTTPException(status_code=403, detail="this action requires editor access")
+
+
+@router.post(
+    "/api/documents/{doc_id}/copilot",
+    response_model=CopilotJobState,
+    response_model_exclude={"document": {"version_history"}},
+)
+def run_copilot(
+    doc_id: str,
+    body: CopilotRequest,
+    background_tasks: BackgroundTasks,
+    acc: accounts.Account = Depends(current_account),
+):
+    """Forge Copilot: starts an agentic loop as a background job; poll the returned
+    job id for live steps. (A run can span many LLM turns — minutes — so holding
+    one HTTP request open would hit proxy/browser timeouts.)
+
+    Editor access required (it mutates the part). Each mutating sub-step is metered
+    against the plan quota via the ``meter`` callback, so the agent can't bypass limits.
+    """
+    _copilot_access(doc_id, acc)
     if not (body.goal or "").strip():
         raise HTTPException(status_code=422, detail="goal is required")
 
-    outcome = copilot.run(doc_id, body.goal.strip(), max_steps=body.max_steps, meter=lambda: meter_operation(acc))
-    return CopilotResponse(ok=True, summary=outcome["summary"], steps=outcome["steps"], document=outcome["document"])
+    job = {"id": str(uuid.uuid4()), "doc_id": doc_id, "status": "running", "steps": [], "summary": None}
+    _COPILOT_JOBS[job["id"]] = job
+    prune_jobs(_COPILOT_JOBS)
+    background_tasks.add_task(_run_copilot_job, job, doc_id, body.goal.strip(), body.max_steps, acc)
+    return _copilot_state(job, document=None)
+
+
+@router.get(
+    "/api/documents/{doc_id}/copilot/{job_id}",
+    response_model=CopilotJobState,
+    response_model_exclude={"document": {"version_history"}},
+)
+def copilot_job(doc_id: str, job_id: str, acc: accounts.Account = Depends(current_account)):
+    """Poll a copilot job: live transcript while running, summary + document when done."""
+    _copilot_access(doc_id, acc)
+    job = _COPILOT_JOBS.get(job_id)
+    if job is None or job["doc_id"] != doc_id:
+        raise HTTPException(status_code=404, detail="Copilot job not found")
+    document = document_service.get_document(doc_id) if job["status"] == "done" else None
+    return _copilot_state(job, document)

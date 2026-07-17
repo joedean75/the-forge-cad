@@ -143,17 +143,28 @@ def run(
     max_steps: int = MAX_STEPS_DEFAULT,
     planner: Optional[Planner] = None,
     meter: Optional[Callable[[], None]] = None,
+    on_step: Optional[Callable[[dict], None]] = None,
 ) -> dict:
     """Run the agentic loop until the planner says done or the step budget runs out.
 
     ``planner(goal, transcript, doc_summary) -> decision`` is injectable for tests.
     ``meter()`` is called before each *mutating* op (raise to stop on quota).
+    ``on_step(entry)`` fires as each transcript entry lands, so a caller running
+    the loop as a background job can expose live progress.
     Returns ``{steps, document, summary}``.
     """
     planner = planner or _plan_next
     max_steps = max(1, min(int(max_steps), MAX_STEPS_CAP))
     transcript: List[dict] = []
     final_summary: Optional[str] = None
+
+    def note(entry: dict) -> None:
+        transcript.append(entry)
+        if on_step is not None:
+            try:
+                on_step(entry)
+            except Exception:  # progress reporting must never kill the loop
+                pass
 
     for _ in range(max_steps):
         doc = document_service.get_document(doc_id)
@@ -163,7 +174,7 @@ def run(
             decision = planner(goal, transcript, _doc_summary(doc))
         except Exception as exc:  # LLM / parse failure — surface and stop
             _LOGGER.warning("copilot planner failed: %s", exc)
-            transcript.append({"kind": "error", "error": f"planner error: {exc}"})
+            note({"kind": "error", "error": f"planner error: {exc}"})
             break
 
         if not isinstance(decision, dict) or decision.get("done"):
@@ -175,7 +186,7 @@ def run(
         rationale = decision.get("rationale")
 
         if op not in cad_operations.OPERATIONS:
-            transcript.append({"kind": "op", "op": op, "args": args, "ok": False,
+            note({"kind": "op", "op": op, "args": args, "ok": False,
                                "error": f"unknown operation '{op}'", "rationale": rationale})
             continue
 
@@ -183,15 +194,15 @@ def run(
             try:
                 meter()
             except Exception as exc:  # quota / permission — stop cleanly
-                transcript.append({"kind": "error", "error": f"stopped: {exc}"})
+                note({"kind": "error", "error": f"stopped: {exc}"})
                 break
 
         try:
             result = cad_operations.dispatch(op, doc_id, args)
-            transcript.append({"kind": "op", "op": op, "args": args, "ok": True,
+            note({"kind": "op", "op": op, "args": args, "ok": True,
                                "rationale": rationale, "result": _trim_result(result)})
         except Exception as exc:
-            transcript.append({"kind": "op", "op": op, "args": args, "ok": False,
+            note({"kind": "op", "op": op, "args": args, "ok": False,
                                "error": str(exc), "rationale": rationale})
 
     doc = document_service.get_document(doc_id)

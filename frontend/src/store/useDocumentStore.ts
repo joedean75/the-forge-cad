@@ -87,7 +87,7 @@ interface DocumentState {
   runOp: (op: string, args?: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>
   aiEdit: (instruction: string) => Promise<void>
   /** Forge Copilot: run an agentic multi-step plan toward a goal. Returns the transcript. */
-  runCopilot: (goal: string) => Promise<CopilotResult | undefined>
+  runCopilot: (goal: string, onProgress?: (state: CopilotResult) => void) => Promise<CopilotResult | undefined>
 }
 
 /** Normalize a freshly-received document so every feature node has a stable id. */
@@ -206,12 +206,12 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }
   },
 
-  runCopilot: async (goal) => {
+  runCopilot: async (goal, onProgress) => {
     const { doc, past } = get()
     if (!doc || !goal.trim()) return undefined
     set({ past: [...past, doc.feature_tree].slice(-50), future: [], busy: true, error: null })
     try {
-      const res = await api.runCopilot(doc.id, goal)
+      const res = await api.runCopilot(doc.id, goal, 8, onProgress)
       if (res.document) {
         const updated = withIds(res.document)
         set({

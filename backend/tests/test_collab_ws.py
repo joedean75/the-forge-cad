@@ -53,6 +53,24 @@ def test_ws_unknown_document_closes_4404():
         assert exc.value.code == 4404
 
 
+def test_ws_ticket_is_single_use():
+    with TestClient(app) as client:
+        r = client.post("/api/documents", json={"resolution": 48})
+        doc_id = r.json()["id"]
+        t = client.post(f"/api/documents/{doc_id}/ws-ticket")
+        assert t.status_code == 200, t.text
+        ticket = t.json()["ticket"]
+
+        with client.websocket_connect(f"/api/documents/{doc_id}/ws?token={ticket}") as ws:
+            assert ws.receive_json()["type"] == "presence"
+
+        # Consumed on first connect — replaying the same ticket is rejected.
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with client.websocket_connect(f"/api/documents/{doc_id}/ws?token={ticket}") as ws:
+                ws.receive_json()
+        assert exc.value.code == 4401
+
+
 def test_ws_bad_token_closes_4401():
     with TestClient(app) as client:
         r = client.post("/api/documents", json={"resolution": 48})

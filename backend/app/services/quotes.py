@@ -178,9 +178,6 @@ def place_order(doc_id: str, process: str, quantity: int, owner_id: Optional[str
 
 
 def list_orders(doc_id: str) -> List[dict]:
-    out = [
-        o for oid in persistence.list_orders()
-        if (o := persistence.load_order(oid)) and o.get("document_id") == doc_id
-    ]
+    out = persistence.list_orders_for_document(doc_id)
     out.sort(key=lambda o: o.get("created_at", ""), reverse=True)
     return out

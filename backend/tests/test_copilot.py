@@ -67,11 +67,18 @@ def test_copilot_endpoint_runs_scripted_plan(monkeypatch):
     doc_id = _new_doc()
     r = client.post(f"/api/documents/{doc_id}/copilot", json={"goal": "plate with a hole"})
     assert r.status_code == 200, r.text
+    start = r.json()
+    assert start["job_id"]
+    # TestClient runs background tasks before returning, so one poll resolves it.
+    r = client.get(f"/api/documents/{doc_id}/copilot/{start['job_id']}")
+    assert r.status_code == 200, r.text
     body = r.json()
-    assert body["ok"] is True
+    assert body["ok"] is True and body["status"] == "done"
     ok_ops = [s for s in body["steps"] if s.get("kind") == "op" and s.get("ok")]
     assert len(ok_ops) == 2
     assert body["document"]["derived"]["mesh_url"].startswith("data:")
+    # Version history is fetched via /versions, never inlined in job responses.
+    assert "version_history" not in body["document"]
 
 
 def test_copilot_endpoint_requires_goal():

@@ -14,9 +14,15 @@ from app.services.simp_optimizer import ProgressState
 
 router = APIRouter(prefix="/api/optimize", tags=["optimize"])
 
-# In-memory job store
+# In-memory job store, bounded so a long-lived process can't grow it forever.
 _jobs: Dict[str, OptimizeJob] = {}
 _results: Dict[str, OptimizeResult] = {}
+_JOBS_CAP = 200
+
+
+def _prune(store: Dict) -> None:
+    while len(store) > _JOBS_CAP:
+        store.pop(next(iter(store)), None)
 
 
 def _progress_to_status(progress: dict) -> OptimizeJob:
@@ -56,6 +62,8 @@ async def start_optimize(spec: DesignSpec, background_tasks: BackgroundTasks):
         message="Queued generative study",
     )
     _jobs[job_id] = job
+    _prune(_jobs)
+    _prune(_results)
 
     background_tasks.add_task(_run_job, job_id, spec)
     return job

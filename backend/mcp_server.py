@@ -121,11 +121,23 @@ def copilot(doc_id: str, goal: str, max_steps: int = 8) -> str:
     Example goals: "turn this into an 80x40x10 mm plate with 4 corner holes",
     "shell the body to 2 mm and fillet the top edges".
     """
+    import time
+
     with _client() as c:
         r = c.post(f"/documents/{doc_id}/copilot", json={"goal": goal, "max_steps": max_steps})
-    if r.status_code >= 400:
-        return f"Error {r.status_code}: {r.text}"
-    data = r.json()
+        if r.status_code >= 400:
+            return f"Error {r.status_code}: {r.text}"
+        data = r.json()
+        # The copilot runs as a background job; poll until it resolves.
+        deadline = time.time() + 20 * 60
+        while data.get("status") == "running":
+            if time.time() > deadline:
+                return "Error: copilot timed out"
+            time.sleep(2.0)
+            r = c.get(f"/documents/{doc_id}/copilot/{data['job_id']}")
+            if r.status_code >= 400:
+                return f"Error {r.status_code}: {r.text}"
+            data = r.json()
     steps = [
         {k: s.get(k) for k in ("op", "ok", "rationale", "error")}
         for s in data["steps"] if s.get("kind") == "op"

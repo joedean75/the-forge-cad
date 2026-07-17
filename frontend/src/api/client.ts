@@ -191,12 +191,33 @@ export const api = {
     }),
   listOrders: (id: string) =>
     fetchJson<{ orders: ManufacturingOrder[] }>(`/documents/${id}/orders`),
-  /** Forge Copilot: an agentic loop that plans + executes a sequence of operations. */
-  runCopilot: (id: string, goal: string, maxSteps = 8) =>
-    fetchJson<CopilotResult>(`/documents/${id}/copilot`, {
+  /**
+   * Forge Copilot: an agentic loop that plans + executes a sequence of operations.
+   * Runs as a background job on the server (a run can span many LLM turns);
+   * this polls until it resolves, reporting live steps via `onProgress`.
+   */
+  runCopilot: async (
+    id: string,
+    goal: string,
+    maxSteps = 8,
+    onProgress?: (state: CopilotResult) => void,
+  ): Promise<CopilotResult> => {
+    let state = await fetchJson<CopilotResult>(`/documents/${id}/copilot`, {
       method: 'POST',
       body: JSON.stringify({ goal, max_steps: maxSteps }),
-    }),
+    })
+    const deadline = Date.now() + 20 * 60_000
+    while (state.status === 'running') {
+      if (Date.now() > deadline) throw new Error('Copilot timed out')
+      await new Promise((r) => setTimeout(r, 1200))
+      state = await fetchJson<CopilotResult>(`/documents/${id}/copilot/${state.job_id}`)
+      onProgress?.(state)
+    }
+    return state
+  },
+  /** Single-use ticket for the document WebSocket (keeps the JWT out of the URL). */
+  wsTicket: (id: string) =>
+    fetchJson<{ ticket: string; expires_in: number }>(`/documents/${id}/ws-ticket`, { method: 'POST' }),
   /** The single mutation path shared by the UI and AI agents. */
   runOperation: (id: string, op: string, args?: Record<string, unknown>) =>
     fetchJson<{ ok: boolean; op: string; result: Record<string, unknown>; document?: DesignDocument }>(

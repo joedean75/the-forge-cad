@@ -341,7 +341,10 @@ export interface CopilotStep {
 
 export interface CopilotResult {
   ok: boolean
-  summary: string
+  /** Job id — copilot runs as a background job; poll GET /copilot/{job_id}. */
+  job_id: string
+  status: 'running' | 'done' | 'error'
+  summary: string | null
   steps: CopilotStep[]
   document?: DesignDocument | null
 }
