@@ -27,6 +27,17 @@ export function MeshLoader({
   const meshRef = useRef<THREE.Mesh>(null)
   const geometry = useMemo(() => loadedGeometry.clone(), [loadedGeometry])
 
+  // Every edit produces a new multi-MB data-URI, and useLoader's suspense
+  // cache is keyed by that string — without eviction, every mesh version of a
+  // session (URI + parsed geometry) stays resident. Evict the entry and free
+  // the GPU buffers as soon as the url changes or the component unmounts.
+  useEffect(() => {
+    return () => {
+      useLoader.clear(STLLoader, url)
+      geometry.dispose()
+    }
+  }, [url, geometry])
+
   useEffect(() => {
     if (geometry && meshRef.current) {
       geometry.computeVertexNormals()

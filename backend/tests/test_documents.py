@@ -80,3 +80,41 @@ def test_delete_document():
     assert resp.status_code == 200
     assert resp.json()["status"] == "deleted"
     assert client.get(f"/api/documents/{doc_id}").status_code == 404
+
+
+def test_null_feature_ids_are_healed_so_edits_resolve():
+    """LLM-generated trees arrive with id: null on every node; the server must
+    assign ids (create + load), or every id-addressed edit 404s — regression
+    test for 'feature not found' on editing an LLM-created part."""
+    from app.services import cad_operations
+    from app.services import document_service as ds
+
+    doc = ds.create_document(name="null-ids", resolution=48)
+    doc.feature_tree = {"version": "brep-v1", "root": {
+        "type": "BooleanFeature", "id": None, "name": "S",
+        "params": {"operation": "subtract", "children": [
+            {"type": "BoxFeature", "id": None, "name": "F1",
+             "params": {"size": {"x": 0.075, "y": 0.05, "z": 0.005}, "center": {"x": 0, "y": 0, "z": 0}}},
+            {"type": "CylinderFeature", "id": None, "name": "H",
+             "params": {"radius": 0.005, "height": 0.02, "center": {"x": 0, "y": 0, "z": 0},
+                        "axis": {"x": 0, "y": 0, "z": 1}}}]}}}
+    ds.evaluate_document(doc, resolution=48)
+
+    root = doc.feature_tree["root"]
+    box = root["params"]["children"][0]
+    assert root["id"] and box["id"], "every node must carry a server-assigned id"
+
+    # The id the server handed out must be directly editable.
+    cad_operations.dispatch(
+        "set_feature_params", doc.id,
+        {"feature_id": box["id"], "params": {"size": {"x": 0.08, "y": 0.05, "z": 0.005}}},
+    )
+    edited = next(c for c in ds.get_document(doc.id).feature_tree["root"]["params"]["children"]
+                  if c["id"] == box["id"])
+    assert abs(edited["params"]["size"]["x"] - 0.08) < 1e-9
+
+    # Reload-from-disk path heals too (docs persisted before this fix).
+    ds.DOCUMENTS.pop(doc.id, None)
+    reloaded = ds.get_document(doc.id)
+    assert reloaded is not None
+    assert reloaded.feature_tree["root"]["id"]

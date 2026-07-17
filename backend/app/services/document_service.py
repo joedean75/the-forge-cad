@@ -52,6 +52,28 @@ def _hash_tree(tree: dict) -> str:
     return hashlib.sha256(json.dumps(tree, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
 
+def _ensure_feature_ids(tree: Optional[dict]) -> None:
+    """Give every feature node a stable id, in place.
+
+    LLM-generated trees arrive with ``id: null``; if those are persisted as-is,
+    the client invents display-only ids and every id-addressed edit
+    (set_feature_params etc.) 404s against the server. Ids are assigned at the
+    server so both sides always speak about the same features.
+    """
+
+    def walk(node: dict) -> None:
+        if not isinstance(node, dict):
+            return
+        if not node.get("id"):
+            node["id"] = str(uuid.uuid4())
+        for child in (node.get("params") or {}).get("children") or []:
+            walk(child)
+
+    root = (tree or {}).get("root")
+    if root:
+        walk(root)
+
+
 def _default_tree_dict() -> dict:
     """A blank document starts as a small valid box so it is immediately visible."""
     from app.cad_kernel.core.types import Point3, Vector3 as KVector3
@@ -97,6 +119,7 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
     Evaluation failures are captured in `derived.error` rather than raised, so a
     malformed edit never wedges the document.
     """
+    _ensure_feature_ids(doc.feature_tree)
     tree_hash = _hash_tree(doc.feature_tree)
     try:
         from app.services import feature_ops
@@ -283,6 +306,9 @@ def get_document(doc_id: str) -> Optional[DesignDocument]:
         return None
     try:
         doc = DesignDocument(**data)
+        # Heal documents persisted before server-side id assignment: without
+        # ids here, the first edit against this doc 404s (see _ensure_feature_ids).
+        _ensure_feature_ids(doc.feature_tree)
         DOCUMENTS[doc_id] = doc
         return doc
     except Exception as exc:
