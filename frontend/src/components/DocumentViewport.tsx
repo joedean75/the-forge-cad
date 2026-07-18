@@ -250,7 +250,8 @@ export function DocumentViewport() {
           'radial-gradient(120% 120% at 50% 20%, #1a1f27 0%, var(--color-cad-bg) 55%, #0e1116 100%)',
       }}
     >
-      <Canvas camera={{ position: [3, 2, 4], fov: 45 }} shadows>
+      {/* near=0.01 so close zoom never clips the part; far generous for wide views */}
+      <Canvas camera={{ position: [3, 2, 4], fov: 45, near: 0.01, far: 200 }} shadows>
         <Suspense fallback={null}>
           <ambientLight intensity={0.6} />
           <directionalLight position={[5, 10, 7]} intensity={1.2} castShadow />
@@ -299,7 +300,17 @@ export function DocumentViewport() {
             </mesh>
           )}
 
-          <OrbitControls makeDefault enableDamping dampingFactor={0.05} />
+          {/* bounded dolly + zoom-to-cursor: continuous zoom that can't pass
+              through the part or clip at working distance */}
+          <OrbitControls
+            makeDefault
+            enableDamping
+            dampingFactor={0.08}
+            minDistance={0.15}
+            maxDistance={40}
+            zoomSpeed={0.9}
+            zoomToCursor
+          />
           <GizmoHelper alignment="bottom-right" margin={[80, 80]}>
             <GizmoViewport axisColors={['#e8553c', '#5cc9a7', '#7d8ba0']} labelColor="white" />
           </GizmoHelper>

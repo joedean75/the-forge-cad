@@ -32,7 +32,7 @@ from app.models.schemas import (
     UpdateDocumentRequest,
     VersionSummary,
 )
-from app.services import document_analysis, document_service as docs
+from app.services import document_analysis, document_service as docs, slicer
 from app.services.simp_optimizer import ProgressState
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -362,6 +362,50 @@ def cam_document(body: CamRequest,
         safe_z_mm=body.safe_z_mm,
     )
     return document_analysis.cam_document(doc.id, tool)
+
+
+# ── FDM slicing (3D printing) ──
+
+
+@router.post("/{doc_id}/slice")
+def slice_document_route(
+    body: slicer.SliceSettings,
+    acc: accounts.Account = Depends(require_entitlement(ENT_CAM)),
+    doc: DesignDocument = Depends(readable_document),
+):
+    """Slice the body for FDM printing. Returns stats + a sampled layer preview;
+    the full G-code is stored on the document (download via GET /{doc_id}/gcode,
+    print via /api/machine/send-document)."""
+    import base64
+
+    try:
+        out = slicer.slice_document(doc.id, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    b64 = base64.b64encode(out["gcode"].encode("utf-8")).decode("ascii")
+    doc.derived.cam = CamResult(
+        gcode_url=f"data:text/plain;base64,{b64}",
+        operations=[f"fdm {body.layer_height}mm/{body.wall_count} walls/{int(body.infill * 100)}% infill"],
+        estimated_minutes=out["stats"]["estimated_minutes"],
+    )
+    return {"stats": out["stats"], "preview": out["preview"]}
+
+
+@router.get("/{doc_id}/gcode", response_class=PlainTextResponse)
+def download_gcode(doc: DesignDocument = Depends(readable_document)):
+    """The last sliced G-code as a downloadable file."""
+    import base64
+
+    cam = doc.derived.cam
+    if cam is None or not cam.gcode_url:
+        raise HTTPException(status_code=404, detail="No G-code — slice the part first")
+    _, b64 = cam.gcode_url.split(",", 1)
+    return PlainTextResponse(
+        base64.b64decode(b64).decode("utf-8"),
+        media_type="text/plain",
+        headers={"Content-Disposition": f"attachment; filename={doc.name[:40].replace(' ', '_') or 'part'}.gcode"},
+    )
 
 
 # ── Version history (snapshots / restore / branch) ──

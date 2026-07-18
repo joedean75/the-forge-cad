@@ -243,6 +243,55 @@ def _ai_edit(doc_id, args):
     return {"message": "applied AI edit"}
 
 
+def _slice_part(doc_id, args):
+    """FDM-slice the body; stats come back, the G-code lands on the document."""
+    import base64
+
+    from app.models.schemas import CamResult
+    from app.services import slicer
+
+    settings = slicer.SliceSettings(**(args.get("settings") or {}))
+    out = slicer.slice_document(doc_id, settings)
+    doc = _get(doc_id)
+    doc.derived.cam = CamResult(
+        gcode_url="data:text/plain;base64," + base64.b64encode(out["gcode"].encode("utf-8")).decode("ascii"),
+        operations=[f"fdm {settings.layer_height}mm/{settings.wall_count} walls/{int(settings.infill * 100)}% infill"],
+        estimated_minutes=out["stats"]["estimated_minutes"],
+    )
+    stats = out["stats"]
+    return {"message": f"sliced into {stats['layers']} layers "
+                       f"(~{stats['estimated_minutes']} min, {stats['filament_g']} g filament)",
+            "stats": stats}
+
+
+def _print_part(doc_id, args):
+    """Upload the sliced G-code to a Moonraker/Klipper printer (slice first if needed)."""
+    import base64
+
+    from app.services.machine import moonraker_client as mr
+    from app.services.machine.url_guard import UrlNotAllowed, validate_url
+
+    try:
+        url = validate_url(args["printer_url"])
+    except UrlNotAllowed as exc:
+        raise ValueError(str(exc))
+
+    doc = _get(doc_id)
+    if doc.derived.cam is None or not doc.derived.cam.gcode_url:
+        _slice_part(doc_id, args)  # defaults (or agent-passed settings)
+        doc = _get(doc_id)
+    _, b64 = doc.derived.cam.gcode_url.split(",", 1)
+    gcode = base64.b64decode(b64).decode("utf-8")
+    filename = f"forge_{(doc.name or 'part')[:32].replace(' ', '_')}.gcode"
+    start = bool(args.get("start", False))
+    try:
+        mr.upload_gcode(url, filename, gcode, start=start)
+    except mr.MoonrakerError:
+        raise ValueError("printer request failed — is the Moonraker URL reachable?")
+    return {"message": f"{'started printing' if start else 'uploaded'} {filename}",
+            "filename": filename, "started": start}
+
+
 @dataclass
 class Operation:
     name: str
@@ -305,6 +354,20 @@ OPERATIONS: Dict[str, Operation] = {
                   {"a": _VEC, "b": _VEC, "label": {"type": "string"}}, _add_dimension),
         Operation("ai_edit", "mutate", "Apply a natural-language edit to the whole part.",
                   {"instruction": {"type": "string"}}, _ai_edit),
+        Operation("slice_part", "query",
+                  "Slice the body for FDM 3D printing (SDF slicer). Returns layer/time/filament "
+                  "stats; the G-code is stored on the document for download or printing.",
+                  {"settings": {"type": "object",
+                                "description": "optional overrides: layer_height (mm), wall_count, "
+                                               "infill (0..1), temp_nozzle, temp_bed, speed_print …"}},
+                  _slice_part),
+        Operation("print_part", "mutate",
+                  "Upload the sliced G-code to a Moonraker/Klipper printer and optionally start it. "
+                  "Slices with defaults first if the part hasn't been sliced.",
+                  {"printer_url": {"type": "string", "description": "Moonraker base URL, e.g. http://printer.local:7125"},
+                   "start": {"type": "boolean", "default": False},
+                   "settings": {"type": "object", "description": "slice settings if slicing is needed"}},
+                  _print_part),
     ]
 }
 

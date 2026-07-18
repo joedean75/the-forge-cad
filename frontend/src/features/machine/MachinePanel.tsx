@@ -1,10 +1,163 @@
 import { useEffect, useRef, useState } from 'react'
-import { Home, Send, Loader2, Wifi, WifiOff } from 'lucide-react'
+import { Home, Send, Loader2, Wifi, WifiOff, Layers, Download } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
 import { api } from '../../api/client'
-import type { MachineStatus } from '../../../../shared/types'
+import type { MachineStatus, SliceResponse } from '../../../../shared/types'
 
 const JOG_STEPS = [0.1, 1, 10]
+
+function Num({ label, value, step, min, suffix, onChange }: {
+  label: string; value: number; step: number; min: number; suffix: string
+  onChange: (v: number) => void
+}) {
+  return (
+    <label className="text-[10px] text-cad-text flex flex-col gap-1">
+      <span>{label}</span>
+      <div className="flex items-center gap-1 px-2 py-1 rounded-sm bg-cad-bg border border-cad-border focus-within:border-cad-accent transition-colors">
+        <input
+          type="number"
+          value={value}
+          step={step}
+          min={min}
+          onChange={(e) => {
+            const v = parseFloat(e.target.value)
+            if (!Number.isNaN(v)) onChange(v)
+          }}
+          className="tabular w-full bg-transparent text-xs text-cad-text-heading outline-none"
+        />
+        <span className="text-[9px] text-cad-text/60">{suffix}</span>
+      </div>
+    </label>
+  )
+}
+
+/** One sliced layer drawn to scale: walls in ember, infill in steel. */
+function LayerView({ slice, index }: { slice: SliceResponse; index: number }) {
+  const layer = slice.preview[index]
+  if (!layer) return null
+  const all = [...layer.walls, ...layer.infill].flat()
+  if (all.length === 0) return <p className="text-[10px] text-cad-text/50">Empty layer.</p>
+  const xs = all.map((p) => p[0])
+  const ys = all.map((p) => p[1])
+  const minX = Math.min(...xs), maxX = Math.max(...xs)
+  const minY = Math.min(...ys), maxY = Math.max(...ys)
+  const pad = 2
+  const toPts = (poly: number[][]) => poly.map((p) => `${p[0]},${-p[1]}`).join(' ')
+  return (
+    <svg
+      viewBox={`${minX - pad} ${-maxY - pad} ${maxX - minX + 2 * pad} ${maxY - minY + 2 * pad}`}
+      className="w-full aspect-square rounded-sm border border-cad-border bg-cad-bg"
+    >
+      {layer.infill.map((poly, i) => (
+        <polyline key={`i${i}`} points={toPts(poly)} fill="none"
+          stroke="var(--color-stress-void)" strokeWidth={0.25} strokeLinecap="round" />
+      ))}
+      {layer.walls.map((poly, i) => (
+        <polygon key={`w${i}`} points={toPts(poly)} fill="none"
+          stroke="var(--color-cad-accent)" strokeWidth={0.35} strokeLinejoin="round" />
+      ))}
+    </svg>
+  )
+}
+
+function SlicerSection() {
+  const { doc, refreshDoc } = useDocumentStore()
+  const [layerHeight, setLayerHeight] = useState(0.2)
+  const [infill, setInfill] = useState(15)
+  const [walls, setWalls] = useState(2)
+  const [tempNozzle, setTempNozzle] = useState(210)
+  const [tempBed, setTempBed] = useState(60)
+  const [slicing, setSlicing] = useState(false)
+  const [result, setResult] = useState<SliceResponse | null>(null)
+  const [layerIdx, setLayerIdx] = useState(0)
+  const [err, setErr] = useState<string | null>(null)
+
+  const slice = async () => {
+    if (!doc || slicing) return
+    setSlicing(true)
+    setErr(null)
+    try {
+      const res = await api.sliceDocument(doc.id, {
+        layer_height: layerHeight,
+        infill: infill / 100,
+        wall_count: walls,
+        temp_nozzle: tempNozzle,
+        temp_bed: tempBed,
+      })
+      setResult(res)
+      setLayerIdx(Math.max(0, res.preview.length - 1))
+      refreshDoc() // pick up derived.cam so Send job unlocks
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Slicing failed')
+    } finally {
+      setSlicing(false)
+    }
+  }
+
+  if (!doc) return null
+  const s = result?.stats
+  return (
+    <div className="space-y-3">
+      <h3 className="sec-head">Slice for printing</h3>
+      <div className="grid grid-cols-2 gap-2">
+        <Num label="Layer height" value={layerHeight} step={0.05} min={0.05} suffix="mm" onChange={setLayerHeight} />
+        <Num label="Infill" value={infill} step={5} min={0} suffix="%" onChange={setInfill} />
+        <Num label="Walls" value={walls} step={1} min={1} suffix="" onChange={setWalls} />
+        <Num label="Nozzle" value={tempNozzle} step={5} min={150} suffix="°C" onChange={setTempNozzle} />
+        <Num label="Bed" value={tempBed} step={5} min={0} suffix="°C" onChange={setTempBed} />
+      </div>
+      <button
+        onClick={slice}
+        disabled={slicing}
+        className="w-full flex items-center justify-center gap-1.5 py-2 rounded-sm bg-cad-accent text-cad-bg font-semibold hover:bg-cad-accent-hot transition-colors text-xs disabled:opacity-50"
+      >
+        {slicing ? <Loader2 size={13} className="animate-spin" /> : <Layers size={13} />}
+        {slicing ? 'Slicing…' : 'Slice'}
+      </button>
+      {err && <p className="text-[10px] text-cad-danger">{err}</p>}
+
+      {result && s && (
+        <div className="space-y-2.5">
+          <div className="grid grid-cols-3 gap-2 text-center">
+            {[
+              [`${s.layers}`, 'layers'],
+              [`${s.estimated_minutes < 90 ? `${Math.round(s.estimated_minutes)} min` : `${(s.estimated_minutes / 60).toFixed(1)} h`}`, 'print time'],
+              [`${s.filament_g} g`, 'filament'],
+            ].map(([v, l]) => (
+              <div key={l} className="p-2 rounded-sm border border-cad-border bg-cad-bg/50">
+                <div className="font-display text-sm font-semibold text-cad-text-heading">{v}</div>
+                <div className="eyebrow text-cad-text/50 mt-0.5">{l}</div>
+              </div>
+            ))}
+          </div>
+
+          <LayerView slice={result} index={layerIdx} />
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={0}
+              max={result.preview.length - 1}
+              value={layerIdx}
+              onChange={(e) => setLayerIdx(parseInt(e.target.value, 10))}
+              className="flex-1 accent-[var(--color-cad-accent)]"
+            />
+            <span className="tabular text-[10px] text-cad-text w-20 text-right">
+              layer {result.preview[layerIdx]?.layer} · z{result.preview[layerIdx]?.z}
+            </span>
+          </div>
+
+          <a
+            href={api.gcodeUrl(doc.id)}
+            download
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading transition text-[11px]"
+          >
+            <Download size={12} /> Download G-code ({(s.gcode_bytes / 1e6).toFixed(1)} MB)
+          </a>
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function MachinePanel() {
   const { doc, cam } = useDocumentStore()
@@ -58,9 +211,13 @@ export function MachinePanel() {
     }
   }
 
+  const hasGcode = !!(cam || doc?.derived.cam?.gcode_url)
+
   return (
     <div className="space-y-5">
-      <div>
+      <SlicerSection />
+
+      <div className="pt-3 border-t border-cad-border">
         <h3 className="sec-head mb-2">Moonraker endpoint</h3>
         <input
           value={url}
@@ -138,11 +295,11 @@ export function MachinePanel() {
 
       <div className="pt-3 border-t border-cad-border space-y-2">
         <h3 className="sec-head">Send job</h3>
-        {!cam && <p className="text-[10px] text-cad-text/60">Generate toolpaths in the Make step first.</p>}
+        {!hasGcode && <p className="text-[10px] text-cad-text/60">Slice the part above (or generate CNC toolpaths in Make) first.</p>}
         <div className="flex gap-2">
           <button
             onClick={() => send(false)}
-            disabled={!cam || sending}
+            disabled={!hasGcode || sending}
             className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading transition text-xs disabled:opacity-40"
           >
             {sending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
@@ -150,7 +307,7 @@ export function MachinePanel() {
           </button>
           <button
             onClick={() => send(true)}
-            disabled={!cam || sending}
+            disabled={!hasGcode || sending}
             className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-sm bg-cad-accent text-cad-bg font-semibold hover:bg-cad-accent-hot transition-colors text-xs disabled:opacity-40"
           >
             Upload + start

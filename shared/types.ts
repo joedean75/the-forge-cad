@@ -349,6 +349,41 @@ export interface CopilotResult {
   document?: DesignDocument | null
 }
 
+// --- FDM slicing (3D printing) ---
+export interface SliceSettings {
+  layer_height?: number
+  nozzle_diameter?: number
+  wall_count?: number
+  /** 0..1 density */
+  infill?: number
+  speed_print?: number
+  speed_first_layer?: number
+  speed_travel?: number
+  temp_nozzle?: number
+  temp_bed?: number
+}
+
+export interface SliceStats {
+  layers: number
+  estimated_minutes: number
+  filament_mm: number
+  filament_g: number
+  size_mm: number[]
+  gcode_bytes: number
+}
+
+export interface SliceLayerPreview {
+  layer: number
+  z: number
+  walls: number[][][]
+  infill: number[][][]
+}
+
+export interface SliceResponse {
+  stats: SliceStats
+  preview: SliceLayerPreview[]
+}
+
 // --- Assemblies: compose part documents into a placed whole ---
 export interface ComponentTransform {
   translate: Vector3

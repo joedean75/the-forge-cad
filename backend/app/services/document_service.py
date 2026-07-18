@@ -95,10 +95,12 @@ def _default_tree_dict() -> dict:
 def _persist(doc: DesignDocument) -> None:
     try:
         data = doc.model_dump()
-        # Derived meshes are pure evaluation products, re-created on demand
-        # (see ensure_derived) — writing them would add multiple MB per save.
+        # Derived meshes/G-code are pure evaluation products, re-created on
+        # demand (ensure_derived / re-slice) — writing them would add MBs per save.
         data["derived"]["mesh_url"] = None
         data["derived"]["step_url"] = None
+        if data["derived"].get("cam"):
+            data["derived"]["cam"]["gcode_url"] = None
         persistence.save_document(doc.id, data)
     except Exception as exc:  # persistence must never break the request
         _LOGGER.warning("Failed to persist document %s: %s", doc.id, exc)

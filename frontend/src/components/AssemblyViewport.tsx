@@ -97,7 +97,7 @@ export function AssemblyViewport({
       className="relative flex-1 min-w-0"
       style={{ background: 'radial-gradient(120% 120% at 50% 20%, #1a1f27 0%, var(--color-cad-bg) 55%, #0e1116 100%)' }}
     >
-      <Canvas camera={{ position: [3, 2, 4], fov: 45 }} shadows onPointerMissed={() => onSelect(null)}>
+      <Canvas camera={{ position: [3, 2, 4], fov: 45, near: 0.01, far: 200 }} shadows onPointerMissed={() => onSelect(null)}>
         <Suspense fallback={null}>
           <ambientLight intensity={0.6} />
           <directionalLight position={[5, 10, 7]} intensity={1.2} castShadow />
@@ -128,7 +128,15 @@ export function AssemblyViewport({
                 onSelect={() => onSelect(c.id)}
               />
             ))}
-          <OrbitControls makeDefault enableDamping dampingFactor={0.05} />
+          <OrbitControls
+            makeDefault
+            enableDamping
+            dampingFactor={0.08}
+            minDistance={0.15}
+            maxDistance={40}
+            zoomSpeed={0.9}
+            zoomToCursor
+          />
           <GizmoHelper alignment="bottom-right" margin={[80, 80]}>
             <GizmoViewport axisColors={['#e8553c', '#5cc9a7', '#7d8ba0']} labelColor="white" />
           </GizmoHelper>

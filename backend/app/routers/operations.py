@@ -66,6 +66,8 @@ def platform_manifest():
             "quotes": "POST /api/documents/{id}/quotes {quantity}",
             "orders": "POST /api/documents/{id}/orders {process, quantity, notes}",
             "export_step": "GET /api/documents/{id}/step",
+            "slice": "POST /api/documents/{id}/slice {layer_height?, infill?, …} — FDM G-code; download GET /api/documents/{id}/gcode",
+            "print": "run_operation print_part {printer_url, start} — send G-code to a Moonraker/Klipper printer",
             "openapi": "GET /openapi.json (interactive: /docs)",
         },
         "mcp": {

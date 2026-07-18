@@ -200,6 +200,32 @@ def order_part(doc_id: str, process: str, quantity: int = 1, notes: str = "") ->
 
 
 @mcp.tool()
+def slice_part(doc_id: str, layer_height: float = 0.2, infill: float = 0.15,
+               wall_count: int = 2, temp_nozzle: int = 210, temp_bed: int = 60) -> str:
+    """Slice the part for FDM 3D printing. Returns layer count, print time and
+    filament estimates; the G-code is stored on the document, ready to print."""
+    with _client() as c:
+        r = c.post(f"/documents/{doc_id}/op", json={"op": "slice_part", "args": {"settings": {
+            "layer_height": layer_height, "infill": infill, "wall_count": wall_count,
+            "temp_nozzle": temp_nozzle, "temp_bed": temp_bed}}})
+    if r.status_code >= 400:
+        return f"Error {r.status_code}: {r.text}"
+    return json.dumps(r.json()["result"], indent=2)
+
+
+@mcp.tool()
+def print_part(doc_id: str, printer_url: str, start: bool = False) -> str:
+    """Send the part's sliced G-code to a Moonraker/Klipper 3D printer
+    (slices with default settings first if needed). start=True begins the print."""
+    with _client() as c:
+        r = c.post(f"/documents/{doc_id}/op",
+                   json={"op": "print_part", "args": {"printer_url": printer_url, "start": start}})
+    if r.status_code >= 400:
+        return f"Error {r.status_code}: {r.text}"
+    return json.dumps(r.json()["result"], indent=2)
+
+
+@mcp.tool()
 def export_part_step(doc_id: str, out_path: str) -> str:
     """Export a part as STEP to a local file path."""
     with _client() as c:

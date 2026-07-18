@@ -28,6 +28,8 @@ import type {
   CopilotResult,
   QuoteBundle,
   ManufacturingOrder,
+  SliceSettings,
+  SliceResponse,
 } from '../../../shared/types'
 
 const API_BASE = '/api'
@@ -261,6 +263,12 @@ export const api = {
       converged: boolean
       polygon: [number, number][] | null
     }>('/sketch/solve', { method: 'POST', body: JSON.stringify(spec) }),
+
+  // ── FDM slicing ──
+  sliceDocument: (id: string, settings: SliceSettings = {}) =>
+    fetchJson<SliceResponse>(`/documents/${id}/slice`, { method: 'POST', body: JSON.stringify(settings) }),
+  /** Browser-navigable download URL for the last sliced G-code. */
+  gcodeUrl: (id: string) => `/api/documents/${id}/gcode`,
 
   // ── Machine control (Moonraker / Mainsail / Klipper) ──
   listPrinters: () => fetchJson<MachinePrinter[]>('/machine/printers'),

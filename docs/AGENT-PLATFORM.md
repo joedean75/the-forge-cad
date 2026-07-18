@@ -54,6 +54,28 @@ live transcript (op, rationale, ok/error); when done, the response adds the
 summary and the final document. The backend plans with its configured LLM;
 every step is undoable and metered.
 
+## 3D printing (slice + print)
+
+The built-in FDM slicer turns a part into printable G-code (RepRap flavor,
+Klipper/Marlin compatible) straight from its signed-distance field:
+
+```bash
+# Slice: returns layer/time/filament stats; G-code is stored on the document
+curl -s -X POST $BASE/api/documents/$DOC/op -H 'X-Api-Key: fk_…' \
+  -H 'Content-Type: application/json' \
+  -d '{"op":"slice_part","args":{"settings":{"layer_height":0.2,"infill":0.15}}}'
+
+# Download the G-code, or send it to a Moonraker/Klipper printer:
+curl -s $BASE/api/documents/$DOC/gcode -H 'X-Api-Key: fk_…' -o part.gcode
+curl -s -X POST $BASE/api/documents/$DOC/op -H 'X-Api-Key: fk_…' \
+  -H 'Content-Type: application/json' \
+  -d '{"op":"print_part","args":{"printer_url":"http://printer.local:7125","start":true}}'
+```
+
+`print_part` slices with defaults first if the part has no G-code yet, so an
+agent can go prompt → part → print in two operations. MCP tools: `slice_part`,
+`print_part`.
+
 ## Import / export / quotes
 
 ```bash
