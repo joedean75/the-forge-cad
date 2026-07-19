@@ -267,8 +267,17 @@ export const api = {
   // ── FDM slicing ──
   sliceDocument: (id: string, settings: SliceSettings = {}) =>
     fetchJson<SliceResponse>(`/documents/${id}/slice`, { method: 'POST', body: JSON.stringify(settings) }),
-  /** Browser-navigable download URL for the last sliced G-code. */
-  gcodeUrl: (id: string) => `/api/documents/${id}/gcode`,
+  /** Download the last sliced G-code as a file (authenticated fetch → blob). */
+  downloadGcode: async (id: string, name = 'part') => {
+    const res = await fetch(`${API_BASE}/documents/${id}/gcode`, { headers: authHeaders() })
+    if (!res.ok) throw new Error(`No G-code (${res.status}) — slice the part first`)
+    const blob = await res.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${name.slice(0, 40).replace(/\s+/g, '_') || 'part'}.gcode`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  },
 
   // ── Machine control (Moonraker / Mainsail / Klipper) ──
   listPrinters: () => fetchJson<MachinePrinter[]>('/machine/printers'),

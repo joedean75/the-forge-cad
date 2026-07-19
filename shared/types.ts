@@ -356,6 +356,8 @@ export interface SliceSettings {
   wall_count?: number
   /** 0..1 density */
   infill?: number
+  /** Solid top/bottom shell count (0 disables). */
+  skin_layers?: number
   speed_print?: number
   speed_first_layer?: number
   speed_travel?: number
@@ -376,6 +378,8 @@ export interface SliceLayerPreview {
   layer: number
   z: number
   walls: number[][][]
+  /** Dense top/bottom solid surfaces. */
+  skin: number[][][]
   infill: number[][][]
 }
 

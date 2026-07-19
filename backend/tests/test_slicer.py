@@ -60,6 +60,22 @@ def test_slice_part_operation_for_agents():
     assert {"slice_part", "print_part"} <= names
 
 
+def test_top_and_bottom_layers_are_solid_skinned():
+    """Production prints need closed surfaces: the first/last layers must be
+    dense skin, while the mid-height of a tall part stays sparse infill."""
+    doc_id = _small_part()
+    r = client.post(f"/api/documents/{doc_id}/slice",
+                    json={"layer_height": 0.2, "infill": 0.1, "skin_layers": 3})
+    assert r.status_code == 200, r.text
+    preview = r.json()["preview"]
+    first, last = preview[0], preview[-1]
+    mids = [p for p in preview if 4 <= p["layer"] <= r.json()["stats"]["layers"] - 3]
+    assert first["skin"], "bottom layer must carry solid skin"
+    assert last["skin"], "top layer must carry solid skin"
+    assert mids and any(m["infill"] for m in mids), "interior layers keep sparse infill"
+    assert all(not m["skin"] for m in mids), "fully-interior layers need no skin"
+
+
 def test_gcode_404_before_slicing():
     doc_id = _small_part()
     assert client.get(f"/api/documents/{doc_id}/gcode").status_code == 404

@@ -35,7 +35,7 @@ function Num({ label, value, step, min, suffix, onChange }: {
 function LayerView({ slice, index }: { slice: SliceResponse; index: number }) {
   const layer = slice.preview[index]
   if (!layer) return null
-  const all = [...layer.walls, ...layer.infill].flat()
+  const all = [...layer.walls, ...layer.skin, ...layer.infill].flat()
   if (all.length === 0) return <p className="text-[10px] text-cad-text/50">Empty layer.</p>
   const xs = all.map((p) => p[0])
   const ys = all.map((p) => p[1])
@@ -52,6 +52,10 @@ function LayerView({ slice, index }: { slice: SliceResponse; index: number }) {
         <polyline key={`i${i}`} points={toPts(poly)} fill="none"
           stroke="var(--color-stress-void)" strokeWidth={0.25} strokeLinecap="round" />
       ))}
+      {layer.skin.map((poly, i) => (
+        <polyline key={`s${i}`} points={toPts(poly)} fill="none"
+          stroke="var(--color-cad-accent-hot)" strokeWidth={0.25} strokeLinecap="round" opacity={0.75} />
+      ))}
       {layer.walls.map((poly, i) => (
         <polygon key={`w${i}`} points={toPts(poly)} fill="none"
           stroke="var(--color-cad-accent)" strokeWidth={0.35} strokeLinejoin="round" />
@@ -65,6 +69,7 @@ function SlicerSection() {
   const [layerHeight, setLayerHeight] = useState(0.2)
   const [infill, setInfill] = useState(15)
   const [walls, setWalls] = useState(2)
+  const [skins, setSkins] = useState(3)
   const [tempNozzle, setTempNozzle] = useState(210)
   const [tempBed, setTempBed] = useState(60)
   const [slicing, setSlicing] = useState(false)
@@ -81,6 +86,7 @@ function SlicerSection() {
         layer_height: layerHeight,
         infill: infill / 100,
         wall_count: walls,
+        skin_layers: skins,
         temp_nozzle: tempNozzle,
         temp_bed: tempBed,
       })
@@ -103,6 +109,7 @@ function SlicerSection() {
         <Num label="Layer height" value={layerHeight} step={0.05} min={0.05} suffix="mm" onChange={setLayerHeight} />
         <Num label="Infill" value={infill} step={5} min={0} suffix="%" onChange={setInfill} />
         <Num label="Walls" value={walls} step={1} min={1} suffix="" onChange={setWalls} />
+        <Num label="Top/bottom layers" value={skins} step={1} min={0} suffix="" onChange={setSkins} />
         <Num label="Nozzle" value={tempNozzle} step={5} min={150} suffix="°C" onChange={setTempNozzle} />
         <Num label="Bed" value={tempBed} step={5} min={0} suffix="°C" onChange={setTempBed} />
       </div>
@@ -146,13 +153,12 @@ function SlicerSection() {
             </span>
           </div>
 
-          <a
-            href={api.gcodeUrl(doc.id)}
-            download
+          <button
+            onClick={() => api.downloadGcode(doc.id, doc.name).catch((e) => setErr(String(e)))}
             className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading transition text-[11px]"
           >
             <Download size={12} /> Download G-code ({(s.gcode_bytes / 1e6).toFixed(1)} MB)
-          </a>
+          </button>
         </div>
       )}
     </div>

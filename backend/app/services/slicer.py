@@ -1,10 +1,18 @@
 """FDM slicer: document body → printable G-code (Klipper/Marlin flavor).
 
-The part's signed distance field is sliced directly: for each layer the SDF is
-sampled on a 2D grid, and *contours of that field at negative iso-levels* give
-the outer wall and every inset perimeter exactly — the offsetting problem that
-dominates mesh-based slicers falls out of the representation for free. Infill
-is rectilinear (alternating 45°/135°), clipped against the innermost inset.
+The part's signed distance field is sliced directly: each layer's occupancy is
+sampled from the 3D SDF and rebuilt into a true *in-plane* 2D signed distance
+(EDT) — the 3D field can't be used for offsets near horizontal faces, where it
+measures distance to the floor/ceiling instead of the outline. Perimeter insets
+are then just iso-contours of that layer field at negative levels; the
+offsetting that dominates mesh-based slicers falls out of the representation.
+
+Print quality features expected of a production workflow:
+  * solid top/bottom skins (layer-lookahead: any inner region not covered
+    ``skin_layers`` deep above *and* below is skinned dense),
+  * rectilinear sparse infill (alternating 45°/135°),
+  * skirt, retraction, greedy travel ordering, part-cooling fan control,
+  * Douglas-Peucker simplification (0.05 mm) for real-slicer G-code density.
 
 Output targets standard RepRap flavor (relative extrusion, M83) and uploads
 unmodified to Moonraker/Klipper via the existing machine service.
@@ -13,11 +21,12 @@ unmodified to Moonraker/Klipper via the existing machine service.
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from pydantic import BaseModel, Field
-from scipy.ndimage import map_coordinates
+from scipy.ndimage import distance_transform_edt, map_coordinates
 from skimage import measure
 
 from app.cad_kernel.core.feature_tree import FeatureTree
@@ -38,11 +47,13 @@ class SliceSettings(BaseModel):
     nozzle_diameter: float = Field(0.4, ge=0.15, le=1.2)
     wall_count: int = Field(2, ge=1, le=6)
     infill: float = Field(0.15, ge=0.0, le=1.0)  # 0..1 density
+    skin_layers: int = Field(3, ge=0, le=8)  # solid top/bottom shells (0 = off)
     speed_print: float = Field(45.0, ge=5, le=300)
     speed_first_layer: float = Field(20.0, ge=5, le=100)
     speed_travel: float = Field(150.0, ge=10, le=500)
     temp_nozzle: int = Field(210, ge=150, le=320)
     temp_bed: int = Field(60, ge=0, le=120)
+    fan_percent: int = Field(100, ge=0, le=100)  # part cooling from layer 3 on
     filament_diameter: float = Field(1.75, gt=0)
     retract_mm: float = Field(1.0, ge=0, le=8)
     retract_speed: float = Field(35.0, ge=5, le=80)
@@ -68,34 +79,20 @@ def _order_polylines(polys: List[Polyline], start: Tuple[float, float]) -> List[
     return out
 
 
-class _LayerField:
-    """One layer's *in-plane* signed distance (mm) with contour + clip helpers.
+class _Field2D:
+    """In-plane signed distance (mm) to a region boundary, from an occupancy mask."""
 
-    The 3D SDF cannot be used directly for perimeter offsets: near a horizontal
-    face it measures distance to that face (e.g. 0.1 mm above the floor), not to
-    the layer's outline — the first and last layers would lose their walls. So
-    the 3D field is only thresholded into this layer's occupancy, and a 2D EDT
-    rebuilds the true in-plane distance to the slice boundary.
-    """
-
-    def __init__(self, sdf, z_m: float, x0: float, y0: float, nx: int, ny: int, cell: float):
-        from scipy.ndimage import distance_transform_edt
-
-        xs = x0 + np.arange(nx) * cell
-        ys = y0 + np.arange(ny) * cell
-        gx, gy = np.meshgrid(xs, ys, indexing="ij")
-        pts = np.column_stack([gx.ravel() / MM, gy.ravel() / MM, np.full(gx.size, z_m)])
-        occ = (sdf(pts) <= 0.0).reshape(nx, ny)
-        if occ.any():
-            d_in = distance_transform_edt(occ)
-            d_out = distance_transform_edt(~occ)
-            self.field = (d_out - d_in) * cell  # in-plane signed distance, mm
+    def __init__(self, mask: np.ndarray, x0: float, y0: float, cell: float):
+        if mask.any():
+            d_in = distance_transform_edt(mask)
+            d_out = distance_transform_edt(~mask)
+            self.field = (d_out - d_in) * cell
         else:
-            self.field = np.full((nx, ny), 1e6)
+            self.field = np.full(mask.shape, 1e6)
         self.x0, self.y0, self.cell = x0, y0, cell
 
     def contours(self, level: float) -> List[Polyline]:
-        """Iso-contours of the field (negative level = inset inside the part)."""
+        """Iso-contours of the field (negative level = inset inside the region)."""
         if self.field.min() > level:
             return []
         out = []
@@ -110,8 +107,11 @@ class _LayerField:
             out.append(pts)
         return out
 
+    def mask(self, level: float) -> np.ndarray:
+        return self.field <= level
+
     def clip_line(self, a: Tuple[float, float], b: Tuple[float, float], level: float) -> List[Polyline]:
-        """Segments of a→b lying where field <= level (used for infill)."""
+        """Segments of a→b lying where field <= level (used for infill/skin)."""
         length = math.hypot(b[0] - a[0], b[1] - a[1])
         n = max(int(length / (self.cell * 0.75)), 2)
         t = np.linspace(0.0, 1.0, n)
@@ -134,9 +134,9 @@ class _LayerField:
         return segs
 
 
-def _infill_lines(field: _LayerField, bbox: Tuple[float, float, float, float],
-                  spacing: float, angle_deg: float, level: float) -> List[Polyline]:
-    """Rectilinear infill: parallel lines at angle, clipped to the inset region."""
+def _fill_lines(field: _Field2D, bbox: Tuple[float, float, float, float],
+                spacing: float, angle_deg: float, level: float) -> List[Polyline]:
+    """Parallel rectilinear lines at an angle, clipped to where field <= level."""
     x_min, y_min, x_max, y_max = bbox
     cx, cy = (x_min + x_max) / 2, (y_min + y_max) / 2
     half = math.hypot(x_max - x_min, y_max - y_min) / 2 + spacing
@@ -189,6 +189,27 @@ def slice_document(doc_id: str, settings: Optional[SliceSettings] = None) -> Dic
     nx = int((size[0] + 2 * pad) / cell) + 2
     ny = int((size[1] + 2 * pad) / cell) + 2
 
+    # Per-layer occupancy, memoized in a sliding window for the skin lookahead.
+    occ_cache: "OrderedDict[int, np.ndarray]" = OrderedDict()
+
+    def occupancy(i: int) -> np.ndarray:
+        if i < 0 or i >= n_layers:
+            return np.zeros((nx, ny), dtype=bool)
+        hit = occ_cache.get(i)
+        if hit is not None:
+            occ_cache.move_to_end(i)
+            return hit
+        z_mid = (float(lo[2]) + s.layer_height * (i + 0.5)) / MM
+        xs = x0 + np.arange(nx) * cell
+        ys = y0 + np.arange(ny) * cell
+        gx, gy = np.meshgrid(xs, ys, indexing="ij")
+        pts = np.column_stack([gx.ravel() / MM, gy.ravel() / MM, np.full(gx.size, z_mid)])
+        occ = (sdf(pts) <= 0.0).reshape(nx, ny)
+        occ_cache[i] = occ
+        while len(occ_cache) > 2 * s.skin_layers + 3:
+            occ_cache.popitem(last=False)
+        return occ
+
     # Place the part at the bed center, bottom on the plate.
     off_x = s.bed_center_x - float(lo[0] + size[0] / 2)
     off_y = s.bed_center_y - float(lo[1] + size[1] / 2)
@@ -196,13 +217,14 @@ def slice_document(doc_id: str, settings: Optional[SliceSettings] = None) -> Dic
     extr_w = s.nozzle_diameter * 1.1
     e_per_mm = (s.layer_height * extr_w) / (math.pi * (s.filament_diameter / 2) ** 2)
     wall_levels = [-(s.nozzle_diameter / 2 + i * extr_w) for i in range(s.wall_count)]
-    infill_level = -(s.nozzle_diameter / 2 + s.wall_count * extr_w)
-    infill_spacing = extr_w / s.infill if s.infill > 0 else None
+    inner_level = -(s.nozzle_diameter / 2 + s.wall_count * extr_w)
+    sparse_spacing = extr_w / s.infill if s.infill > 0 else None
+    part_bbox = (float(lo[0]), float(lo[1]), float(hi[0]), float(hi[1]))
 
     g: List[str] = [
         "; Sliced by The Forge (SDF slicer)",
         f"; part: {doc.name}",
-        f"; layer_height={s.layer_height} walls={s.wall_count} infill={int(s.infill * 100)}%",
+        f"; layer_height={s.layer_height} walls={s.wall_count} infill={int(s.infill * 100)}% skins={s.skin_layers}",
         "M83 ; relative extrusion",
         "G21 ; mm",
         "G90 ; absolute moves",
@@ -211,6 +233,7 @@ def slice_document(doc_id: str, settings: Optional[SliceSettings] = None) -> Dic
         f"M190 S{s.temp_bed}",
         f"M109 S{s.temp_nozzle}",
         "G28 ; home",
+        "M107 ; fan off for first layers",
         "G92 E0",
     ]
 
@@ -222,7 +245,7 @@ def slice_document(doc_id: str, settings: Optional[SliceSettings] = None) -> Dic
     preview_every = max(1, n_layers // 48)
 
     def travel_to(p: Tuple[float, float], feed: float) -> None:
-        nonlocal pos, time_s, retracted, filament_mm
+        nonlocal pos, time_s, retracted
         d = math.hypot(p[0] - pos[0], p[1] - pos[1])
         if d < 1e-6:
             return
@@ -252,43 +275,67 @@ def slice_document(doc_id: str, settings: Optional[SliceSettings] = None) -> Dic
             pos = b2
 
     for layer in range(n_layers):
-        z_mid = float(lo[2]) + s.layer_height * (layer + 0.5)
         z_print = s.layer_height * (layer + 1)
-        field = _LayerField(sdf, z_mid / MM, x0, y0, nx, ny, cell)
+        part = _Field2D(occupancy(layer), x0, y0, cell)
         feed = s.speed_first_layer if layer == 0 else s.speed_print
 
         g.append(f"; layer {layer + 1}/{n_layers}")
+        if layer == 2 and s.fan_percent > 0:
+            g.append(f"M106 S{int(s.fan_percent * 255 / 100)} ; part cooling")
         g.append(f"G1 Z{z_print:.3f} F600")
         time_s += 0.05
 
         walls: List[Polyline] = []
         for lvl in wall_levels:
-            walls.extend(field.contours(lvl))
-        infill: List[Polyline] = []
-        if infill_spacing is not None:
-            infill = _infill_lines(
-                field, (float(lo[0]), float(lo[1]), float(hi[0]), float(hi[1])),
-                infill_spacing, 45.0 if layer % 2 == 0 else 135.0, infill_level,
-            )
+            walls.extend(part.contours(lvl))
+
+        # Inner region split into solid skin (near a top/bottom surface within
+        # skin_layers) and sparse infill (fully interior).
+        inner_mask = part.mask(inner_level)
+        skin_lines: List[Polyline] = []
+        sparse_lines: List[Polyline] = []
+        if inner_mask.any():
+            if s.skin_layers > 0:
+                covered_above = np.logical_and.reduce(
+                    [occupancy(layer + j) for j in range(1, s.skin_layers + 1)])
+                covered_below = np.logical_and.reduce(
+                    [occupancy(layer - j) for j in range(1, s.skin_layers + 1)])
+                skin_mask = inner_mask & ~(covered_above & covered_below)
+            else:
+                skin_mask = np.zeros_like(inner_mask)
+            sparse_mask = inner_mask & ~skin_mask
+
+            if skin_mask.any():
+                sf = _Field2D(skin_mask, x0, y0, cell)
+                skin_lines = _fill_lines(sf, part_bbox, extr_w,
+                                         45.0 if layer % 2 == 0 else 135.0, -extr_w * 0.25)
+            if sparse_spacing is not None and sparse_mask.any():
+                pf = _Field2D(sparse_mask, x0, y0, cell)
+                sparse_lines = _fill_lines(pf, part_bbox, sparse_spacing,
+                                           45.0 if layer % 2 == 0 else 135.0, -extr_w * 0.25)
+
         skirt: List[Polyline] = []
         if layer == 0:
             for i in range(s.skirt_loops):
-                skirt.extend(field.contours(3.0 + i * extr_w))
+                skirt.extend(part.contours(3.0 + i * extr_w))
 
         for poly in skirt:
             extrude_polyline(poly, feed, closed=True)
         for poly in _order_polylines(walls, pos) if walls else []:
             extrude_polyline(poly, feed, closed=True)
-        for poly in _order_polylines(infill, pos) if infill else []:
+        for poly in _order_polylines(skin_lines, pos) if skin_lines else []:
+            extrude_polyline(poly, feed, closed=False)
+        for poly in _order_polylines(sparse_lines, pos) if sparse_lines else []:
             extrude_polyline(poly, feed, closed=False)
 
         if layer % preview_every == 0 or layer == n_layers - 1:
             def rp(polys: List[Polyline]) -> List[List[List[float]]]:
                 return [[[round(x, 2), round(y, 2)] for x, y in p] for p in polys]
             preview.append({"layer": layer + 1, "z": round(z_print, 3),
-                            "walls": rp(walls), "infill": rp(infill)})
+                            "walls": rp(walls), "skin": rp(skin_lines), "infill": rp(sparse_lines)})
 
     g += [
+        "M107 ; fan off",
         "M104 S0", "M140 S0",
         f"G1 E-{max(s.retract_mm, 2.0):.1f} F{int(s.retract_speed * 60)}",
         "G91", "G1 Z10 F600", "G90",
