@@ -389,6 +389,14 @@ export interface SliceResponse {
 }
 
 // --- Assemblies: compose part documents into a placed whole ---
+export interface AssemblyPromptJob {
+  job_id: string
+  status: 'running' | 'done' | 'error'
+  progress?: string | null
+  assembly_id?: string | null
+  error?: string | null
+}
+
 export interface ComponentTransform {
   translate: Vector3
   rotate_deg: Vector3

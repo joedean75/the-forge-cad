@@ -200,6 +200,37 @@ def order_part(doc_id: str, process: str, quantity: int = 1, notes: str = "") ->
 
 
 @mcp.tool()
+def create_assembly(prompt: str) -> str:
+    """Generate a multi-part assembly from one description ("a hand cart with a
+    deck, two side rails and four wheels"). Parts are generated individually and
+    placed; returns the assembly id and its component list."""
+    import time
+
+    with _client() as c:
+        r = c.post("/assemblies/from-prompt", json={"prompt": prompt})
+        if r.status_code >= 400:
+            return f"Error {r.status_code}: {r.text}"
+        job = r.json()
+        deadline = time.time() + 20 * 60
+        while job.get("status") == "running":
+            if time.time() > deadline:
+                return "Error: assembly generation timed out"
+            time.sleep(2.0)
+            r = c.get(f"/assemblies/from-prompt/{job['job_id']}")
+            if r.status_code >= 400:
+                return f"Error {r.status_code}: {r.text}"
+            job = r.json()
+        if job.get("status") != "done":
+            return f"Error: {job.get('error') or 'assembly generation failed'}"
+        a = c.get(f"/assemblies/{job['assembly_id']}").json()
+    return json.dumps({
+        "assembly_id": a["id"], "name": a["name"],
+        "components": [{"name": comp["name"], "part_id": comp["part_id"],
+                        "translate_m": comp["transform"]["translate"]} for comp in a["components"]],
+    }, indent=2)
+
+
+@mcp.tool()
 def slice_part(doc_id: str, layer_height: float = 0.2, infill: float = 0.15,
                wall_count: int = 2, temp_nozzle: int = 210, temp_bed: int = 60) -> str:
     """Slice the part for FDM 3D printing. Returns layer count, print time and

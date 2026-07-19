@@ -23,6 +23,7 @@ import type {
   DocumentVersion,
   Collaborator,
   AssemblyDoc,
+  AssemblyPromptJob,
   AssemblySummary,
   ComponentTransform,
   CopilotResult,
@@ -299,6 +300,28 @@ export const api = {
 
   // ── Assemblies (compose parts) ──
   listAssemblies: () => fetchJson<AssemblySummary[]>('/assemblies'),
+  /**
+   * Text-to-assembly: one prompt → generated parts placed as an assembly.
+   * Runs as a server-side job (a plan + one text-to-CAD run per part);
+   * polls until done and returns the new assembly id.
+   */
+  assemblyFromPrompt: async (prompt: string, onProgress?: (msg: string) => void): Promise<string> => {
+    let job = await fetchJson<AssemblyPromptJob>('/assemblies/from-prompt', {
+      method: 'POST',
+      body: JSON.stringify({ prompt }),
+    })
+    const deadline = Date.now() + 20 * 60_000
+    while (job.status === 'running') {
+      if (Date.now() > deadline) throw new Error('Assembly generation timed out')
+      await new Promise((r) => setTimeout(r, 1500))
+      job = await fetchJson<AssemblyPromptJob>(`/assemblies/from-prompt/${job.job_id}`)
+      if (job.progress) onProgress?.(job.progress)
+    }
+    if (job.status !== 'done' || !job.assembly_id) {
+      throw new Error(job.error || 'Assembly generation failed')
+    }
+    return job.assembly_id
+  },
   createAssembly: (name?: string) =>
     fetchJson<AssemblyDoc>('/assemblies', { method: 'POST', body: JSON.stringify({ name }) }),
   getAssemblyDoc: (id: string) => fetchJson<AssemblyDoc>(`/assemblies/${id}`),

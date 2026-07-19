@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Package, Boxes, Plus, Trash2, Loader2, Search, UserCircle2, Users, Upload,
+  Package, Boxes, Plus, Trash2, Loader2, Search, UserCircle2, Users, Upload, Sparkles,
 } from 'lucide-react'
 import { api } from '../api/client'
 import { useDocumentStore } from '../store/useDocumentStore'
@@ -46,6 +46,9 @@ export function LibraryScreen() {
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
+  const [genPrompt, setGenPrompt] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const [genMsg, setGenMsg] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const reload = () => {
@@ -65,6 +68,23 @@ export function LibraryScreen() {
   const newAssembly = async () => {
     setCreating(true)
     try { const id = await createAndOpen(); if (id) go('assembly') } finally { setCreating(false) }
+  }
+  const generateAssembly = async () => {
+    const p = genPrompt.trim()
+    if (!p || generating) return
+    setGenerating(true)
+    setGenMsg('planning the assembly')
+    try {
+      const id = await api.assemblyFromPrompt(p, setGenMsg)
+      setGenPrompt('')
+      setGenMsg(null)
+      await openAsm(id)
+    } catch (e) {
+      setGenMsg(e instanceof Error ? e.message : 'Assembly generation failed')
+      window.setTimeout(() => setGenMsg(null), 8000)
+    } finally {
+      setGenerating(false)
+    }
   }
   const importFile = async (file: File) => {
     setImporting(true)
@@ -160,6 +180,35 @@ export function LibraryScreen() {
               {importing ? 'Importing…' : 'Import'}
             </button>
           </>
+        )}
+        {tab === 'assemblies' && (
+          <div className="flex items-center gap-2 mr-2">
+            {genMsg && (
+              <span className="text-[10px] text-cad-accent-hot max-w-56 truncate" title={genMsg}>
+                {genMsg}
+              </span>
+            )}
+            <div className="flex items-center gap-2 h-8 px-2.5 rounded-sm bg-cad-bg border border-cad-border focus-within:border-cad-accent transition-colors w-80">
+              <Sparkles size={12} className="text-cad-accent shrink-0" />
+              <input
+                value={genPrompt}
+                onChange={(e) => setGenPrompt(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && generateAssembly()}
+                disabled={generating}
+                placeholder="Describe an assembly — e.g. a hand cart with four wheels"
+                className="flex-1 bg-transparent text-xs text-cad-text-heading placeholder:text-cad-text/50 outline-none disabled:opacity-60"
+              />
+            </div>
+            <button
+              onClick={generateAssembly}
+              disabled={!genPrompt.trim() || generating}
+              title="Generate every part and place them as an assembly"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm border border-cad-accent/50 text-cad-accent-hot hover:bg-cad-accent/10 text-[11px] font-semibold transition-colors disabled:opacity-40"
+            >
+              {generating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+              {generating ? 'Generating…' : 'Generate'}
+            </button>
+          </div>
         )}
         <button
           onClick={tab === 'parts' ? newPart : newAssembly}

@@ -62,6 +62,7 @@ def platform_manifest():
             "run_operation": "POST /api/documents/{id}/op {op, args}",
             "copilot": "POST /api/documents/{id}/copilot {goal, max_steps} — starts a background job; poll GET /api/documents/{id}/copilot/{job_id} until status != 'running'",
             "create_document": "POST /api/documents {prompt?, name?} — text-to-CAD or blank",
+            "create_assembly": "POST /api/assemblies/from-prompt {prompt} — text-to-assembly background job; poll GET /api/assemblies/from-prompt/{job_id}",
             "import": "POST /api/documents/import (multipart: file, units, resolution)",
             "quotes": "POST /api/documents/{id}/quotes {quantity}",
             "orders": "POST /api/documents/{id}/orders {process, quantity, notes}",
