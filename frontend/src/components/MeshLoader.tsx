@@ -17,15 +17,24 @@ export function MeshLoader({
   onPick,
   onPickFace,
   dim,
+  fit,
 }: {
   url: string
   onPick?: (point: [number, number, number]) => void
   onPickFace?: (face: string, point: [number, number, number]) => void
   dim?: boolean
+  /** Frozen display transform (centre in part metres + scale). When given, the
+   * mesh uses it instead of self-fitting, so edits never rescale the view. */
+  fit?: { c: [number, number, number]; s: number }
 }) {
   const loadedGeometry = useLoader(STLLoader, url)
   const meshRef = useRef<THREE.Mesh>(null)
-  const geometry = useMemo(() => loadedGeometry.clone(), [loadedGeometry])
+  const geometry = useMemo(() => {
+    const g = loadedGeometry.clone()
+    if (fit) g.translate(-fit.c[0], -fit.c[1], -fit.c[2])
+    return g
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fit identity churn
+  }, [loadedGeometry, fit?.c[0], fit?.c[1], fit?.c[2]])
 
   // Every edit produces a new multi-MB data-URI, and useLoader's suspense
   // cache is keyed by that string — without eviction, every mesh version of a
@@ -39,18 +48,23 @@ export function MeshLoader({
   }, [url, geometry])
 
   useEffect(() => {
-    if (geometry && meshRef.current) {
-      geometry.computeVertexNormals()
-      geometry.center()
-      const box = new THREE.Box3().setFromObject(meshRef.current)
-      const size = box.getSize(new THREE.Vector3())
-      const maxDim = Math.max(size.x, size.y, size.z)
-      if (maxDim > 0) {
-        const scale = 1.5 / maxDim
-        meshRef.current.scale.setScalar(scale)
-      }
+    if (!geometry || !meshRef.current) return
+    geometry.computeVertexNormals()
+    if (fit) {
+      // Frozen document fit: geometry is pre-translated; just apply the scale.
+      meshRef.current.scale.setScalar(fit.s)
+      return
     }
-  }, [geometry])
+    // Legacy self-fit (candidate/assembly viewers without a document fit).
+    geometry.center()
+    const box = new THREE.Box3().setFromObject(meshRef.current)
+    const size = box.getSize(new THREE.Vector3())
+    const maxDim = Math.max(size.x, size.y, size.z)
+    if (maxDim > 0) {
+      const scale = 1.5 / maxDim
+      meshRef.current.scale.setScalar(scale)
+    }
+  }, [geometry, fit])
 
   return (
     <mesh

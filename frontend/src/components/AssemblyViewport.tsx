@@ -1,6 +1,6 @@
 import { Suspense, useMemo } from 'react'
 import { Canvas, useLoader } from '@react-three/fiber'
-import { OrbitControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei'
+import { CameraControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
 import { Boxes } from 'lucide-react'
 import type { AssemblyComponent, BBox, Vector3 } from '../../../shared/types'
@@ -128,14 +128,13 @@ export function AssemblyViewport({
                 onSelect={() => onSelect(c.id)}
               />
             ))}
-          <OrbitControls
+          <CameraControls
             makeDefault
-            enableDamping
-            dampingFactor={0.08}
-            minDistance={0.15}
-            maxDistance={40}
-            zoomSpeed={0.9}
-            zoomToCursor
+            minDistance={0.05}
+            maxDistance={50}
+            dollyToCursor
+            smoothTime={0.08}
+            draggingSmoothTime={0.05}
           />
           <GizmoHelper alignment="bottom-right" margin={[80, 80]}>
             <GizmoViewport axisColors={['#e8553c', '#5cc9a7', '#7d8ba0']} labelColor="white" />

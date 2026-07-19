@@ -1,8 +1,8 @@
-import { Suspense, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
-import { OrbitControls, Grid, GizmoHelper, GizmoViewport, Html, Line } from '@react-three/drei'
+import { CameraControls, Grid, GizmoHelper, GizmoViewport, Html, Line } from '@react-three/drei'
 import * as THREE from 'three'
-import { Boxes, Ruler, Crosshair, X, ScanEye, PencilRuler } from 'lucide-react'
+import { Boxes, Ruler, Crosshair, X, ScanEye, PencilRuler, Maximize } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { MeshLoader } from './MeshLoader'
 import { collectSnapPoints, collectProxies, findNode, type FeatureProxy } from '../util/featureTree'
@@ -10,23 +10,36 @@ import type { BBox, Dimension, Vector3, FeatureNode } from '../../../shared/type
 
 type Vec3 = [number, number, number]
 
-/** Part-space (metres) <-> display-space transform, mirroring MeshLoader's auto-fit. */
-function useFit(bbox: BBox | undefined) {
+/** Part-space (metres) <-> display-space transform.
+
+ * Frozen per document: recomputed only on doc switch, first geometry arrival,
+ * or an explicit refit (`nonce`). If it tracked every bbox change, each edit
+ * that grows/shrinks the part would re-normalize the model and visibly jump
+ * the view at working zoom — real CAD keeps the model still while you edit. */
+function useFit(docId: string | undefined, bbox: BBox | undefined, nonce: number) {
+  // Snapshot the bbox only when a freeze key changes (doc switch, first
+  // geometry, manual refit) — later bbox edits keep the frozen snapshot.
+  const frozen = useRef<{ key: string; bbox: BBox } | null>(null)
+  const key = `${docId ?? ''}|${!!bbox}|${nonce}`
+  if (bbox && frozen.current?.key !== key) frozen.current = { key, bbox }
+  const fb = docId && frozen.current ? frozen.current.bbox : undefined
+
   return useMemo(() => {
-    if (!bbox) return null
-    const sx = bbox.max.x - bbox.min.x
-    const sy = bbox.max.y - bbox.min.y
-    const sz = bbox.max.z - bbox.min.z
+    if (!fb) return null
+    const sx = fb.max.x - fb.min.x
+    const sy = fb.max.y - fb.min.y
+    const sz = fb.max.z - fb.min.z
     const s = 1.5 / (Math.max(sx, sy, sz) || 1)
-    const cx = (bbox.min.x + bbox.max.x) / 2
-    const cy = (bbox.min.y + bbox.max.y) / 2
-    const cz = (bbox.min.z + bbox.max.z) / 2
+    const cx = (fb.min.x + fb.max.x) / 2
+    const cy = (fb.min.y + fb.max.y) / 2
+    const cz = (fb.min.z + fb.max.z) / 2
     return {
       s,
+      c: [cx, cy, cz] as Vec3,
       toDisplay: (p: Vector3): Vec3 => [(p.x - cx) * s, (p.y - cy) * s, (p.z - cz) * s],
       toPart: (d: Vec3): Vector3 => ({ x: d[0] / s + cx, y: d[1] / s + cy, z: d[2] / s + cz }),
     }
-  }, [bbox])
+  }, [fb])
 }
 
 function dist(a: Vector3, b: Vector3): number {
@@ -88,15 +101,21 @@ function DimLabel({ position, text }: { position: [number, number, number]; text
   )
 }
 
-function DimensionOverlay({ bbox }: { bbox: BBox }) {
+function DimensionOverlay({ bbox, fit }: { bbox: BBox; fit: NonNullable<ReturnType<typeof useFit>> }) {
+  const s = fit.s
   const sx = bbox.max.x - bbox.min.x
   const sy = bbox.max.y - bbox.min.y
   const sz = bbox.max.z - bbox.min.z
-  const trueMax = Math.max(sx, sy, sz) || 1
-  const s = 1.5 / trueMax // MeshLoader scales the largest extent to 1.5 units
   const hx = (sx * s) / 2
   const hy = (sy * s) / 2
   const hz = (sz * s) / 2
+  // Placed through the frozen fit so the envelope tracks the *current* bbox
+  // even when the model transform is frozen mid-edit.
+  const center = fit.toDisplay({
+    x: (bbox.min.x + bbox.max.x) / 2,
+    y: (bbox.min.y + bbox.max.y) / 2,
+    z: (bbox.min.z + bbox.max.z) / 2,
+  })
 
   const edges = useMemo(
     () => new THREE.EdgesGeometry(new THREE.BoxGeometry(sx * s, sy * s, sz * s)),
@@ -105,7 +124,7 @@ function DimensionOverlay({ bbox }: { bbox: BBox }) {
   const mm = (m: number) => `${(m * 1000).toFixed(1)} mm`
 
   return (
-    <group>
+    <group position={center}>
       <lineSegments geometry={edges}>
         <lineBasicMaterial color="#6b7f99" transparent opacity={0.6} />
       </lineSegments>
@@ -191,8 +210,21 @@ export function DocumentViewport() {
   const meshUrl = doc?.derived.mesh_url
   const evalError = doc?.derived.error
   const bbox = doc?.derived.bbox
-  const fit = useFit(bbox)
+  const [fitNonce, setFitNonce] = useState(0)
+  const fit = useFit(doc?.id, bbox, fitNonce)
   const dims = doc?.dimensions ?? []
+
+  // F re-fits the part to the standard display size (after big edits).
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'f') return
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+      setFitNonce((n) => n + 1)
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [])
 
   // Highlight only non-root selections (root would outline every primitive).
   const rootId = doc?.feature_tree.root?.id
@@ -275,13 +307,14 @@ export function DocumentViewport() {
             <MeshLoader
               key={meshUrl}
               url={meshUrl}
+              fit={fit ? { c: fit.c, s: fit.s } : undefined}
               onPick={measuring && !sketchPick ? handlePick : undefined}
               onPickFace={sketchPick && rootId ? (face) => pickSketchOnFace(rootId, face) : undefined}
               dim={isolate && !!selectedNode}
             />
           )}
           {fit && selectedNode && <SelectionHighlight node={selectedNode} fit={fit} />}
-          {showDims && bbox && <DimensionOverlay bbox={bbox} />}
+          {showDims && bbox && fit && <DimensionOverlay bbox={bbox} fit={fit} />}
       {fit && dims.length > 0 && <DimensionLines dims={dims} fit={fit} onRemove={removeDimension} />}
 
           {/* snap targets while measuring */}
@@ -300,16 +333,16 @@ export function DocumentViewport() {
             </mesh>
           )}
 
-          {/* bounded dolly + zoom-to-cursor: continuous zoom that can't pass
-              through the part or clip at working distance */}
-          <OrbitControls
+          {/* camera-controls: proper dolly-to-cursor with smoothing — unlike
+              OrbitControls' zoomToCursor it doesn't drift or jump when the
+              dolly clamps at close working distance */}
+          <CameraControls
             makeDefault
-            enableDamping
-            dampingFactor={0.08}
-            minDistance={0.15}
-            maxDistance={40}
-            zoomSpeed={0.9}
-            zoomToCursor
+            minDistance={0.05}
+            maxDistance={50}
+            dollyToCursor
+            smoothTime={0.08}
+            draggingSmoothTime={0.05}
           />
           <GizmoHelper alignment="bottom-right" margin={[80, 80]}>
             <GizmoViewport axisColors={['#e8553c', '#5cc9a7', '#7d8ba0']} labelColor="white" />
@@ -326,6 +359,13 @@ export function DocumentViewport() {
       {/* viewport tools */}
       {bbox && (
         <div className="absolute top-9 left-3 flex items-center gap-1.5">
+          <button
+            onClick={() => setFitNonce((n) => n + 1)}
+            title="Fit the part to the view (F)"
+            className="flex items-center gap-1.5 text-[10px] px-2 py-1 rounded-sm border border-cad-border text-cad-text bg-cad-panel/70 hover:text-cad-text-heading backdrop-blur-sm transition-colors"
+          >
+            <Maximize size={11} /> Fit
+          </button>
           <button
             onClick={() => setShowDims((v) => !v)}
             title="Toggle bounding-box dimensions"
