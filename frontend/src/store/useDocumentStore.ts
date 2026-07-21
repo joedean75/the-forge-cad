@@ -12,6 +12,7 @@ import type {
   CamResult,
   Vector3,
   CopilotResult,
+  DocumentParameter,
 } from '../../../shared/types'
 import { api } from '../api/client'
 import { ensureIds } from '../util/featureTree'
@@ -86,6 +87,10 @@ interface DocumentState {
   /** The single geometry-mutation path (same operations agents call). Returns the op result. */
   runOp: (op: string, args?: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>
   aiEdit: (instruction: string) => Promise<void>
+  /** Assign an engineering material (drives mass/sim/DFM/quote). */
+  setMaterial: (materialId: string) => Promise<void>
+  /** Replace the driving parameters/equations and re-evaluate. */
+  setParameters: (parameters: DocumentParameter[]) => Promise<void>
   /** Forge Copilot: run an agentic multi-step plan toward a goal. Returns the transcript. */
   runCopilot: (goal: string, onProgress?: (state: CopilotResult) => void) => Promise<CopilotResult | undefined>
 }
@@ -181,6 +186,34 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     } catch (e) {
       set({ error: e instanceof Error ? e.message : `Operation ${op} failed` })
       return undefined
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  setMaterial: async (materialId) => {
+    const { doc } = get()
+    if (!doc) return
+    set({ busy: true, error: null })
+    try {
+      const updated = withIds(await api.setMaterial(doc.id, materialId))
+      set({ doc: updated, error: updated.derived.error ?? null })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Could not set material' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  setParameters: async (parameters) => {
+    const { doc, past } = get()
+    if (!doc) return
+    set({ past: [...past, doc.feature_tree].slice(-50), future: [], busy: true, error: null })
+    try {
+      const updated = withIds(await api.setParameters(doc.id, parameters))
+      set({ doc: updated, error: updated.derived.error ?? null, sim: null, dfm: null, cam: null })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Could not set parameters' })
     } finally {
       set({ busy: false })
     }

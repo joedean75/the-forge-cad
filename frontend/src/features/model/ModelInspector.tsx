@@ -1,7 +1,9 @@
-import { useState } from 'react'
-import { Wand2, Loader2, ArrowUp } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Wand2, Loader2, ArrowUp, Plus, Trash2, Scale } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
 import { findNode, isBoolean } from '../../util/featureTree'
+import { api } from '../../api/client'
+import type { CatalogMaterial, DocumentParameter, MassProperties } from '../../../../shared/types'
 
 type Vec = { x: number; y: number; z: number }
 
@@ -81,11 +83,131 @@ export function ModelInspector() {
   return (
     <div className="space-y-5">
       <AiEditBar onSubmit={aiEdit} busy={busy} />
-      {selectedFeatureId ? (
-        <FeatureFields />
-      ) : (
+      {selectedFeatureId ? <FeatureFields /> : (
         <p className="text-[11px] text-cad-text/60">Select a feature in the tree to edit its parameters.</p>
       )}
+      <MaterialPicker />
+      <ParametersEditor />
+      <MassPropertiesPanel />
+    </div>
+  )
+}
+
+function MaterialPicker() {
+  const { doc, setMaterial, busy } = useDocumentStore()
+  const [materials, setMaterials] = useState<CatalogMaterial[]>([])
+  useEffect(() => { api.listMaterials().then((r) => setMaterials(r.materials)).catch(() => {}) }, [])
+  if (!doc) return null
+  const current = doc.material_id ?? 'al-6061'
+  return (
+    <div className="pt-3 border-t border-cad-border">
+      <h3 className="sec-head mb-2">Material</h3>
+      <select
+        value={current}
+        onChange={(e) => setMaterial(e.target.value)}
+        disabled={busy}
+        className="w-full px-2 py-1.5 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-xs focus:border-cad-accent outline-none disabled:opacity-50"
+      >
+        {materials.map((m) => (
+          <option key={m.id} value={m.id}>{m.name} · {(m.density / 1000).toFixed(2)} g/cm³</option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
+function ParametersEditor() {
+  const { doc, setParameters, busy } = useDocumentStore()
+  const [rows, setRows] = useState<DocumentParameter[]>(doc?.parameters ?? [])
+  useEffect(() => { setRows(doc?.parameters ?? []) }, [doc?.id, doc?.parameters])
+  if (!doc) return null
+
+  const commit = (next: DocumentParameter[]) => { setRows(next); setParameters(next) }
+  const add = () => setRows([...rows, { name: `p${rows.length + 1}`, expr: '10', unit: 'mm' }])
+  const edit = (i: number, patch: Partial<DocumentParameter>) =>
+    setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+
+  return (
+    <div className="pt-3 border-t border-cad-border">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="sec-head">Parameters</h3>
+        <button onClick={add} title="Add a driving parameter" className="text-cad-text hover:text-cad-accent-hot"><Plus size={13} /></button>
+      </div>
+      {rows.length === 0 ? (
+        <p className="text-[10px] text-cad-text/50">Name a value once, drive it everywhere. Reference it in a field as <span className="tabular">=name</span>.</p>
+      ) : (
+        <div className="space-y-1.5">
+          {rows.map((r, i) => (
+            <div key={i} className="flex items-center gap-1">
+              <input
+                value={r.name}
+                onChange={(e) => edit(i, { name: e.target.value })}
+                onBlur={() => commit(rows)}
+                className="tabular w-20 px-1.5 py-1 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-[11px] outline-none focus:border-cad-accent"
+              />
+              <span className="text-cad-text/40 text-[11px]">=</span>
+              <input
+                value={r.expr}
+                onChange={(e) => edit(i, { expr: e.target.value })}
+                onBlur={() => commit(rows)}
+                onKeyDown={(e) => e.key === 'Enter' && commit(rows)}
+                className="tabular flex-1 min-w-0 px-1.5 py-1 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-[11px] outline-none focus:border-cad-accent"
+              />
+              <span className="tabular text-[9px] text-cad-text/50 w-14 text-right">
+                {r.value != null ? `${r.value}${r.unit === 'mm' ? 'mm' : ''}` : ''}
+              </span>
+              <button onClick={() => commit(rows.filter((_, j) => j !== i))} className="text-cad-text/60 hover:text-cad-danger"><Trash2 size={11} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+      {busy && <span className="text-[9px] text-cad-text/40">updating…</span>}
+    </div>
+  )
+}
+
+function MassPropertiesPanel() {
+  const { doc } = useDocumentStore()
+  const [mp, setMp] = useState<MassProperties | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  // Re-fetch is manual — the button avoids a tessellation on every edit.
+  useEffect(() => { setMp(null); setErr(null) }, [doc?.derived.solid_hash])
+  if (!doc) return null
+
+  const compute = async () => {
+    setLoading(true); setErr(null)
+    try { setMp(await api.massProperties(doc.id)) }
+    catch (e) { setErr(e instanceof Error ? e.message : 'Unavailable') }
+    finally { setLoading(false) }
+  }
+
+  return (
+    <div className="pt-3 border-t border-cad-border">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="sec-head">Mass properties</h3>
+        <button onClick={compute} disabled={loading} className="flex items-center gap-1 text-[10px] text-cad-text hover:text-cad-accent-hot disabled:opacity-50">
+          {loading ? <Loader2 size={11} className="animate-spin" /> : <Scale size={11} />} Compute
+        </button>
+      </div>
+      {err && <p className="text-[10px] text-cad-danger">{err}</p>}
+      {mp && (
+        <dl className="space-y-1 text-[10px] text-cad-text">
+          <Row label="Mass" value={`${mp.mass_kg.toFixed(4)} kg`} />
+          <Row label="Volume" value={`${mp.volume_cm3.toFixed(2)} cm³`} />
+          <Row label="Surface" value={`${mp.surface_area_cm2.toFixed(1)} cm²`} />
+          <Row label="COG" value={mp.center_of_mass_mm.map((v) => v.toFixed(1)).join(', ') + ' mm'} />
+        </dl>
+      )}
+    </div>
+  )
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between">
+      <dt className="text-cad-text/70">{label}</dt>
+      <dd className="tabular text-cad-text-heading">{value}</dd>
     </div>
   )
 }

@@ -364,6 +364,78 @@ def cam_document(body: CamRequest,
     return document_analysis.cam_document(doc.id, tool)
 
 
+# ── Materials, parameters, mass properties ──
+
+
+@router.get("/meta/materials")
+def list_materials(acc: accounts.Account = Depends(current_account)):
+    from app.services import materials
+
+    return {"materials": [m.model_dump() for m in materials.list_materials()]}
+
+
+class MaterialRequest(BaseModel):
+    material_id: str
+
+
+@router.post("/{doc_id}/material", response_model=DesignDocument, response_model_exclude={"version_history"})
+def set_material(body: MaterialRequest, doc: DesignDocument = Depends(editable_document)):
+    updated = docs.set_material(doc.id, body.material_id)
+    return docs.ensure_derived(updated)
+
+
+class ParametersRequest(BaseModel):
+    parameters: list
+
+
+@router.put("/{doc_id}/parameters", response_model=DesignDocument, response_model_exclude={"version_history"})
+def set_parameters(body: ParametersRequest, doc: DesignDocument = Depends(editable_document)):
+    from app.services import parameters as param_svc
+
+    try:
+        updated = docs.set_parameters(doc.id, body.parameters)
+    except param_svc.ParameterError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return docs.ensure_derived(updated)
+
+
+class ConfigurationsRequest(BaseModel):
+    configurations: list
+    active: str | None = None
+
+
+@router.put("/{doc_id}/configurations", response_model=DesignDocument, response_model_exclude={"version_history"})
+def set_configurations(body: ConfigurationsRequest, doc: DesignDocument = Depends(editable_document)):
+    try:
+        updated = docs.set_configurations(doc.id, body.configurations, body.active)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return docs.ensure_derived(updated)
+
+
+class ActivateConfigRequest(BaseModel):
+    name: str | None = None
+
+
+@router.post("/{doc_id}/configurations/activate", response_model=DesignDocument, response_model_exclude={"version_history"})
+def activate_configuration(body: ActivateConfigRequest, doc: DesignDocument = Depends(editable_document)):
+    try:
+        updated = docs.activate_configuration(doc.id, body.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return docs.ensure_derived(updated)
+
+
+@router.get("/{doc_id}/mass-properties")
+def mass_properties(doc: DesignDocument = Depends(readable_document)):
+    from app.services import mass_properties as mp
+
+    try:
+        return mp.mass_properties(doc.id)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 # ── FDM slicing (3D printing) ──
 
 

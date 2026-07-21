@@ -147,6 +147,7 @@ def quote_document(doc_id: str, quantity: int = 1, resolution: int = 96) -> dict
         "quantity": max(1, int(quantity)),
         "volume_cm3": _round(volume * 1e6),
         "bbox_mm": [_round(v) for v in bbox_mm],
+        "material_id": doc.material_id,
         "provider": provider_status()["mode"],
         "quotes": [q.model_dump() for q in quotes],
     }

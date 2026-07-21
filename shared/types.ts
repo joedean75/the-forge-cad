@@ -293,6 +293,48 @@ export interface DesignDocument {
   updated_at: string
   version_history: DocumentVersion[]
   dimensions: Dimension[]
+  /** Engineering material bound to the part (drives mass/sim/DFM/quote). */
+  material_id?: string | null
+  /** Named driving parameters/equations (design intent). */
+  parameters?: DocumentParameter[]
+  /** Part-family variants overriding parameters. */
+  configurations?: DocumentConfiguration[]
+  active_configuration?: string | null
+}
+
+export interface DocumentConfiguration {
+  name: string
+  overrides: Record<string, string>
+}
+
+export interface DocumentParameter {
+  name: string
+  expr: string
+  value?: number | null
+  unit: 'mm' | 'deg' | 'count' | 'ratio'
+}
+
+/** Engineering material from the assignable catalog (services/materials.py). */
+export interface CatalogMaterial {
+  id: string
+  name: string
+  category: string
+  density: number
+  youngs_modulus: number
+  poisson_ratio: number
+  yield_strength: number
+  cost_per_kg: number
+  process: string
+}
+
+export interface MassProperties {
+  material: { id: string; name: string; density: number }
+  volume_cm3: number
+  mass_kg: number
+  surface_area_cm2: number
+  center_of_mass_mm: number[]
+  inertia_kg_mm2: number[][]
+  bbox_mm: { min: number[]; max: number[]; size: number[] }
 }
 
 export interface DocumentSummary {

@@ -311,6 +311,37 @@ class DesignDocument(BaseModel):
     updated_at: str
     version_history: List[DocumentVersion] = []
     dimensions: List[Dimension] = []
+    # Engineering material bound to the part (see services/materials.py); drives
+    # mass, mass properties, simulation, DFM and quotes. None => catalog default.
+    material_id: Optional[str] = None
+    # Named driving parameters/equations (feature 03); resolved into feature
+    # params at evaluation. Ordered so later entries may reference earlier ones.
+    parameters: List["DocumentParameter"] = []
+    # Named variants (feature 07): each overrides parameter expressions, so one
+    # model yields a size family. active_configuration selects the live variant.
+    configurations: List["DocumentConfiguration"] = []
+    active_configuration: Optional[str] = None
+
+
+class DocumentParameter(BaseModel):
+    """A named driving parameter or equation on a document (feature 03).
+
+    ``expr`` is a numeric literal or an expression over earlier parameters
+    (``"width / 10"``); ``value`` caches the last resolved number.
+    """
+
+    name: str
+    expr: str
+    value: Optional[float] = None
+    unit: Literal["mm", "deg", "count", "ratio"] = "mm"
+
+
+class DocumentConfiguration(BaseModel):
+    """A named part-family variant (feature 07): overrides driving-parameter
+    expressions by name, e.g. {"width": "120", "bore": "8"}."""
+
+    name: str
+    overrides: dict = {}
 
 
 class DocumentSummary(BaseModel):

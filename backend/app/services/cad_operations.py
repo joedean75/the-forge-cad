@@ -243,6 +243,75 @@ def _ai_edit(doc_id, args):
     return {"message": "applied AI edit"}
 
 
+def _list_materials(doc_id, args):
+    from app.services import materials
+
+    return {"materials": [m.model_dump() for m in materials.list_materials()]}
+
+
+def _set_material(doc_id, args):
+    doc = document_service.set_material(doc_id, args["material_id"])
+    if doc is None:
+        raise KeyError(doc_id)
+    from app.services import materials
+
+    m = materials.get_material(doc.material_id)
+    return {"message": f"material set to {m.name}", "material_id": m.id, "mass_kg": doc.derived.mass}
+
+
+def _set_parameters(doc_id, args):
+    doc = document_service.set_parameters(doc_id, args.get("parameters") or [])
+    if doc is None:
+        raise KeyError(doc_id)
+    return {"message": f"set {len(doc.parameters)} parameter(s)",
+            "parameters": [p.model_dump() for p in doc.parameters],
+            "error": doc.derived.error}
+
+
+def _get_parameters(doc_id, args):
+    doc = _get(doc_id)
+    return {"parameters": [p.model_dump() for p in doc.parameters]}
+
+
+def _mass_properties(doc_id, args):
+    from app.services import mass_properties
+
+    return mass_properties.mass_properties(doc_id)
+
+
+def _set_configurations(doc_id, args):
+    doc = document_service.set_configurations(doc_id, args.get("configurations") or [], args.get("active"))
+    if doc is None:
+        raise KeyError(doc_id)
+    return {"message": f"set {len(doc.configurations)} configuration(s)",
+            "configurations": [c.model_dump() for c in doc.configurations],
+            "active": doc.active_configuration}
+
+
+def _activate_configuration(doc_id, args):
+    doc = document_service.activate_configuration(doc_id, args.get("name"))
+    if doc is None:
+        raise KeyError(doc_id)
+    return {"message": f"activated {doc.active_configuration or 'base'}",
+            "active": doc.active_configuration,
+            "bbox": _bbox_summary(doc)}
+
+
+def _list_configurations(doc_id, args):
+    doc = _get(doc_id)
+    return {"configurations": [c.model_dump() for c in doc.configurations],
+            "active": doc.active_configuration}
+
+
+def _bbox_summary(doc) -> dict:
+    b = doc.derived.bbox
+    if b is None:
+        return {}
+    return {"x": round((b.max.x - b.min.x) * 1000, 2),
+            "y": round((b.max.y - b.min.y) * 1000, 2),
+            "z": round((b.max.z - b.min.z) * 1000, 2)}
+
+
 def _slice_part(doc_id, args):
     """FDM-slice the body; stats come back, the G-code lands on the document."""
     import base64
@@ -354,6 +423,32 @@ OPERATIONS: Dict[str, Operation] = {
                   {"a": _VEC, "b": _VEC, "label": {"type": "string"}}, _add_dimension),
         Operation("ai_edit", "mutate", "Apply a natural-language edit to the whole part.",
                   {"instruction": {"type": "string"}}, _ai_edit),
+        Operation("list_materials", "query",
+                  "List the engineering material catalog (density, modulus, yield, cost).", {}, _list_materials),
+        Operation("set_material", "mutate",
+                  "Assign an engineering material to the part (drives mass, sim, DFM, quotes).",
+                  {"material_id": {"type": "string", "description": "e.g. al-6061, steel-304, ti-6al4v, pla"}},
+                  _set_material),
+        Operation("get_parameters", "query", "List the document's driving parameters/equations.", {}, _get_parameters),
+        Operation("set_parameters", "mutate",
+                  "Set named driving parameters/equations (width=100, hole_d=width/10). Feature params "
+                  "may reference them as expression strings ('=width/1000'). Lengths are mm.",
+                  {"parameters": {"type": "array",
+                                  "description": "[{name, expr, unit: mm|deg|count|ratio}], ordered; later may use earlier"}},
+                  _set_parameters),
+        Operation("mass_properties", "query",
+                  "Volume, mass, center of mass, surface area and inertia tensor (uses the assigned material).",
+                  {}, _mass_properties),
+        Operation("list_configurations", "query", "List the document's variants and the active one.", {},
+                  _list_configurations),
+        Operation("set_configurations", "mutate",
+                  "Define part-family variants that override driving parameters, e.g. "
+                  "[{name:'M4', overrides:{bore:'4'}}]. Pass 'active' to switch to one.",
+                  {"configurations": {"type": "array", "description": "[{name, overrides:{param: expr}}]"},
+                   "active": {"type": "string"}}, _set_configurations),
+        Operation("activate_configuration", "mutate",
+                  "Switch the live variant by name (empty = base parameters); geometry re-evaluates.",
+                  {"name": {"type": "string"}}, _activate_configuration),
         Operation("slice_part", "query",
                   "Slice the body for FDM 3D printing (SDF slicer). Returns layer/time/filament "
                   "stats; the G-code is stored on the document for download or printing.",

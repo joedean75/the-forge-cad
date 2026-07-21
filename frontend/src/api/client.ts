@@ -29,6 +29,9 @@ import type {
   CopilotResult,
   QuoteBundle,
   ManufacturingOrder,
+  CatalogMaterial,
+  DocumentParameter,
+  MassProperties,
   SliceSettings,
   SliceResponse,
 } from '../../../shared/types'
@@ -264,6 +267,18 @@ export const api = {
       converged: boolean
       polygon: [number, number][] | null
     }>('/sketch/solve', { method: 'POST', body: JSON.stringify(spec) }),
+
+  // ── Materials, parameters, mass properties ──
+  listMaterials: () => fetchJson<{ materials: CatalogMaterial[] }>('/documents/meta/materials'),
+  setMaterial: (id: string, materialId: string) =>
+    fetchJson<DesignDocument>(`/documents/${id}/material`, {
+      method: 'POST', body: JSON.stringify({ material_id: materialId }),
+    }),
+  setParameters: (id: string, parameters: DocumentParameter[]) =>
+    fetchJson<DesignDocument>(`/documents/${id}/parameters`, {
+      method: 'PUT', body: JSON.stringify({ parameters }),
+    }),
+  massProperties: (id: string) => fetchJson<MassProperties>(`/documents/${id}/mass-properties`),
 
   // ── FDM slicing ──
   sliceDocument: (id: string, settings: SliceSettings = {}) =>

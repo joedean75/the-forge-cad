@@ -126,8 +126,20 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
     try:
         from app.services import feature_ops
 
+        from app.services import parameters
+
         active = feature_ops.resolve_suppressed(doc.feature_tree)
         active = feature_ops.resolve_datums(active)  # bake sketch-on-face refs from live geometry
+        if doc.parameters:
+            overrides = {}
+            if doc.active_configuration:
+                cfg = next((c for c in doc.configurations if c.name == doc.active_configuration), None)
+                if cfg:
+                    overrides = cfg.overrides
+            scope, resolved = parameters.resolve_values(doc.parameters, overrides)
+            for p, rd in zip(doc.parameters, resolved):
+                p.value = rd.get("value")
+            active = parameters.resolve_tree(active, scope)  # bake driving params
         tree = FeatureTree.from_dict(active)
         solid = Kernel.evaluate_tree(tree, resolution=resolution)
         mesh = Kernel.tessellate(solid)
@@ -142,11 +154,14 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
                 max=Vector3(x=float(mx[0]), y=float(mx[1]), z=float(mx[2])),
             )
 
+        from app.services import materials
+
+        density = materials.density_of(doc.material_id)
         doc.derived = DerivedCache(
             solid_hash=tree_hash,
             mesh_url=solid_to_stl_data_uri(solid),
             bbox=bbox,
-            mass=round(volume * _DEFAULT_DENSITY, 4),
+            mass=round(volume * density, 4),
             volume=round(volume, 6),
         )
         _SOLID_CACHE[doc.id] = solid
@@ -269,6 +284,67 @@ def ai_edit_document(doc_id: str, instruction: str, resolution: int = 128) -> De
         doc.provenance = "mixed"
     # Refresh model-generated dimensions; keep the user's own.
     doc.dimensions = [d for d in doc.dimensions if d.source == "user"] + new_dims
+    evaluate_document(doc, resolution=resolution)
+    return doc
+
+
+def set_material(doc_id: str, material_id: str, resolution: int = 128) -> Optional[DesignDocument]:
+    """Bind an engineering material to the document and re-evaluate (mass changes)."""
+    from app.services import materials
+
+    doc = get_document(doc_id)
+    if doc is None:
+        return None
+    materials.get_material(material_id)  # validates / falls back
+    doc.material_id = material_id
+    evaluate_document(doc, resolution=resolution)
+    return doc
+
+
+def set_parameters(doc_id: str, params: list, resolution: int = 128) -> Optional[DesignDocument]:
+    """Replace the document's driving parameters and re-evaluate."""
+    from app.models.schemas import DocumentParameter
+    from app.services import parameters as param_svc
+
+    doc = get_document(doc_id)
+    if doc is None:
+        return None
+    parsed = [p if isinstance(p, DocumentParameter) else DocumentParameter(**p) for p in params]
+    # Validate the equation chain up front so a bad expr is a clean error.
+    param_svc.resolve_values(parsed)
+    doc.parameters = parsed
+    evaluate_document(doc, resolution=resolution)
+    return doc
+
+
+def set_configurations(doc_id: str, configs: list, active: Optional[str] = None,
+                       resolution: int = 128) -> Optional[DesignDocument]:
+    """Replace the document's configurations and optionally activate one."""
+    from app.models.schemas import DocumentConfiguration
+
+    doc = get_document(doc_id)
+    if doc is None:
+        return None
+    doc.configurations = [c if isinstance(c, DocumentConfiguration) else DocumentConfiguration(**c) for c in configs]
+    names = {c.name for c in doc.configurations}
+    if active is not None:
+        if active and active not in names:
+            raise ValueError(f"unknown configuration '{active}'")
+        doc.active_configuration = active or None
+    elif doc.active_configuration not in names:
+        doc.active_configuration = None
+    evaluate_document(doc, resolution=resolution)
+    return doc
+
+
+def activate_configuration(doc_id: str, name: Optional[str], resolution: int = 128) -> Optional[DesignDocument]:
+    """Switch the live variant (None = base/default parameters)."""
+    doc = get_document(doc_id)
+    if doc is None:
+        return None
+    if name and name not in {c.name for c in doc.configurations}:
+        raise ValueError(f"unknown configuration '{name}'")
+    doc.active_configuration = name or None
     evaluate_document(doc, resolution=resolution)
     return doc
 
