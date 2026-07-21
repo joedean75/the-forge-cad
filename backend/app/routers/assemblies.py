@@ -154,3 +154,60 @@ def remove_component(component_id: str, a: AssemblyDoc = Depends(owned_assembly)
     if updated is None:
         raise HTTPException(status_code=404, detail="Component not found")
     return updated
+
+
+class AddMateRequest(BaseModel):
+    type: str
+    base: str
+    moved: str
+    axis: str = "z"
+    base_face: str = "max"
+    moved_face: str = "min"
+    offset_mm: float = 0.0
+
+
+@router.post("/{assembly_id}/mates", response_model=AssemblyDoc)
+def add_mate(body: AddMateRequest, a: AssemblyDoc = Depends(owned_assembly)):
+    """Add a mate (fasten/coincident/concentric/distance) and re-solve placement."""
+    try:
+        updated = asm.add_mate(a.id, {"id": "", **body.model_dump()})
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Assembly not found")
+    return updated
+
+
+@router.delete("/{assembly_id}/mates/{mate_id}", response_model=AssemblyDoc)
+def remove_mate(mate_id: str, a: AssemblyDoc = Depends(owned_assembly)):
+    updated = asm.remove_mate(a.id, mate_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Mate not found")
+    return updated
+
+
+@router.get("/{assembly_id}/interference")
+def check_interference(clearance_mm: float = 1.0, a: AssemblyDoc = Depends(owned_assembly)):
+    """Pairwise interference + clearance across placed components (feature 08)."""
+    from app.services import interference
+
+    return interference.check_assembly(a.id, clearance_mm=clearance_mm)
+
+
+@router.get("/{assembly_id}/bom")
+def bill_of_materials(a: AssemblyDoc = Depends(owned_assembly)):
+    """Bill of Materials for the assembly — grouped parts, mass and cost (feature 05)."""
+    from app.services import bom
+
+    return bom.bill_of_materials(a.id)
+
+
+@router.get("/{assembly_id}/bom.csv")
+def bom_csv(a: AssemblyDoc = Depends(owned_assembly)):
+    from fastapi.responses import PlainTextResponse
+    from app.services import bom
+
+    return PlainTextResponse(
+        bom.bom_csv(a.id), media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={a.name[:40].replace(' ', '_') or 'assembly'}_bom.csv"},
+    )

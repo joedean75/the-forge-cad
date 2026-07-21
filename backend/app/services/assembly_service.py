@@ -43,9 +43,8 @@ def can_access(asm: AssemblyDoc, account_id: Optional[str]) -> bool:
 
 
 def _resolve(asm: AssemblyDoc) -> AssemblyDoc:
-    """Populate each component's mesh_url/bbox/missing and the assembly envelope."""
-    lo = [float("inf")] * 3
-    hi = [float("-inf")] * 3
+    """Populate each component's mesh_url/bbox/missing, solve mates, and the envelope."""
+    # 1) Resolve each component's part geometry (mesh + part-space bbox).
     for c in asm.components:
         part = document_service.get_document(c.part_id)
         if part is None:
@@ -58,18 +57,29 @@ def _resolve(asm: AssemblyDoc) -> AssemblyDoc:
         c.name = part.name
         c.mesh_url = part.derived.mesh_url
         c.bbox = part.derived.bbox
-        b = part.derived.bbox
-        if b is not None:
-            s = c.transform.scale
-            t = c.transform.translate
-            # Axis-aligned envelope of the placed part (rotation ignored for the
-            # envelope — good enough for camera-fit; exact placement is rendered).
-            mins = [b.min.x, b.min.y, b.min.z]
-            maxs = [b.max.x, b.max.y, b.max.z]
-            offs = [t.x, t.y, t.z]
-            for i in range(3):
-                lo[i] = min(lo[i], mins[i] * s + offs[i])
-                hi[i] = max(hi[i], maxs[i] * s + offs[i])
+
+    # 2) Solve mates into component transforms (needs bboxes from step 1).
+    if asm.mates:
+        from app.services import assembly_mates
+
+        assembly_mates.solve(asm.components, asm.mates)
+
+    # 3) Axis-aligned envelope of the placed parts (rotation ignored for the
+    #    envelope — good enough for camera-fit; exact placement is rendered).
+    lo = [float("inf")] * 3
+    hi = [float("-inf")] * 3
+    for c in asm.components:
+        b = c.bbox
+        if b is None:
+            continue
+        s = c.transform.scale
+        t = c.transform.translate
+        mins = [b.min.x, b.min.y, b.min.z]
+        maxs = [b.max.x, b.max.y, b.max.z]
+        offs = [t.x, t.y, t.z]
+        for i in range(3):
+            lo[i] = min(lo[i], mins[i] * s + offs[i])
+            hi[i] = max(hi[i], maxs[i] * s + offs[i])
     asm.bbox = (
         BBox(min=Vector3(x=lo[0], y=lo[1], z=lo[2]), max=Vector3(x=hi[0], y=hi[1], z=hi[2]))
         if hi[0] > lo[0]
@@ -180,6 +190,39 @@ def update_component(asm_id: str, comp_id: str, transform: ComponentTransform) -
     return _resolve(asm)
 
 
+def add_mate(asm_id: str, mate) -> Optional[AssemblyDoc]:
+    """Add a mate constraint and re-solve placements."""
+    from app.models.schemas import AssemblyMate
+
+    asm = _load(asm_id)
+    if asm is None:
+        return None
+    m = mate if isinstance(mate, AssemblyMate) else AssemblyMate(**mate)
+    m.id = str(uuid.uuid4())
+    ids = {c.id for c in asm.components}
+    if m.base not in ids or m.moved not in ids:
+        raise ValueError("mate references an unknown component")
+    if m.base == m.moved:
+        raise ValueError("a component cannot mate to itself")
+    asm.mates.append(m)
+    asm.updated_at = _now()
+    _persist(asm)
+    return _resolve(asm)
+
+
+def remove_mate(asm_id: str, mate_id: str) -> Optional[AssemblyDoc]:
+    asm = _load(asm_id)
+    if asm is None:
+        return None
+    before = len(asm.mates)
+    asm.mates = [m for m in asm.mates if m.id != mate_id]
+    if len(asm.mates) == before:
+        return None
+    asm.updated_at = _now()
+    _persist(asm)
+    return _resolve(asm)
+
+
 def remove_component(asm_id: str, comp_id: str) -> Optional[AssemblyDoc]:
     asm = _load(asm_id)
     if asm is None:
@@ -188,6 +231,8 @@ def remove_component(asm_id: str, comp_id: str) -> Optional[AssemblyDoc]:
     asm.components = [c for c in asm.components if c.id != comp_id]
     if len(asm.components) == before:
         return None
+    # Drop any mates that referenced the removed component.
+    asm.mates = [m for m in asm.mates if m.base != comp_id and m.moved != comp_id]
     asm.updated_at = _now()
     _persist(asm)
     return _resolve(asm)

@@ -398,11 +398,32 @@ class AssemblyComponent(BaseModel):
     missing: bool = False  # referenced part was deleted
 
 
+class AssemblyMate(BaseModel):
+    """A positional constraint between two components (feature 04).
+
+    Solved into the moved component's ComponentTransform, replacing hand-typed
+    placements: ``fasten`` rigidly attaches at an offset; ``coincident`` mates a
+    face of each part along an axis (stacking); ``concentric`` makes two parts
+    coaxial; ``distance`` holds a gap along an axis. Mates assume axis-aligned
+    parts (no relative rotation), covering the common assembly cases.
+    """
+
+    id: str
+    type: Literal["fasten", "coincident", "concentric", "distance"]
+    base: str    # component id held fixed
+    moved: str   # component id positioned by the mate
+    axis: Literal["x", "y", "z"] = "z"
+    base_face: Literal["min", "max", "center"] = "max"
+    moved_face: Literal["min", "max", "center"] = "min"
+    offset_mm: float = 0.0
+
+
 class AssemblyDoc(BaseModel):
     id: str
     name: str
     owner_id: Optional[str] = None
     components: List[AssemblyComponent] = []
+    mates: List[AssemblyMate] = []
     bbox: Optional[BBox] = None  # resolved envelope over placed components
     created_at: str
     updated_at: str

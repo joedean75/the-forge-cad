@@ -457,14 +457,36 @@ export interface AssemblyComponent {
   missing: boolean
 }
 
+export interface AssemblyMate {
+  id: string
+  type: 'fasten' | 'coincident' | 'concentric' | 'distance'
+  base: string
+  moved: string
+  axis: 'x' | 'y' | 'z'
+  base_face: 'min' | 'max' | 'center'
+  moved_face: 'min' | 'max' | 'center'
+  offset_mm: number
+}
+
 export interface AssemblyDoc {
   id: string
   name: string
   owner_id?: string | null
   components: AssemblyComponent[]
+  mates: AssemblyMate[]
   bbox?: BBox | null
   created_at: string
   updated_at: string
+}
+
+export interface InterferenceReport {
+  assembly_id: string
+  components_checked: number
+  interferences: number
+  clearance_warnings: number
+  clearance_threshold_mm: number
+  pairs: { a: string; b: string; status: 'interference' | 'clearance'; gap_mm: number; penetration_mm: number }[]
+  clear: boolean
 }
 
 export interface AssemblySummary {

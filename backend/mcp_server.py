@@ -231,6 +231,28 @@ def create_assembly(prompt: str) -> str:
 
 
 @mcp.tool()
+def bill_of_materials(assembly_id: str) -> str:
+    """Bill of Materials for an assembly — grouped parts with quantity, material,
+    mass and material cost, plus assembly totals."""
+    with _client() as c:
+        r = c.get(f"/assemblies/{assembly_id}/bom")
+    if r.status_code >= 400:
+        return f"Error {r.status_code}: {r.text}"
+    return json.dumps(r.json(), indent=2)
+
+
+@mcp.tool()
+def check_interference(assembly_id: str, clearance_mm: float = 1.0) -> str:
+    """Check an assembly for colliding parts and sub-minimum clearances. Returns
+    the interference/clearance report (pairs, penetration, gap)."""
+    with _client() as c:
+        r = c.get(f"/assemblies/{assembly_id}/interference", params={"clearance_mm": clearance_mm})
+    if r.status_code >= 400:
+        return f"Error {r.status_code}: {r.text}"
+    return json.dumps(r.json(), indent=2)
+
+
+@mcp.tool()
 def slice_part(doc_id: str, layer_height: float = 0.2, infill: float = 0.15,
                wall_count: int = 2, temp_nozzle: int = 210, temp_bed: int = 60) -> str:
     """Slice the part for FDM 3D printing. Returns layer count, print time and
