@@ -349,6 +349,21 @@ def activate_configuration(doc_id: str, name: Optional[str], resolution: int = 1
     return doc
 
 
+def set_tolerances(doc_id: str, general: Optional[str], tolerances: list, gdt: list) -> Optional[DesignDocument]:
+    """Set the document's general-tolerance class, fit/± callouts and GD&T frames."""
+    from app.models.schemas import FeatureControlFrame, ToleranceCallout
+
+    doc = get_document(doc_id)
+    if doc is None:
+        return None
+    doc.general_tolerance = general or None
+    doc.tolerances = [t if isinstance(t, ToleranceCallout) else ToleranceCallout(**t) for t in tolerances]
+    doc.gdt = [g if isinstance(g, FeatureControlFrame) else FeatureControlFrame(**g) for g in gdt]
+    doc.updated_at = _now()
+    _persist(doc)
+    return doc
+
+
 def add_dimension(doc_id: str, req) -> Optional["Dimension"]:
     """Append a point-to-point dimension to a document."""
     from app.models.schemas import Dimension
@@ -512,6 +527,56 @@ def snapshot_version(doc_id: str, label: str, author_id: Optional[str] = None) -
     doc.updated_at = _now()
     _persist(doc)
     return version
+
+
+_LIFECYCLE = ("draft", "in_review", "released", "obsolete")
+
+
+def _next_revision_letter(existing: list) -> str:
+    """A, B, C … then AA, AB … The sequence omits I, O, Q per drawing convention."""
+    seq = "ABCDEFGHJKLMNPRSTUVWXYZ"  # I, O, Q already excluded
+    n = len(existing)
+    if n < len(seq):
+        return seq[n]
+    return seq[(n // len(seq)) - 1] + seq[n % len(seq)]
+
+
+def set_lifecycle_state(doc_id: str, state: str) -> Optional[DesignDocument]:
+    """Move a document through draft → in_review → released → obsolete."""
+    doc = get_document(doc_id)
+    if doc is None:
+        return None
+    if state not in _LIFECYCLE:
+        raise ValueError(f"state must be one of {_LIFECYCLE}")
+    doc.lifecycle_state = state  # type: ignore[assignment]
+    doc.updated_at = _now()
+    _persist(doc)
+    return doc
+
+
+def release_revision(doc_id: str, notes: str = "", author_id: Optional[str] = None,
+                     label: str = "") -> Optional["DocumentRevision"]:
+    """Cut an immutable released revision (letter) from the current geometry."""
+    from app.models.schemas import DocumentRevision
+
+    doc = get_document(doc_id)
+    if doc is None:
+        return None
+    letter = _next_revision_letter(doc.revisions)
+    rev = DocumentRevision(
+        id=str(uuid.uuid4()),
+        letter=letter,
+        label=label or f"Revision {letter}",
+        feature_tree=json.loads(json.dumps(doc.feature_tree)),  # immutable snapshot
+        released_by=author_id,
+        released_at=_now(),
+        notes=notes[:2000],
+    )
+    doc.revisions.append(rev)
+    doc.lifecycle_state = "released"
+    doc.updated_at = _now()
+    _persist(doc)
+    return rev
 
 
 def restore_version(doc_id: str, version_id: str, resolution: int = 128) -> Optional[DesignDocument]:

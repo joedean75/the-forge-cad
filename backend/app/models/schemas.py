@@ -286,6 +286,21 @@ class VersionSummary(BaseModel):
     created_at: str
 
 
+class DocumentRevision(BaseModel):
+    """A formal, released revision (feature 09): a letter (A/B/C), an immutable
+    feature-tree snapshot, who released it and when, and change notes. Sits above
+    working version snapshots — this is what a shop references."""
+
+    id: str
+    letter: str
+    label: str = ""
+    feature_tree: dict
+    state: Literal["released", "obsolete"] = "released"
+    released_by: Optional[str] = None
+    released_at: str
+    notes: str = ""
+
+
 class Collaborator(BaseModel):
     account_id: str
     email: str
@@ -321,6 +336,15 @@ class DesignDocument(BaseModel):
     # model yields a size family. active_configuration selects the live variant.
     configurations: List["DocumentConfiguration"] = []
     active_configuration: Optional[str] = None
+    # GD&T / tolerances (feature 02): a general-tolerance class (ISO 2768),
+    # per-feature fit/± callouts, and feature-control frames — rendered on the drawing.
+    general_tolerance: Optional[str] = None  # ISO 2768 class: f|m|c|v
+    tolerances: List["ToleranceCallout"] = []
+    gdt: List["FeatureControlFrame"] = []
+    # Revision & release management (feature 09): lifecycle state + released
+    # revisions (immutable letter snapshots) above working version history.
+    lifecycle_state: Literal["draft", "in_review", "released", "obsolete"] = "draft"
+    revisions: List["DocumentRevision"] = []
 
 
 class DocumentParameter(BaseModel):
@@ -342,6 +366,30 @@ class DocumentConfiguration(BaseModel):
 
     name: str
     overrides: dict = {}
+
+
+class ToleranceCallout(BaseModel):
+    """A dimensional tolerance on a labelled feature (feature 02).
+
+    ``kind='fit'`` uses ``spec`` as an ISO 286 fit ('H7/g6'); ``kind='pm'`` uses
+    ``plus``/``minus`` (mm) about ``nominal_mm``.
+    """
+
+    label: str
+    nominal_mm: float
+    kind: Literal["fit", "pm"] = "fit"
+    spec: Optional[str] = None
+    plus: float = 0.0
+    minus: float = 0.0
+
+
+class FeatureControlFrame(BaseModel):
+    """A GD&T feature-control frame (feature 02)."""
+
+    feature: str
+    symbol: str            # flatness | position | perpendicularity | ...
+    tolerance_mm: float
+    datums: List[str] = []
 
 
 class DocumentSummary(BaseModel):

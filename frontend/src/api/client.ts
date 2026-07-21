@@ -32,6 +32,8 @@ import type {
   CatalogMaterial,
   DocumentParameter,
   MassProperties,
+  DrawingResult,
+  DocumentRevisionMeta,
   SliceSettings,
   SliceResponse,
 } from '../../../shared/types'
@@ -279,6 +281,27 @@ export const api = {
       method: 'PUT', body: JSON.stringify({ parameters }),
     }),
   massProperties: (id: string) => fetchJson<MassProperties>(`/documents/${id}/mass-properties`),
+
+  // ── Drawings, tolerances, revisions ──
+  drawing: (id: string, section = true) =>
+    fetchJson<DrawingResult>(`/documents/${id}/drawing?section=${section}`),
+  computeFit: (nominalMm: number, fit: string) =>
+    fetchJson<Record<string, unknown>>(`/documents/meta/fit?nominal_mm=${nominalMm}&fit=${encodeURIComponent(fit)}`),
+  listRevisions: (id: string) => fetchJson<DocumentRevisionMeta[]>(`/documents/${id}/revisions`),
+  releaseRevision: (id: string, notes = '') =>
+    fetchJson<DocumentRevisionMeta>(`/documents/${id}/revisions`, { method: 'POST', body: JSON.stringify({ notes }) }),
+  setLifecycleState: (id: string, state: string) =>
+    fetchJson<DesignDocument>(`/documents/${id}/state`, { method: 'POST', body: JSON.stringify({ state }) }),
+  downloadDrawing: async (id: string, name = 'part') => {
+    const res = await fetch(`${API_BASE}/documents/${id}/drawing.svg`, { headers: authHeaders() })
+    if (!res.ok) throw new Error(`Drawing unavailable (${res.status})`)
+    const blob = await res.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${name.slice(0, 40).replace(/\s+/g, '_') || 'part'}_drawing.svg`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  },
 
   // ── FDM slicing ──
   sliceDocument: (id: string, settings: SliceSettings = {}) =>

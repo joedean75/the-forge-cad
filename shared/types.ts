@@ -300,6 +300,46 @@ export interface DesignDocument {
   /** Part-family variants overriding parameters. */
   configurations?: DocumentConfiguration[]
   active_configuration?: string | null
+  /** GD&T / tolerances (feature 02). */
+  general_tolerance?: string | null
+  tolerances?: ToleranceCallout[]
+  gdt?: FeatureControlFrame[]
+  /** Revision & release (feature 09). */
+  lifecycle_state?: 'draft' | 'in_review' | 'released' | 'obsolete'
+  revisions?: DocumentRevisionMeta[]
+}
+
+export interface ToleranceCallout {
+  label: string
+  nominal_mm: number
+  kind: 'fit' | 'pm'
+  spec?: string | null
+  plus: number
+  minus: number
+}
+
+export interface FeatureControlFrame {
+  feature: string
+  symbol: string
+  tolerance_mm: number
+  datums: string[]
+}
+
+export interface DocumentRevisionMeta {
+  id?: string
+  letter: string
+  label: string
+  state: 'released' | 'obsolete'
+  released_by?: string | null
+  released_at: string
+  notes: string
+}
+
+export interface DrawingResult {
+  svg: string
+  views: { front: number; top: number; right: number; section: number }
+  bbox_mm: { width: number; depth: number; height: number }
+  material: string
 }
 
 export interface DocumentConfiguration {

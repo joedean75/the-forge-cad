@@ -279,6 +279,56 @@ def _mass_properties(doc_id, args):
     return mass_properties.mass_properties(doc_id)
 
 
+def _generate_drawing(doc_id, args):
+    from app.services import drawing
+
+    out = drawing.generate_drawing(doc_id, section=args.get("section", True))
+    # Keep the op result light for agents; the full SVG is fetched via the endpoint.
+    return {"message": "generated 2D drawing", "views": out["views"],
+            "bbox_mm": out["bbox_mm"], "material": out["material"], "svg_bytes": len(out["svg"])}
+
+
+def _compute_fit(doc_id, args):
+    from app.services import tolerances
+
+    nominal = float(args["nominal_mm"])
+    code = str(args["fit"])
+    if "/" in code:
+        return tolerances.fit(nominal, code)
+    return tolerances.limits_mm(nominal, code)
+
+
+def _set_tolerances(doc_id, args):
+    doc = document_service.set_tolerances(
+        doc_id, args.get("general_tolerance"), args.get("tolerances") or [], args.get("gdt") or [])
+    if doc is None:
+        raise KeyError(doc_id)
+    return {"message": f"set {len(doc.tolerances)} tolerance callout(s), {len(doc.gdt)} GD&T frame(s)",
+            "general_tolerance": doc.general_tolerance}
+
+
+def _release_revision(doc_id, args):
+    rev = document_service.release_revision(doc_id, notes=args.get("notes", ""), label=args.get("label", ""))
+    if rev is None:
+        raise KeyError(doc_id)
+    return {"message": f"released revision {rev.letter}", "letter": rev.letter,
+            "state": rev.state, "released_at": rev.released_at}
+
+
+def _set_lifecycle_state(doc_id, args):
+    doc = document_service.set_lifecycle_state(doc_id, args["state"])
+    if doc is None:
+        raise KeyError(doc_id)
+    return {"message": f"state = {doc.lifecycle_state}", "lifecycle_state": doc.lifecycle_state}
+
+
+def _list_revisions(doc_id, args):
+    doc = _get(doc_id)
+    return {"lifecycle_state": doc.lifecycle_state,
+            "revisions": [{"letter": r.letter, "label": r.label, "state": r.state,
+                           "released_at": r.released_at, "notes": r.notes} for r in doc.revisions]}
+
+
 def _set_configurations(doc_id, args):
     doc = document_service.set_configurations(doc_id, args.get("configurations") or [], args.get("active"))
     if doc is None:
@@ -439,6 +489,28 @@ OPERATIONS: Dict[str, Operation] = {
         Operation("mass_properties", "query",
                   "Volume, mass, center of mass, surface area and inertia tensor (uses the assigned material).",
                   {}, _mass_properties),
+        Operation("generate_drawing", "query",
+                  "Generate a dimensioned multi-view 2D engineering drawing (front/top/right + section). "
+                  "Fetch the full SVG at GET /api/documents/{id}/drawing.svg.",
+                  {"section": {"type": "boolean", "default": True}}, _generate_drawing),
+        Operation("compute_fit", "query",
+                  "ISO-286 fit/tolerance limits for a nominal size. 'fit' is a single spec ('H7') "
+                  "or a hole/shaft fit ('H7/g6' → clearance range + classification).",
+                  {"nominal_mm": {"type": "number"}, "fit": {"type": "string"}}, _compute_fit),
+        Operation("set_tolerances", "mutate",
+                  "Set the drawing's general tolerance (ISO 2768 f|m|c|v), fit/± callouts and "
+                  "GD&T feature-control frames.",
+                  {"general_tolerance": {"type": "string"},
+                   "tolerances": {"type": "array", "description": "[{label, nominal_mm, kind:fit|pm, spec, plus, minus}]"},
+                   "gdt": {"type": "array", "description": "[{feature, symbol, tolerance_mm, datums:[]}]"}},
+                  _set_tolerances),
+        Operation("list_revisions", "query", "Lifecycle state and released revisions (letters).", {}, _list_revisions),
+        Operation("release_revision", "mutate",
+                  "Cut an immutable released revision (next letter A/B/C…) from the current geometry.",
+                  {"notes": {"type": "string"}, "label": {"type": "string"}}, _release_revision),
+        Operation("set_lifecycle_state", "mutate",
+                  "Set the document lifecycle state: draft | in_review | released | obsolete.",
+                  {"state": {"type": "string"}}, _set_lifecycle_state),
         Operation("list_configurations", "query", "List the document's variants and the active one.", {},
                   _list_configurations),
         Operation("set_configurations", "mutate",

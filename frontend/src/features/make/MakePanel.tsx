@@ -1,8 +1,106 @@
-import { useState } from 'react'
-import { Loader2, Factory, Download, Check, AlertTriangle, X, Route, ShoppingCart, PackageCheck } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Loader2, Factory, Download, Check, AlertTriangle, X, Route, ShoppingCart, PackageCheck, FileText, GitBranch, Tag } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
 import { api } from '../../api/client'
-import type { DfmCheck, QuoteBundle, ManufacturingOrder } from '../../../../shared/types'
+import type { DfmCheck, QuoteBundle, ManufacturingOrder, DrawingResult, DocumentRevisionMeta } from '../../../../shared/types'
+
+const LIFECYCLE_LABEL: Record<string, string> = {
+  draft: 'Draft', in_review: 'In review', released: 'Released', obsolete: 'Obsolete',
+}
+
+function Documentation({ docId, docName }: { docId: string; docName: string }) {
+  const { doc } = useDocumentStore()
+  const [drawing, setDrawing] = useState<DrawingResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [revs, setRevs] = useState<DocumentRevisionMeta[]>([])
+  const [notes, setNotes] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const state = doc?.lifecycle_state ?? 'draft'
+
+  useEffect(() => { api.listRevisions(docId).then(setRevs).catch(() => {}) }, [docId])
+
+  const gen = async () => {
+    setLoading(true); setErr(null)
+    try { setDrawing(await api.drawing(docId)) }
+    catch (e) { setErr(e instanceof Error ? e.message : 'Drawing failed') }
+    finally { setLoading(false) }
+  }
+  const release = async () => {
+    try {
+      await api.releaseRevision(docId, notes)
+      setNotes('')
+      setRevs(await api.listRevisions(docId))
+      await useDocumentStore.getState().refreshDoc()
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Release failed') }
+  }
+  const setState = async (s: string) => {
+    try { await api.setLifecycleState(docId, s); await useDocumentStore.getState().refreshDoc() }
+    catch { /* ignore */ }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="sec-head">Drawing &amp; release</h3>
+        <span className={`text-[9px] px-1.5 py-0.5 rounded-sm border ${
+          state === 'released' ? 'border-cad-success/50 text-cad-success'
+          : state === 'obsolete' ? 'border-cad-danger/50 text-cad-danger'
+          : 'border-cad-border text-cad-text'}`}>
+          {LIFECYCLE_LABEL[state]}
+        </span>
+      </div>
+
+      <div className="flex gap-2">
+        <button onClick={gen} disabled={loading}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-sm bg-cad-accent text-cad-bg text-xs font-semibold hover:bg-cad-accent-hot transition-colors disabled:opacity-50">
+          {loading ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />} 2D drawing
+        </button>
+        {drawing && (
+          <button onClick={() => api.downloadDrawing(docId, docName).catch(() => {})}
+            title="Download SVG" className="flex items-center justify-center px-3 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading transition">
+            <Download size={15} />
+          </button>
+        )}
+      </div>
+      {err && <p className="text-[10px] text-cad-danger">{err}</p>}
+      {drawing && (
+        <div className="rounded-sm border border-cad-border bg-white p-1 overflow-hidden"
+          dangerouslySetInnerHTML={{ __html: drawing.svg }} />
+      )}
+
+      {/* lifecycle + revisions */}
+      <div className="flex items-center gap-1">
+        {(['draft', 'in_review', 'released', 'obsolete'] as const).map((s) => (
+          <button key={s} onClick={() => setState(s)}
+            className={`flex-1 text-[9px] py-1 rounded-sm border transition-colors ${
+              state === s ? 'border-cad-accent/60 text-cad-accent-hot bg-cad-accent/10' : 'border-cad-border text-cad-text hover:text-cad-text-heading'}`}>
+            {LIFECYCLE_LABEL[s]}
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Change notes for this revision"
+          className="flex-1 min-w-0 px-2 py-1.5 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-[11px] outline-none focus:border-cad-accent" />
+        <button onClick={release} title="Cut a released revision"
+          className="flex items-center gap-1.5 px-2.5 rounded-sm border border-cad-accent/50 text-cad-accent-hot hover:bg-cad-accent/10 text-[11px] font-medium transition">
+          <Tag size={12} /> Release
+        </button>
+      </div>
+      {revs.length > 0 && (
+        <div className="space-y-1">
+          {revs.map((r) => (
+            <div key={r.letter} className="flex items-center gap-2 text-[10px] text-cad-text">
+              <GitBranch size={11} className="text-cad-accent/70 shrink-0" />
+              <span className="tabular font-semibold text-cad-text-heading">Rev {r.letter}</span>
+              <span className="truncate flex-1">{r.notes || r.label}</span>
+              <span className="tabular text-cad-text/40">{r.released_at.slice(0, 10)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 const PROCESS_LABEL: Record<string, string> = {
   'cnc-3axis': 'CNC machining · Al 6061',
@@ -123,6 +221,10 @@ export function MakePanel() {
 
   return (
     <div className="space-y-5">
+      <Documentation docId={doc.id} docName={doc.name} />
+
+      <div className="pt-3 border-t border-cad-border" />
+
       <p className="text-xs text-cad-text leading-relaxed">
         Manufacturability checks and an instant quote for LPBF metal printing, plus a STEP export for
         any downstream CAM. Toolpath generation lands in the CAM step.

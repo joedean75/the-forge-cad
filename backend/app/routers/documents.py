@@ -436,6 +436,91 @@ def mass_properties(doc: DesignDocument = Depends(readable_document)):
         raise HTTPException(status_code=422, detail=str(exc))
 
 
+@router.get("/meta/fit")
+def compute_fit(nominal_mm: float, fit: str, acc: accounts.Account = Depends(current_account)):
+    """ISO-286 fit/tolerance limits for a nominal size (feature 02)."""
+    from app.services import tolerances
+
+    try:
+        return tolerances.fit(nominal_mm, fit) if "/" in fit else tolerances.limits_mm(nominal_mm, fit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+# ── Revision & release management (feature 09) ──
+
+
+class LifecycleRequest(BaseModel):
+    state: str
+
+
+@router.post("/{doc_id}/state", response_model=DesignDocument, response_model_exclude={"version_history", "revisions"})
+def set_lifecycle_state(body: LifecycleRequest, doc: DesignDocument = Depends(editable_document)):
+    try:
+        return docs.set_lifecycle_state(doc.id, body.state)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+class ReleaseRequest(BaseModel):
+    notes: str = ""
+    label: str = ""
+
+
+@router.get("/{doc_id}/revisions")
+def list_revisions(doc: DesignDocument = Depends(readable_document)):
+    """Released revisions (letter, state, who/when, notes) — payload excluded."""
+    return [{"id": r.id, "letter": r.letter, "label": r.label, "state": r.state,
+             "released_by": r.released_by, "released_at": r.released_at, "notes": r.notes}
+            for r in doc.revisions]
+
+
+@router.post("/{doc_id}/revisions")
+def release_revision(body: ReleaseRequest, doc: DesignDocument = Depends(editable_document),
+                     acc: accounts.Account = Depends(current_account)):
+    """Cut an immutable released revision from the current geometry."""
+    rev = docs.release_revision(doc.id, notes=body.notes, author_id=acc.id, label=body.label)
+    if rev is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {"id": rev.id, "letter": rev.letter, "label": rev.label, "state": rev.state,
+            "released_at": rev.released_at, "notes": rev.notes}
+
+
+class TolerancesRequest(BaseModel):
+    general_tolerance: str | None = None
+    tolerances: list = []
+    gdt: list = []
+
+
+@router.put("/{doc_id}/tolerances", response_model=DesignDocument, response_model_exclude={"version_history"})
+def set_tolerances(body: TolerancesRequest, doc: DesignDocument = Depends(editable_document)):
+    updated = docs.set_tolerances(doc.id, body.general_tolerance, body.tolerances, body.gdt)
+    return updated
+
+
+@router.get("/{doc_id}/drawing")
+def drawing(section: bool = True, doc: DesignDocument = Depends(readable_document)):
+    """A dimensioned multi-view 2D engineering drawing (SVG) of the part."""
+    from app.services import drawing as drawing_svc
+
+    try:
+        return drawing_svc.generate_drawing(doc.id, section=section)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/{doc_id}/drawing.svg")
+def drawing_svg(section: bool = True, doc: DesignDocument = Depends(readable_document)):
+    from fastapi.responses import Response
+    from app.services import drawing as drawing_svc
+
+    try:
+        out = drawing_svc.generate_drawing(doc.id, section=section)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return Response(out["svg"], media_type="image/svg+xml")
+
+
 # ── FDM slicing (3D printing) ──
 
 
