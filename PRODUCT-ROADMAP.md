@@ -101,6 +101,11 @@ horizon: closing the gap from "generates and makes parts" to a **complete
 professional design-to-manufacturing workflow**, grounded in how mechanical CAD
 is actually used._
 
+> **Status: all 10 SHIPPED** (July 2026). Every item below is implemented with
+> a backend service, an HTTP endpoint, an agent operation, and tests. See the
+> commits `34db7bc` (materials/parameters/mass-properties/configurations),
+> `e081237` (mates/interference/BOM), and `e7c2ee7` (drawings/GD&T/revisions).
+
 ## The standard workflow, and where The Forge stands
 
 Industry sources describe one consistent pipeline: **concept → preliminary design
