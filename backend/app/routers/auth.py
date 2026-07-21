@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from app.rate_limit import rate_limit
 from app.security import current_account
-from app.services import accounts, billing, plans
+from app.services import accounts, billing, oauth, plans
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 # Credential endpoints are the brute-force surface: cap attempts per IP.
 _login_limit = rate_limit(max_hits=10, window_seconds=60.0)
 _signup_limit = rate_limit(max_hits=5, window_seconds=300.0)
+_oauth_limit = rate_limit(max_hits=10, window_seconds=60.0)
 
 
 class Credentials(BaseModel):
@@ -51,6 +53,51 @@ def login(body: Credentials, _: None = Depends(_login_limit)):
 @router.get("/me")
 def me(acc: accounts.Account = Depends(current_account)):
     return acc.public_view()
+
+
+# -- OAuth sign-in (Authorization Code + PKCE; see services/oauth.py) --------
+
+
+class OAuthExchange(BaseModel):
+    code: str
+
+
+@router.get("/oauth/providers")
+def oauth_providers():
+    """Which OAuth providers are configured (safe to expose: ids/names only)."""
+    return {"providers": oauth.enabled_providers()}
+
+
+@router.get("/oauth/{provider}/start")
+def oauth_start(provider: str, _: None = Depends(_oauth_limit)):
+    return RedirectResponse(_handle(oauth.begin_login, provider), status_code=302)
+
+
+@router.get("/oauth/{provider}/callback")
+def oauth_callback(
+    provider: str,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    _: None = Depends(_oauth_limit),
+):
+    """Provider redirect target. Always lands the browser back on the SPA —
+    success carries a one-time code (redeemed via POST below), never the JWT."""
+    if error or not code or not state:
+        return RedirectResponse(
+            oauth.frontend_redirect(error=error or "sign-in was cancelled"), status_code=302
+        )
+    try:
+        handoff = oauth.complete_login(provider, state=state, code=code)
+    except accounts.AuthError as exc:
+        return RedirectResponse(oauth.frontend_redirect(error=str(exc)), status_code=302)
+    return RedirectResponse(oauth.frontend_redirect(handoff=handoff), status_code=302)
+
+
+@router.post("/oauth/exchange")
+def oauth_exchange(body: OAuthExchange, _: None = Depends(_login_limit)):
+    token, acc = _handle(oauth.redeem_handoff, body.code)
+    return {"token": token, "account": acc.public_view()}
 
 
 @router.get("/plans")

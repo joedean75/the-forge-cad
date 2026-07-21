@@ -1,9 +1,11 @@
 import { create } from 'zustand'
-import { api, setAuthToken, getAuthToken, type AccountView, type PlanSummary } from '../api/client'
+import { api, setAuthToken, getAuthToken, type AccountView, type OAuthProvider, type PlanSummary } from '../api/client'
 
 interface AuthState {
   account: AccountView | null
   plans: PlanSummary[]
+  /** OAuth providers configured on the server; empty = password login only. */
+  oauthProviders: OAuthProvider[]
   /** True when a real payment provider (Stripe) is wired; false = local self-serve. */
   billingLive: boolean
   loading: boolean
@@ -14,6 +16,8 @@ interface AuthState {
   init: () => Promise<void>
   signup: (email: string, password: string) => Promise<void>
   login: (email: string, password: string) => Promise<void>
+  /** Redeem the one-time code delivered by the OAuth callback redirect. */
+  completeOAuth: (code: string) => Promise<void>
   logout: () => void
   subscribe: (planId: string) => Promise<string | null>
   openBillingPortal: () => Promise<void>
@@ -25,6 +29,7 @@ interface AuthState {
 export const useAuthStore = create<AuthState>((set, get) => ({
   account: null,
   plans: [],
+  oauthProviders: [],
   billingLive: false,
   loading: false,
   ready: false,
@@ -36,6 +41,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ plans, billingLive: billing.live })
     } catch {
       /* plans are non-critical */
+    }
+    try {
+      const { providers } = await api.oauthProviders()
+      set({ oauthProviders: providers })
+    } catch {
+      /* provider buttons are non-critical */
     }
     if (getAuthToken()) {
       try {
@@ -68,6 +79,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ account, loading: false })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Login failed', loading: false })
+      throw e
+    }
+  },
+
+  completeOAuth: async (code) => {
+    set({ loading: true, error: null })
+    try {
+      const { token, account } = await api.oauthExchange(code)
+      setAuthToken(token)
+      set({ account, loading: false })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Sign-in failed', loading: false })
       throw e
     }
   },
