@@ -147,29 +147,29 @@ export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOp
   const { busy, createFromPrompt, newBlank, doc, undo, redo, past, future } = useDocumentStore()
   const account = useAuthStore((s) => s.account)
   const [prompt, setPrompt] = useState('')
+  // Text-to-CAD is a single ~20s call; surface the real phases (interpret →
+  // generate → evaluate) on a timer so the wait isn't a blind spinner. Driven
+  // off `busy` in an effect so the timers are always cleaned up.
+  const [generating, setGenerating] = useState(false)
   const [genPhase, setGenPhase] = useState<string | null>(null)
   const others = peers.filter((p) => p.id !== account?.id)
+
+  useEffect(() => {
+    if (!generating || !busy) { setGenPhase(null); return }
+    const phases = ['Interpreting your description…', 'Generating geometry…', 'Evaluating the model…']
+    let i = 0
+    setGenPhase(phases[0])
+    const timer = window.setInterval(() => { i = Math.min(i + 1, phases.length - 1); setGenPhase(phases[i]) }, 6000)
+    return () => window.clearInterval(timer)
+  }, [generating, busy])
+
+  useEffect(() => { if (!busy && generating) setGenerating(false) }, [busy, generating])
 
   const submit = () => {
     if (!prompt.trim() || busy) return
     createFromPrompt(prompt)
     setPrompt('')
-    // Text-to-CAD is a single ~20s call; surface the real phases on a timer so
-    // the wait isn't a blind spinner (they proceed interpret → generate → check).
-    const phases = ['Interpreting your description…', 'Generating geometry…', 'Evaluating the model…']
-    let i = 0
-    setGenPhase(phases[0])
-    const timer = window.setInterval(() => {
-      i = Math.min(i + 1, phases.length - 1)
-      setGenPhase(phases[i])
-    }, 6000)
-    const stop = window.setInterval(() => {
-      if (!useDocumentStore.getState().busy) {
-        window.clearInterval(timer)
-        window.clearInterval(stop)
-        setGenPhase(null)
-      }
-    }, 300)
+    setGenerating(true)
   }
 
   return (

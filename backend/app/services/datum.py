@@ -37,10 +37,6 @@ FACE_MAP: Dict[str, Tuple[str, int, bool]] = {
 FACES = tuple(FACE_MAP.keys())
 
 
-# plane -> the two world-axis indices that span it (u, v).
-_PLANE_AXES = {"xy": (0, 1), "xz": (0, 2), "yz": (1, 2)}
-
-
 def resolve_face(tree: dict, feature_id: str, face: str) -> Tuple[str, float]:
     """Return ``(plane, offset)`` for ``face`` of the referenced feature (offset
     along the plane normal). See :func:`resolve_face_frame` for the in-plane origin."""
@@ -78,7 +74,9 @@ def resolve_face_frame(tree: dict, feature_id: str, face: str):
     coords = mesh.vertices[:, axis]
     offset = float(coords.max() if take_max else coords.min())
     # In-plane centre = midpoint of the feature's bbox on the two spanning axes.
-    ua, va = _PLANE_AXES[plane]
+    from app.cad_kernel.core.planes import plane_uvw
+
+    ua, va, _ = plane_uvw(plane)
     verts = mesh.vertices
     u0 = float((verts[:, ua].min() + verts[:, ua].max()) / 2.0)
     v0 = float((verts[:, va].min() + verts[:, va].max()) / 2.0)

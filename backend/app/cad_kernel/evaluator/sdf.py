@@ -348,7 +348,7 @@ def _cached_import_grid_sdf(cache: dict) -> "GridSDF":
     return sdf
 
 
-_PLANE_NORMAL = {"xy": "z", "xz": "y", "yz": "x"}
+from app.cad_kernel.core.planes import PLANE_NORMAL as _PLANE_NORMAL  # noqa: E402  (re-exported for sdf_native)
 
 
 def _poly_sdf_2d(uv: np.ndarray, verts: np.ndarray) -> np.ndarray:

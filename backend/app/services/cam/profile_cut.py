@@ -25,10 +25,6 @@ MM = 1000.0
 _GRID = 400  # samples along the longest in-plane axis
 
 
-def _plane_axes(plane: str) -> Tuple[int, int, int]:
-    return {"xy": (0, 1, 2), "xz": (0, 2, 1), "yz": (1, 2, 0)}.get(plane, (0, 1, 2))
-
-
 def profile_cut(doc_id: str, kerf_mm: float = 0.2, plane: str = "xy",
                 feed_mm_min: float = 1200.0, power: float = 100.0,
                 pierce_s: float = 0.3, lead_in_mm: float = 2.0) -> Dict:
@@ -42,7 +38,9 @@ def profile_cut(doc_id: str, kerf_mm: float = 0.2, plane: str = "xy",
     lo = np.asarray(b.min, dtype=float)
     hi = np.asarray(b.max, dtype=float)
 
-    ui, vi, wi = _plane_axes(plane)
+    from app.cad_kernel.core.planes import plane_uvw
+
+    ui, vi, wi = plane_uvw(plane)
     umin, umax = lo[ui], hi[ui]
     vmin, vmax = lo[vi], hi[vi]
     wmid = (lo[wi] + hi[wi]) / 2.0
