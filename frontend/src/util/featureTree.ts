@@ -244,6 +244,49 @@ export function collectProxies(node: FeatureNode): FeatureProxy[] {
   return out
 }
 
+/** Approx distance (part units) from a point to a proxy's surface (0 inside). */
+function proxyDistance(px: FeatureProxy, p: P3): number {
+  const c = px.center
+  if (px.kind === 'box' && px.size) {
+    const dx = Math.max(0, Math.abs(p.x - c.x) - px.size.x / 2)
+    const dy = Math.max(0, Math.abs(p.y - c.y) - px.size.y / 2)
+    const dz = Math.max(0, Math.abs(p.z - c.z) - px.size.z / 2)
+    return Math.hypot(dx, dy, dz)
+  }
+  if (px.kind === 'sphere') {
+    return Math.abs(Math.hypot(p.x - c.x, p.y - c.y, p.z - c.z) - (px.radius ?? 0))
+  }
+  // cylinder / cone / hole: radial distance to the axis segment minus radius.
+  const a = px.axis ?? { x: 0, y: 0, z: 1 }
+  const alen = Math.hypot(a.x, a.y, a.z) || 1
+  const ax = a.x / alen, ay = a.y / alen, az = a.z / alen
+  const rx = p.x - c.x, ry = p.y - c.y, rz = p.z - c.z
+  const along = rx * ax + ry * ay + rz * az
+  const radial = Math.hypot(rx - along * ax, ry - along * ay, rz - along * az) - (px.radius ?? 0)
+  const axial = Math.max(0, Math.abs(along) - (px.height ?? 0) / 2)
+  return Math.hypot(Math.max(0, radial), axial)
+}
+
+/**
+ * The id of the primitive feature nearest a part-space point — for clicking a
+ * body in the 3D viewport to select the feature that owns that surface.
+ */
+export function pickFeatureAt(tree: FeatureTreeDict, point: P3): string | null {
+  let bestId: string | null = null
+  let bestD = Infinity
+  for (const { node } of flatten(tree)) {
+    const own = collectProxies({ ...node, params: { ...node.params, children: [] } })
+    for (const px of own) {
+      const d = proxyDistance(px, point)
+      if (d < bestD) {
+        bestD = d
+        bestId = node.id ?? null
+      }
+    }
+  }
+  return bestId
+}
+
 // ── Modifier features (Phase 2) ──
 
 export type ModifierType =

@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Boxes, Waypoints, Activity, Wrench, Printer } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import type { EditorMode } from '../../../shared/types'
@@ -22,6 +23,22 @@ export function ModeSpine() {
   const { mode, setMode, doc } = useDocumentStore()
   const activeIdx = STATIONS.findIndex((s) => s.id === mode)
   const enabled = !!doc
+
+  // Number keys 1–5 switch modes (skip while typing or with a modifier held).
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+      const i = '12345'.indexOf(e.key)
+      if (i >= 0 && useDocumentStore.getState().doc) {
+        e.preventDefault()
+        useDocumentStore.getState().setMode(STATIONS[i].id)
+      }
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [])
 
   return (
     <nav

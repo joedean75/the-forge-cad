@@ -5,7 +5,7 @@ import * as THREE from 'three'
 import { Boxes, Ruler, Crosshair, X, ScanEye, PencilRuler, Maximize } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { MeshLoader } from './MeshLoader'
-import { collectSnapPoints, collectProxies, findNode, type FeatureProxy } from '../util/featureTree'
+import { collectSnapPoints, collectProxies, findNode, pickFeatureAt, type FeatureProxy } from '../util/featureTree'
 import type { BBox, Dimension, Vector3, FeatureNode } from '../../../shared/types'
 
 type Vec3 = [number, number, number]
@@ -201,7 +201,7 @@ const EXAMPLE_PROMPTS = [
 ]
 
 export function DocumentViewport() {
-  const { doc, busy, selectedFeatureId, addDimension, removeDimension, createFromPrompt, newBlank,
+  const { doc, busy, selectedFeatureId, select, addDimension, removeDimension, createFromPrompt, newBlank,
     sketchPick, pickSketchOnFace, pickSketchPlane, cancelSketchPick } = useDocumentStore()
   const [isolate, setIsolate] = useState(false)
   const [showDims, setShowDims] = useState(false)
@@ -269,6 +269,14 @@ export function DocumentViewport() {
     }
   }
 
+  // Click the body to select the feature that owns the surface under the cursor
+  // (converts the display hit back to part space, then nearest-proxy).
+  const handleSelect = (hit: Vec3) => {
+    if (!fit || !doc) return
+    const id = pickFeatureAt(doc.feature_tree, fit.toPart(hit))
+    select(id)
+  }
+
   const toggleMeasure = () => {
     setMeasuring((v) => !v)
     setPending(null)
@@ -288,7 +296,8 @@ export function DocumentViewport() {
           buffer z-fights and "glitches" the model at certain distances. Log depth
           + a tighter near/far ratio give stable precision across the whole range. */}
       <Canvas camera={{ position: [3, 2, 4], fov: 45, near: 0.02, far: 100 }} shadows
-        gl={{ logarithmicDepthBuffer: true }}>
+        gl={{ logarithmicDepthBuffer: true }}
+        onPointerMissed={() => { if (!measuring && !sketchPick) select(null) }}>
         <Suspense fallback={null}>
           <ambientLight intensity={0.6} />
           <directionalLight position={[5, 10, 7]} intensity={1.2} castShadow />
@@ -315,6 +324,7 @@ export function DocumentViewport() {
               fit={fit ? { c: fit.c, s: fit.s } : undefined}
               onPick={measuring && !sketchPick ? handlePick : undefined}
               onPickFace={sketchPick && rootId ? (face) => pickSketchOnFace(rootId, face) : undefined}
+              onSelect={!measuring && !sketchPick ? handleSelect : undefined}
               dim={isolate && !!selectedNode}
             />
           )}

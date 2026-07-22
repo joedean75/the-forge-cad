@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { EditorHeader } from '../components/EditorHeader'
 import { ToolRibbon } from '../components/ToolRibbon'
+import { CommandPalette } from '../components/CommandPalette'
 import { AccountDrawer } from '../components/AccountDrawer'
 import { HistoryShareDrawer } from '../components/HistoryShareDrawer'
 import { CopilotPanel } from '../components/CopilotPanel'
@@ -119,6 +120,7 @@ export function EditorScreen() {
         <RightPanel />
       </div>
       <StatusBar />
+      <CommandPalette onOpenCopilot={() => setCopilotOpen(true)} />
       <AccountDrawer open={accountOpen} onClose={() => setAccountOpen(false)} />
       <HistoryShareDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} />
       <CopilotPanel open={copilotOpen} onClose={() => setCopilotOpen(false)} />

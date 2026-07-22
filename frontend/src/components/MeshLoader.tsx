@@ -16,12 +16,15 @@ export function MeshLoader({
   url,
   onPick,
   onPickFace,
+  onSelect,
   dim,
   fit,
 }: {
   url: string
   onPick?: (point: [number, number, number]) => void
   onPickFace?: (face: string, point: [number, number, number]) => void
+  /** Plain click on the body (no measure/sketch active) — for feature selection. */
+  onSelect?: (point: [number, number, number]) => void
   dim?: boolean
   /** Frozen display transform (centre in part metres + scale). When given, the
    * mesh uses it instead of self-fitting, so edits never rescale the view. */
@@ -72,7 +75,7 @@ export function MeshLoader({
       castShadow
       receiveShadow
       onClick={
-        onPick || onPickFace
+        onPick || onPickFace || onSelect
           ? (e) => {
               e.stopPropagation()
               const pt: [number, number, number] = [e.point.x, e.point.y, e.point.z]
@@ -82,6 +85,8 @@ export function MeshLoader({
                 onPickFace(normalToFace(n), pt)
               } else if (onPick) {
                 onPick(pt)
+              } else if (onSelect) {
+                onSelect(pt)
               }
             }
           : undefined

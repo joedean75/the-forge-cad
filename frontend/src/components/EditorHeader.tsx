@@ -147,12 +147,29 @@ export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOp
   const { busy, createFromPrompt, newBlank, doc, undo, redo, past, future } = useDocumentStore()
   const account = useAuthStore((s) => s.account)
   const [prompt, setPrompt] = useState('')
+  const [genPhase, setGenPhase] = useState<string | null>(null)
   const others = peers.filter((p) => p.id !== account?.id)
 
   const submit = () => {
     if (!prompt.trim() || busy) return
     createFromPrompt(prompt)
     setPrompt('')
+    // Text-to-CAD is a single ~20s call; surface the real phases on a timer so
+    // the wait isn't a blind spinner (they proceed interpret → generate → check).
+    const phases = ['Interpreting your description…', 'Generating geometry…', 'Evaluating the model…']
+    let i = 0
+    setGenPhase(phases[0])
+    const timer = window.setInterval(() => {
+      i = Math.min(i + 1, phases.length - 1)
+      setGenPhase(phases[i])
+    }, 6000)
+    const stop = window.setInterval(() => {
+      if (!useDocumentStore.getState().busy) {
+        window.clearInterval(timer)
+        window.clearInterval(stop)
+        setGenPhase(null)
+      }
+    }, 300)
   }
 
   return (
@@ -198,13 +215,19 @@ export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOp
       <div className="flex-1 max-w-2xl mx-auto flex items-center gap-2">
         <div className="flex-1 flex items-center gap-2 h-9 px-3 rounded-sm bg-cad-bg border border-cad-border focus-within:border-cad-accent transition-colors">
           <Sparkles size={14} className="text-cad-accent shrink-0" />
-          <input
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && submit()}
-            placeholder="Describe a part — e.g. a 100×50×30 mm bracket with two mounting holes"
-            className="flex-1 bg-transparent text-xs text-cad-text-heading placeholder:text-cad-text/50 outline-none"
-          />
+          {genPhase ? (
+            <span className="flex-1 flex items-center gap-2 text-xs text-cad-accent-hot">
+              <Loader2 size={12} className="animate-spin shrink-0" /> {genPhase}
+            </span>
+          ) : (
+            <input
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && submit()}
+              placeholder="Describe a part — e.g. a 100×50×30 mm bracket with two mounting holes"
+              className="flex-1 bg-transparent text-xs text-cad-text-heading placeholder:text-cad-text/50 outline-none"
+            />
+          )}
           <button
             onClick={submit}
             disabled={!prompt.trim() || busy}
