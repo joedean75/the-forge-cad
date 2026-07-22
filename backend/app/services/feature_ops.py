@@ -83,11 +83,35 @@ def add_primitive(tree: Dict[str, Any], primitive: Dict[str, Any], operation: st
     return t
 
 
-def add_modifier(tree: Dict[str, Any], modifier: Dict[str, Any]) -> Dict[str, Any]:
+def add_modifier(tree: Dict[str, Any], modifier: Dict[str, Any],
+                 target_id: str | None = None) -> Dict[str, Any]:
+    """Wrap a feature in a modifier. Without ``target_id`` the whole body is
+    wrapped (root); with it, that specific feature is wrapped **in place** — so a
+    Pattern/Transform can act on one selected feature (e.g. replicate one hole)
+    rather than the entire part."""
     t = copy.deepcopy(tree)
     modifier.setdefault("id", gen_id())
-    modifier.setdefault("params", {})["children"] = [t["root"]]
-    t["root"] = modifier
+    modifier.setdefault("params", {})
+
+    if target_id is None or target_id == t["root"].get("id"):
+        modifier["params"]["children"] = [t["root"]]
+        t["root"] = modifier
+        return t
+
+    def wrap(node: Dict[str, Any]) -> Dict[str, Any]:
+        kids = children_of(node)
+        for i, c in enumerate(kids):
+            if c.get("id") == target_id:
+                modifier["params"]["children"] = [c]
+                kids[i] = modifier
+                node["params"]["children"] = kids
+                return node
+            wrap(c)
+        return node
+
+    if find_node(t, target_id) is None:
+        raise KeyError(f"feature {target_id} not found")
+    wrap(t["root"])
     return t
 
 
@@ -218,9 +242,10 @@ def resolve_datums(tree: Dict[str, Any]) -> Dict[str, Any]:
                 is_ancestor = target is not None and node.get("id") in _subtree_ids(target)
                 if not is_ancestor:
                     try:
-                        plane, offset = datum.resolve_face(t, fid, face)
+                        plane, offset, origin_uv = datum.resolve_face_frame(t, fid, face)
                         params["plane"] = plane
                         params["offset"] = offset
+                        params["plane_origin"] = list(origin_uv)  # zero the sketch on the face
                     except (KeyError, ValueError):
                         pass  # keep the baked-in fallback plane/offset
         for c in children_of(node):

@@ -33,25 +33,36 @@ const FACE_MAP: Record<string, [Plane, number, boolean]> = {
  * face, from that feature's proxy AABB — a client-side echo of the backend
  * datum resolution so the sketch view reflects where the plane will land.
  */
-export function faceToPlaneOffset(node: FeatureNode, face: string): { plane: Plane; offsetMm: number } | null {
+export function faceToPlaneOffset(
+  node: FeatureNode,
+  face: string,
+): { plane: Plane; offsetMm: number; originMm: [number, number] } | null {
   const entry = FACE_MAP[face]
   if (!entry) return null
   const [plane, axis, takeMax] = entry
   const proxies = collectProxies(node)
   if (!proxies.length) return null
-  let lo = Infinity
-  let hi = -Infinity
   const keys = ['x', 'y', 'z'] as const
+  // Track the feature's AABB on all three axes: the normal axis gives the plane
+  // offset; the two in-plane axes give the face centre (so the sketch zeroes on
+  // the face, mirroring the backend datum frame).
+  const lo = [Infinity, Infinity, Infinity]
+  const hi = [-Infinity, -Infinity, -Infinity]
   for (const p of proxies) {
-    const c = (p.center as Record<string, number>)[keys[axis]]
-    let half = 0
-    if (p.kind === 'box' && p.size) half = (p.size as Record<string, number>)[keys[axis]] / 2
-    else if (p.kind === 'sphere') half = p.radius ?? 0
-    else if (p.kind === 'cyl') half = Math.max(p.radius ?? 0, (p.height ?? 0) / 2)
-    lo = Math.min(lo, c - half)
-    hi = Math.max(hi, c + half)
+    for (let a = 0; a < 3; a++) {
+      const c = (p.center as Record<string, number>)[keys[a]]
+      let half = 0
+      if (p.kind === 'box' && p.size) half = (p.size as Record<string, number>)[keys[a]] / 2
+      else if (p.kind === 'sphere') half = p.radius ?? 0
+      else if (p.kind === 'cyl') half = Math.max(p.radius ?? 0, (p.height ?? 0) / 2)
+      lo[a] = Math.min(lo[a], c - half)
+      hi[a] = Math.max(hi[a], c + half)
+    }
   }
-  return { plane, offsetMm: (takeMax ? hi : lo) * 1000 }
+  const [ui, vi] = AXES[plane]
+  const u0 = ((lo[ui] + hi[ui]) / 2) * 1000
+  const v0 = ((lo[vi] + hi[vi]) / 2) * 1000
+  return { plane, offsetMm: (takeMax ? hi[axis] : lo[axis]) * 1000, originMm: [u0, v0] }
 }
 
 /** Fetch + parse the document's STL data-URI into raw triangle positions (metres). */
@@ -139,11 +150,15 @@ export function PartBackdrop({
   positions,
   plane,
   sectionMm,
+  originMm = [0, 0],
 }: {
   positions: Float32Array | null
   plane: Plane
   /** Plane position along its normal, in mm (sketch units). */
   sectionMm: number
+  /** In-plane face centre (mm) — the backdrop shifts by −origin so the face is
+   *  centered on the sketch origin, matching where geometry lands on-face. */
+  originMm?: [number, number]
 }) {
   // Both derivations run off the render path (deferred effect) so opening the
   // sketch never waits on rasterizing the mesh — the canvas paints first.
@@ -165,8 +180,11 @@ export function PartBackdrop({
   }, [positions, plane, sectionMm])
 
   if (!positions) return null
+  // Shift the whole backdrop so the on-face centre sits at the sketch origin.
+  // SVG y is flipped (screen y-down vs sketch y-up), so translate by (−u0, +v0).
+  const [ox, oy] = originMm
   return (
-    <g pointerEvents="none">
+    <g pointerEvents="none" transform={`translate(${-ox} ${oy})`}>
       {image && <image href={image} x={-130} y={-95} width={260} height={190} preserveAspectRatio="none" />}
       {/* material boundary at the active sketch plane */}
       {section.map((s, i) => (

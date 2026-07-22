@@ -84,13 +84,13 @@ export function SketchCanvas() {
   const partTris = useMeshTriangles(sketchOpen && showPart ? doc?.derived.mesh_url : null)
   // Display plane + section position: when sketching on a face, mirror the
   // backend datum resolution from that feature's live geometry; else the free plane.
-  const backdrop = useMemo<{ plane: 'xy' | 'xz' | 'yz'; sectionMm: number }>(() => {
+  const backdrop = useMemo<{ plane: 'xy' | 'xz' | 'yz'; sectionMm: number; originMm: [number, number] }>(() => {
     if (onFace && doc) {
       const node = findNode(doc.feature_tree, onFace.featureId)
       const r = node ? faceToPlaneOffset(node, onFace.face) : null
-      if (r) return { plane: r.plane, sectionMm: r.offsetMm }
+      if (r) return { plane: r.plane, sectionMm: r.offsetMm, originMm: r.originMm }
     }
-    return { plane: plane as 'xy' | 'xz' | 'yz', sectionMm: offset }
+    return { plane: plane as 'xy' | 'xz' | 'yz', sectionMm: offset, originMm: [0, 0] }
   }, [onFace, doc, plane, offset])
 
   // Load an existing sketch when opened in edit mode; blank otherwise (metres -> mm).
@@ -416,7 +416,7 @@ export function SketchCanvas() {
             <line x1={0} y1={-95} x2={0} y2={95} stroke="#2c333e" strokeWidth={0.5} />
 
             {/* existing part: dim silhouette + bright section where the plane cuts */}
-            {showPart && <PartBackdrop positions={partTris} plane={backdrop.plane} sectionMm={backdrop.sectionMm} />}
+            {showPart && <PartBackdrop positions={partTris} plane={backdrop.plane} sectionMm={backdrop.sectionMm} originMm={backdrop.originMm} />}
 
             {/* circles */}
             {circles.map((c) => {

@@ -372,13 +372,20 @@ def _poly_sdf_2d(uv: np.ndarray, verts: np.ndarray) -> np.ndarray:
 
 
 class ExtrudeSDF(SDF):
-    """A 2D profile (rect/circle/polygon) on a base plane, extruded to a depth."""
+    """A 2D profile (rect/circle/polygon) on a base plane, extruded to a depth.
 
-    def __init__(self, profile: dict, plane: str, offset: float, depth: float):
+    ``plane_origin`` shifts the profile's in-plane origin so a sketch placed on a
+    feature's face is centered on that face rather than the world origin.
+    """
+
+    def __init__(self, profile: dict, plane: str, offset: float, depth: float,
+                 plane_origin=None):
         self.profile = profile or {}
         self.normal = _PLANE_NORMAL.get(plane, "z")
         self.offset = float(offset)
         self.depth = float(depth)
+        po = plane_origin or (0.0, 0.0)
+        self.u0, self.v0 = float(po[0]), float(po[1])
 
     def _local(self, points: np.ndarray):
         if self.normal == "z":
@@ -389,6 +396,9 @@ class ExtrudeSDF(SDF):
 
     def _profile_sdf(self, u: np.ndarray, v: np.ndarray) -> np.ndarray:
         p = self.profile
+        # Profile coords are relative to the plane origin (face centre on-face).
+        u = u - self.u0
+        v = v - self.v0
         cx, cy = p.get("cx", 0.0), p.get("cy", 0.0)
         du, dv = u - cx, v - cy
         kind = p.get("type", "rect")
@@ -420,6 +430,8 @@ class ExtrudeSDF(SDF):
         else:
             hw, hh = p.get("width", 0.05) / 2.0, p.get("height", 0.03) / 2.0
             umin, umax, vmin, vmax = cx - hw, cx + hw, cy - hh, cy + hh
+        # Shift by the plane origin (profile coords are relative to it).
+        umin += self.u0; umax += self.u0; vmin += self.v0; vmax += self.v0
         lo, hi = self.offset - self.depth / 2.0, self.offset + self.depth / 2.0
         if self.normal == "z":
             return Bounds(np.array([umin, vmin, lo]), np.array([umax, vmax, hi]))
@@ -483,7 +495,8 @@ def sdf_from_feature(feature) -> SDF:
         copies = _pattern_transforms(child, feature)
         return BooleanSDF("union", copies)
     if isinstance(feature, ExtrudeFeature):
-        return ExtrudeSDF(feature.profile, feature.plane, feature.offset, feature.depth)
+        return ExtrudeSDF(feature.profile, feature.plane, feature.offset, feature.depth,
+                          plane_origin=getattr(feature, "plane_origin", None))
     if isinstance(feature, OptimizeFeature):
         cache = feature.cache
         if cache and cache.get("density") is not None:

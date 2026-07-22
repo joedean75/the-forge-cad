@@ -141,9 +141,10 @@ def _resolve_on_face(tree, args, params):
         return
     params["on_face"] = {"feature_id": ref["feature_id"], "face": ref.get("face", "top")}
     try:
-        plane, offset = datum.resolve_face(tree, ref["feature_id"], ref.get("face", "top"))
+        plane, offset, origin_uv = datum.resolve_face_frame(tree, ref["feature_id"], ref.get("face", "top"))
         params["plane"] = plane
         params["offset"] = offset
+        params["plane_origin"] = list(origin_uv)  # zero the sketch on the face
     except (KeyError, ValueError):
         pass  # fall back to explicit plane/offset already in params
 
@@ -194,7 +195,7 @@ def _update_sketch(doc_id, args):
 def _add_modifier(doc_id, args):
     doc = _get(doc_id)
     mod = _make_modifier(args["modifier"], args.get("params"))
-    tree = feature_ops.add_modifier(doc.feature_tree, mod)
+    tree = feature_ops.add_modifier(doc.feature_tree, mod, target_id=args.get("target"))
     document_service.update_document(doc_id, feature_tree=tree)
     return {"message": f"added {args['modifier']}", "feature_id": mod["id"]}
 
@@ -436,8 +437,10 @@ OPERATIONS: Dict[str, Operation] = {
                    "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
                    "params": {"type": "object"}}, _add_primitive),
         Operation("add_modifier", "mutate",
-                  "Apply a modifier to the whole body: fillet/chamfer/shell/hole/pattern/transform.",
+                  "Apply a modifier: fillet/chamfer/shell/hole/pattern/transform. By default it wraps the "
+                  "whole body; pass 'target' (a feature id) to apply it to one feature — e.g. pattern a single hole.",
                   {"modifier": {"enum": ["fillet", "chamfer", "shell", "hole", "pattern", "transform"]},
+                   "target": {"type": "string", "description": "feature id to modify (default: whole body)"},
                    "params": {"type": "object"}}, _add_modifier),
         Operation("add_extrude", "mutate",
                   "Sketch a 2D profile on a plane and extrude it into a solid (unioned or subtracted).",

@@ -90,7 +90,7 @@ function Divider() {
 }
 
 export function ToolRibbon() {
-  const { doc, mode, busy, runOp, select,
+  const { doc, mode, busy, runOp, select, selectedFeatureId,
     sketchPick, startSketchPick, cancelSketchPick } = useDocumentStore()
   const [op, setOp] = useState<BooleanOp>('union')
 
@@ -124,8 +124,16 @@ export function ToolRibbon() {
     if (r?.feature_id) select(r.feature_id as string)
   }
 
+  const rootId = doc.feature_tree.root?.id
+  // Pattern/Transform act on the *selected* feature (e.g. replicate one hole);
+  // the others wrap the whole body. A selection that is the root = whole body.
+  const targetable = selectedFeatureId && selectedFeatureId !== rootId ? selectedFeatureId : undefined
+
   const addModifier = async (type: ModifierType) => {
-    const r = await runOp('add_modifier', { modifier: MODIFIER_OF[type] })
+    const usesTarget = type === 'PatternFeature' || type === 'TransformFeature'
+    const args: Record<string, unknown> = { modifier: MODIFIER_OF[type] }
+    if (usesTarget && targetable) args.target = targetable
+    const r = await runOp('add_modifier', args)
     if (r?.feature_id) select(r.feature_id as string)
   }
 
@@ -189,16 +197,22 @@ export function ToolRibbon() {
       <Divider />
 
       <Group label="Modify">
-        {MODIFIERS.map((m) => (
-          <Tool
-            key={m.type}
-            icon={m.icon}
-            label={m.label}
-            title={`${m.label} — ${m.hint}`}
-            onClick={() => addModifier(m.type)}
-            disabled={busy}
-          />
-        ))}
+        {MODIFIERS.map((m) => {
+          const targets = (m.type === 'PatternFeature' || m.type === 'TransformFeature') && targetable
+          return (
+            <Tool
+              key={m.type}
+              icon={m.icon}
+              label={m.label}
+              title={targets ? `${m.label} the selected feature — ${m.hint}`
+                : m.type === 'PatternFeature' || m.type === 'TransformFeature'
+                  ? `${m.label} — select a feature first to ${m.label.toLowerCase()} just that one, else the whole body`
+                  : `${m.label} — ${m.hint}`}
+              onClick={() => addModifier(m.type)}
+              disabled={busy}
+            />
+          )
+        })}
       </Group>
     </div>
   )

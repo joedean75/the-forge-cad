@@ -37,12 +37,24 @@ FACE_MAP: Dict[str, Tuple[str, int, bool]] = {
 FACES = tuple(FACE_MAP.keys())
 
 
-def resolve_face(tree: dict, feature_id: str, face: str) -> Tuple[str, float]:
-    """Return ``(plane, offset)`` for ``face`` of the referenced feature.
+# plane -> the two world-axis indices that span it (u, v).
+_PLANE_AXES = {"xy": (0, 1), "xz": (0, 2), "yz": (1, 2)}
 
-    Evaluates just the referenced feature's subtree to read its current bounding
-    box. Raises ``KeyError`` if the feature is missing and ``ValueError`` for an
-    unknown face name.
+
+def resolve_face(tree: dict, feature_id: str, face: str) -> Tuple[str, float]:
+    """Return ``(plane, offset)`` for ``face`` of the referenced feature (offset
+    along the plane normal). See :func:`resolve_face_frame` for the in-plane origin."""
+    plane, offset, _ = resolve_face_frame(tree, feature_id, face)
+    return plane, offset
+
+
+def resolve_face_frame(tree: dict, feature_id: str, face: str):
+    """Return ``(plane, offset, origin_uv)`` for ``face`` of the referenced feature.
+
+    ``origin_uv`` is the in-plane centre of the feature's face — so a sketch
+    placed on the face is zeroed on the face, not the world origin. Evaluates
+    just the referenced feature's subtree to read its current bounding box.
+    Raises ``KeyError`` if the feature is missing, ``ValueError`` for a bad face.
     """
     if face not in FACE_MAP:
         raise ValueError(f"unknown face '{face}'; expected one of {FACES}")
@@ -65,4 +77,9 @@ def resolve_face(tree: dict, feature_id: str, face: str) -> Tuple[str, float]:
     plane, axis, take_max = FACE_MAP[face]
     coords = mesh.vertices[:, axis]
     offset = float(coords.max() if take_max else coords.min())
-    return plane, offset
+    # In-plane centre = midpoint of the feature's bbox on the two spanning axes.
+    ua, va = _PLANE_AXES[plane]
+    verts = mesh.vertices
+    u0 = float((verts[:, ua].min() + verts[:, ua].max()) / 2.0)
+    v0 = float((verts[:, va].min() + verts[:, va].max()) / 2.0)
+    return plane, offset, (u0, v0)

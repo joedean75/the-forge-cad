@@ -283,7 +283,12 @@ export function DocumentViewport() {
       }}
     >
       {/* near=0.01 so close zoom never clips the part; far generous for wide views */}
-      <Canvas camera={{ position: [3, 2, 4], fov: 45, near: 0.01, far: 200 }} shadows>
+      {/* logarithmicDepthBuffer: the model is normalized to ~1.5 units but is
+          viewed from 0.08–50 units with thin/coplanar CAD faces; a linear depth
+          buffer z-fights and "glitches" the model at certain distances. Log depth
+          + a tighter near/far ratio give stable precision across the whole range. */}
+      <Canvas camera={{ position: [3, 2, 4], fov: 45, near: 0.02, far: 100 }} shadows
+        gl={{ logarithmicDepthBuffer: true }}>
         <Suspense fallback={null}>
           <ambientLight intensity={0.6} />
           <directionalLight position={[5, 10, 7]} intensity={1.2} castShadow />
@@ -338,7 +343,7 @@ export function DocumentViewport() {
               dolly clamps at close working distance */}
           <CameraControls
             makeDefault
-            minDistance={0.05}
+            minDistance={0.08}
             maxDistance={50}
             dollyToCursor
             smoothTime={0.08}
