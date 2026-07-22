@@ -127,6 +127,46 @@ def _add_extrude(doc_id, args):
     return {"message": "added extrude", "feature_id": node["id"]}
 
 
+def _add_revolve(doc_id, args):
+    doc = _get(doc_id)
+    node = {"type": "RevolveFeature", "name": "Revolve", "params": {
+        "profile": args.get("profile", {"type": "rect", "width": 0.01, "height": 0.03, "cx": 0.02, "cy": 0.0}),
+        "axis": args.get("axis", "z"), "center": args.get("center", {"x": 0, "y": 0, "z": 0}),
+        "angle": args.get("angle", 360.0)}}
+    tree = feature_ops.add_primitive(doc.feature_tree, node, args.get("operation", "union"))
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": "added revolve", "feature_id": node["id"]}
+
+
+def _add_sweep(doc_id, args):
+    doc = _get(doc_id)
+    node = {"type": "SweepFeature", "name": "Sweep", "params": {
+        "path": args.get("path", [[0, 0, 0], [0, 0, 0.05]]), "radius": args.get("radius", 0.005)}}
+    tree = feature_ops.add_primitive(doc.feature_tree, node, args.get("operation", "union"))
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": "added sweep", "feature_id": node["id"]}
+
+
+def _add_loft(doc_id, args):
+    doc = _get(doc_id)
+    node = {"type": "LoftFeature", "name": "Loft", "params": {
+        "profile_a": args.get("profile_a", {"type": "rect", "width": 0.04, "height": 0.04, "cx": 0, "cy": 0}),
+        "profile_b": args.get("profile_b", {"type": "circle", "radius": 0.015, "cx": 0, "cy": 0}),
+        "plane": args.get("plane", "xy"), "offset_a": args.get("offset_a", 0.0), "offset_b": args.get("offset_b", 0.05)}}
+    tree = feature_ops.add_primitive(doc.feature_tree, node, args.get("operation", "union"))
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": "added loft", "feature_id": node["id"]}
+
+
+def _add_mirror(doc_id, args):
+    doc = _get(doc_id)
+    mod = {"type": "MirrorFeature", "name": "Mirror",
+           "params": {"plane": args.get("plane", "yz"), "offset": args.get("offset", 0.0)}}
+    tree = feature_ops.add_modifier(doc.feature_tree, mod, target_id=args.get("target"))
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": "added mirror", "feature_id": mod["id"]}
+
+
 def _resolve_on_face(tree, args, params):
     """If args carry an ``on_face`` ref, store it and bake an initial plane/offset.
 
@@ -278,6 +318,17 @@ def _mass_properties(doc_id, args):
     from app.services import mass_properties
 
     return mass_properties.mass_properties(doc_id)
+
+
+def _profile_cut(doc_id, args):
+    from app.services.cam import profile_cut
+
+    out = profile_cut.profile_cut(
+        doc_id, kerf_mm=args.get("kerf_mm", 0.2), plane=args.get("plane", "xy"),
+        feed_mm_min=args.get("feed_mm_min", 1200.0), power=args.get("power", 100.0))
+    return {"message": f"cut {out['path_count']} contour(s), {out['cut_length_mm']}mm",
+            "path_count": out["path_count"], "cut_length_mm": out["cut_length_mm"],
+            "estimated_minutes": out["estimated_minutes"], "gcode_bytes": len(out["gcode"])}
 
 
 def _generate_drawing(doc_id, args):
@@ -448,6 +499,29 @@ OPERATIONS: Dict[str, Operation] = {
                    "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
                    "offset": {"type": "number"}, "depth": {"type": "number"},
                    "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}}, _add_extrude),
+        Operation("add_revolve", "mutate",
+                  "Revolve a 2D profile (authored in radius/height, metres) about an axis to make a "
+                  "turned part — shaft, wheel, pulley, bottle. angle<360 = partial revolve.",
+                  {"profile": {"type": "object", "description": "{type:rect|circle|polygon} in (radius,height)"},
+                   "axis": {"enum": ["x", "y", "z"], "default": "z"}, "center": _VEC,
+                   "angle": {"type": "number", "default": 360},
+                   "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}}, _add_revolve),
+        Operation("add_mirror", "mutate",
+                  "Mirror the body (or a target feature) across a plane and union — symmetry in one op.",
+                  {"plane": {"enum": ["xy", "xz", "yz"], "default": "yz"}, "offset": {"type": "number"},
+                   "target": {"type": "string", "description": "feature id to mirror (default: whole body)"}},
+                  _add_mirror),
+        Operation("add_sweep", "mutate",
+                  "Sweep a round profile of 'radius' along a polyline 'path' (metres) — pipe, tube, wire, rail.",
+                  {"path": {"type": "array", "description": "[[x,y,z], …] in metres"},
+                   "radius": {"type": "number"},
+                   "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}}, _add_sweep),
+        Operation("add_loft", "mutate",
+                  "Loft between two profiles at two heights along a plane normal — adapters, tapers, funnels.",
+                  {"profile_a": {"type": "object"}, "profile_b": {"type": "object"},
+                   "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
+                   "offset_a": {"type": "number"}, "offset_b": {"type": "number"},
+                   "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}}, _add_loft),
         Operation("add_sketch", "mutate",
                   "Solve a constrained 2D sketch (points/lines/arcs/circles + constraints) and extrude the profile. "
                   "Pass on_face to place the sketch on another feature's face so it follows that feature through edits.",
@@ -496,6 +570,11 @@ OPERATIONS: Dict[str, Operation] = {
                   "Generate a dimensioned multi-view 2D engineering drawing (front/top/right + section). "
                   "Fetch the full SVG at GET /api/documents/{id}/drawing.svg.",
                   {"section": {"type": "boolean", "default": True}}, _generate_drawing),
+        Operation("profile_cut", "query",
+                  "2D laser/plasma/waterjet cut of the part outline from sheet, kerf-compensated. "
+                  "Fetch G-code at GET /api/documents/{id}/profile-cut.gcode.",
+                  {"kerf_mm": {"type": "number", "default": 0.2}, "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
+                   "feed_mm_min": {"type": "number"}, "power": {"type": "number"}}, _profile_cut),
         Operation("compute_fit", "query",
                   "ISO-286 fit/tolerance limits for a nominal size. 'fit' is a single spec ('H7') "
                   "or a hole/shaft fit ('H7/g6' → clearance range + classification).",

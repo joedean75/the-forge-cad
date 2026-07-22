@@ -3,6 +3,7 @@ import {
   Box, Circle, Cylinder, Cone, Combine, Trash2,
   Blend, Triangle, Shell, CircleDot, Grid3x3, Move3d,
   Eye, EyeOff, ChevronUp, ChevronDown, PencilRuler, Upload,
+  Rotate3d, FlipHorizontal2, Spline, Layers,
 } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
 import { flatten, isSuppressed, isBoolean } from '../../util/featureTree'
@@ -22,6 +23,10 @@ const TYPE_ICON: Record<string, typeof Box> = {
   TransformFeature: Move3d,
   ExtrudeFeature: PencilRuler,
   ImportFeature: Upload,
+  RevolveFeature: Rotate3d,
+  MirrorFeature: FlipHorizontal2,
+  SweepFeature: Spline,
+  LoftFeature: Layers,
 }
 
 function nodeLabel(node: FeatureNode): string {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Loader2, Factory, Download, Check, AlertTriangle, X, Route, ShoppingCart, PackageCheck, FileText, GitBranch, Tag } from 'lucide-react'
+import { Loader2, Factory, Download, Check, AlertTriangle, X, Route, ShoppingCart, PackageCheck, FileText, GitBranch, Tag, Scissors } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
 import { api } from '../../api/client'
 import type { DfmCheck, QuoteBundle, ManufacturingOrder, DrawingResult, DocumentRevisionMeta } from '../../../../shared/types'
@@ -212,6 +212,49 @@ function GetItMade({ docId }: { docId: string }) {
 const STATUS_ICON = { pass: Check, warn: AlertTriangle, fail: X }
 const STATUS_TONE = { pass: 'text-cad-success', warn: 'text-cad-warning', fail: 'text-cad-danger' }
 
+function LaserCut({ docId, docName }: { docId: string; docName: string }) {
+  const [kerf, setKerf] = useState(0.2)
+  const [res, setRes] = useState<{ path_count: number; cut_length_mm: number; estimated_minutes: number } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const run = async () => {
+    setBusy(true); setErr(null)
+    try { setRes(await api.profileCut(docId, kerf)) }
+    catch (e) { setErr(e instanceof Error ? e.message : 'Cut failed') }
+    finally { setBusy(false) }
+  }
+  return (
+    <div className="space-y-2">
+      <h3 className="sec-head">Laser / waterjet cut</h3>
+      <p className="text-[10px] text-cad-text/60">Cut the part outline from sheet — kerf-compensated G-code for laser, plasma or waterjet.</p>
+      <div className="flex items-center gap-2">
+        <label className="text-[10px] text-cad-text flex items-center gap-1">kerf
+          <input type="number" value={kerf} step={0.05} min={0} onChange={(e) => setKerf(parseFloat(e.target.value) || 0)}
+            className="tabular w-14 px-1.5 py-1 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-[11px] outline-none" />mm
+        </label>
+        <button onClick={run} disabled={busy}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm bg-cad-accent text-cad-bg text-[11px] font-semibold hover:bg-cad-accent-hot transition-colors disabled:opacity-50">
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <Scissors size={12} />} Cut
+        </button>
+        {res && (
+          <button onClick={() => api.downloadProfileCut(docId, docName, kerf).catch(() => {})}
+            title="Download cut G-code" className="flex items-center justify-center px-2.5 py-1.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading transition">
+            <Download size={13} />
+          </button>
+        )}
+      </div>
+      {err && <p className="text-[10px] text-cad-danger">{err}</p>}
+      {res && (
+        <div className="tabular text-[10px] text-cad-text flex gap-3">
+          <span>{res.path_count} path(s)</span>
+          <span>{res.cut_length_mm.toFixed(0)} mm cut</span>
+          <span>~{res.estimated_minutes} min</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function MakePanel() {
   const { doc, busy, dfm, cam, runDfm, runCam, exportStep, downloadGcode } = useDocumentStore()
   const [diameter, setDiameter] = useState(3)
@@ -222,6 +265,10 @@ export function MakePanel() {
   return (
     <div className="space-y-5">
       <Documentation docId={doc.id} docName={doc.name} />
+
+      <div className="pt-3 border-t border-cad-border" />
+
+      <LaserCut docId={doc.id} docName={doc.name} />
 
       <div className="pt-3 border-t border-cad-border" />
 

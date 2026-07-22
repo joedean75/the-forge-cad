@@ -55,6 +55,12 @@ class Feature:
         from app.cad_kernel.ops.generative import OptimizeFeature
         from app.cad_kernel.ops.imported import ImportFeature
         from app.cad_kernel.ops.sketch import ExtrudeFeature
+        from app.cad_kernel.ops.advanced import (
+            RevolveFeature,
+            MirrorFeature,
+            SweepFeature,
+            LoftFeature,
+        )
 
         registry = {
             "BoxFeature": BoxFeature,
@@ -71,6 +77,10 @@ class Feature:
             "OptimizeFeature": OptimizeFeature,
             "ImportFeature": ImportFeature,
             "ExtrudeFeature": ExtrudeFeature,
+            "RevolveFeature": RevolveFeature,
+            "MirrorFeature": MirrorFeature,
+            "SweepFeature": SweepFeature,
+            "LoftFeature": LoftFeature,
         }
         cls = registry.get(data["type"])
         if cls is None:

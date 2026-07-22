@@ -420,6 +420,58 @@ function FeatureFields() {
         </>
       )}
 
+      {node.type === 'RevolveFeature' && (
+        <>
+          <div>
+            <h3 className="sec-head mb-2">Revolve axis</h3>
+            <select value={String(p.axis ?? 'z')} onChange={(e) => commit({ axis: e.target.value })}
+              className="w-full px-2 py-1.5 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-xs focus:border-cad-accent outline-none">
+              <option value="x">X</option><option value="y">Y</option><option value="z">Z</option>
+            </select>
+          </div>
+          <div>
+            <h3 className="sec-head mb-2">Angle</h3>
+            <NumberField label="" value={p.angle as number} scale={1} suffix="°" onCommit={(a) => commit({ angle: a })} />
+          </div>
+          <Vec3Field label="Axis center" value={p.center as Vec} scale={MM} suffix="mm" onCommit={(v) => commit({ center: v })} />
+        </>
+      )}
+
+      {node.type === 'MirrorFeature' && (
+        <>
+          <div>
+            <h3 className="sec-head mb-2">Mirror plane</h3>
+            <select value={String(p.plane ?? 'yz')} onChange={(e) => commit({ plane: e.target.value })}
+              className="w-full px-2 py-1.5 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-xs focus:border-cad-accent outline-none">
+              <option value="yz">YZ (mirror left/right)</option>
+              <option value="xz">XZ (mirror front/back)</option>
+              <option value="xy">XY (mirror up/down)</option>
+            </select>
+          </div>
+          <ScalarRow label="Plane offset" value={p.offset as number} onCommit={(o) => commit({ offset: o })} />
+        </>
+      )}
+
+      {node.type === 'SweepFeature' && (
+        <ScalarRow label="Tube radius" value={p.radius as number} onCommit={(r) => commit({ radius: r })} />
+      )}
+
+      {node.type === 'LoftFeature' && (
+        <>
+          <div>
+            <h3 className="sec-head mb-2">Loft plane</h3>
+            <select value={String(p.plane ?? 'xy')} onChange={(e) => commit({ plane: e.target.value })}
+              className="w-full px-2 py-1.5 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-xs focus:border-cad-accent outline-none">
+              <option value="xy">XY</option><option value="xz">XZ</option><option value="yz">YZ</option>
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <NumberField label="Bottom" value={p.offset_a as number} scale={MM} suffix="mm" onCommit={(o) => commit({ offset_a: o })} />
+            <NumberField label="Top" value={p.offset_b as number} scale={MM} suffix="mm" onCommit={(o) => commit({ offset_b: o })} />
+          </div>
+        </>
+      )}
+
       {isBoolean(node) && (
         <div>
           <h3 className="sec-head mb-2">Operation</h3>

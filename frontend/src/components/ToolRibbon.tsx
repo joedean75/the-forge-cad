@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   Box, Circle, Cylinder, Cone, Plus, Minus,
   Blend, Triangle, Shell, CircleDot, Grid3x3, Move3d, PencilRuler,
+  Rotate3d, FlipHorizontal2, Spline, Layers,
 } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { flatten, type BooleanOp, type ModifierType, type PrimitiveType } from '../util/featureTree'
@@ -137,6 +138,17 @@ export function ToolRibbon() {
     if (r?.feature_id) select(r.feature_id as string)
   }
 
+  // Advanced forms (revolve/sweep/loft) add a default body; mirror wraps the
+  // body or the selected feature. Params are then edited in the inspector.
+  const addForm = async (opName: string, extra: Record<string, unknown> = {}) => {
+    const r = await runOp(opName, { operation: op, ...extra })
+    if (r?.feature_id) select(r.feature_id as string)
+  }
+  const addMirror = async () => {
+    const r = await runOp('add_mirror', targetable ? { target: targetable } : {})
+    if (r?.feature_id) select(r.feature_id as string)
+  }
+
   const cut = op === 'subtract'
 
   return (
@@ -192,6 +204,20 @@ export function ToolRibbon() {
             disabled={busy}
           />
         ))}
+      </Group>
+
+      <Divider />
+
+      <Group label="Forms">
+        <Tool icon={Rotate3d} label="Revolve" title="Revolve a profile about an axis — shaft, wheel, pulley, bottle"
+          onClick={() => addForm('add_revolve')} disabled={busy} />
+        <Tool icon={Spline} label="Sweep" title="Sweep a round profile along a path — pipe, tube, wire, rail"
+          onClick={() => addForm('add_sweep')} disabled={busy} />
+        <Tool icon={Layers} label="Loft" title="Blend between two profiles — adapters, tapers, funnels"
+          onClick={() => addForm('add_loft')} disabled={busy} />
+        <Tool icon={FlipHorizontal2} label="Mirror"
+          title={targetable ? 'Mirror the selected feature across a plane' : 'Mirror the whole body across a plane (select a feature to mirror just that)'}
+          onClick={addMirror} disabled={busy} />
       </Group>
 
       <Divider />

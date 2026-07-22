@@ -371,6 +371,22 @@ def _poly_sdf_2d(uv: np.ndarray, verts: np.ndarray) -> np.ndarray:
     return s * np.sqrt(d)
 
 
+def profile_sdf_2d(profile: dict, u: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """Signed distance to a 2D profile (rect/circle/polygon) at points (u, v)."""
+    p = profile or {}
+    cx, cy = p.get("cx", 0.0), p.get("cy", 0.0)
+    du, dv = u - cx, v - cy
+    kind = p.get("type", "rect")
+    if kind == "circle":
+        return np.sqrt(du * du + dv * dv) - p.get("radius", 0.02)
+    if kind == "polygon":
+        verts = np.asarray(p.get("points", [[0, 0]]), dtype=float)
+        return _poly_sdf_2d(np.stack([u, v], axis=1), verts)
+    hw, hh = p.get("width", 0.05) / 2.0, p.get("height", 0.03) / 2.0
+    qx, qy = np.abs(du) - hw, np.abs(dv) - hh
+    return np.sqrt(np.maximum(qx, 0) ** 2 + np.maximum(qy, 0) ** 2) + np.minimum(np.maximum(qx, qy), 0.0)
+
+
 class ExtrudeSDF(SDF):
     """A 2D profile (rect/circle/polygon) on a base plane, extruded to a depth.
 
@@ -395,21 +411,8 @@ class ExtrudeSDF(SDF):
         return points[:, 1], points[:, 2], points[:, 0]
 
     def _profile_sdf(self, u: np.ndarray, v: np.ndarray) -> np.ndarray:
-        p = self.profile
         # Profile coords are relative to the plane origin (face centre on-face).
-        u = u - self.u0
-        v = v - self.v0
-        cx, cy = p.get("cx", 0.0), p.get("cy", 0.0)
-        du, dv = u - cx, v - cy
-        kind = p.get("type", "rect")
-        if kind == "circle":
-            return np.sqrt(du * du + dv * dv) - p.get("radius", 0.02)
-        if kind == "polygon":
-            verts = np.asarray(p.get("points", [[0, 0]]), dtype=float)
-            return _poly_sdf_2d(np.stack([u, v], axis=1), verts)
-        hw, hh = p.get("width", 0.05) / 2.0, p.get("height", 0.03) / 2.0
-        qx, qy = np.abs(du) - hw, np.abs(dv) - hh
-        return np.sqrt(np.maximum(qx, 0) ** 2 + np.maximum(qy, 0) ** 2) + np.minimum(np.maximum(qx, qy), 0.0)
+        return profile_sdf_2d(self.profile, u - self.u0, v - self.v0)
 
     def __call__(self, points: np.ndarray) -> np.ndarray:
         u, v, w = self._local(points)
@@ -440,6 +443,158 @@ class ExtrudeSDF(SDF):
         return Bounds(np.array([lo, umin, vmin]), np.array([hi, umax, vmax]))
 
 
+# axis name -> the world index it points along, and the two in-plane indices.
+_REV_AXES = {"x": (0, 1, 2), "y": (1, 0, 2), "z": (2, 0, 1)}
+
+
+class RevolveSDF(SDF):
+    """A 2D profile (in radius/height) revolved about an axis through a centre."""
+
+    def __init__(self, profile: dict, axis: str, center, angle_deg: float):
+        self.profile = profile or {}
+        self.ai, self.bi, self.ci = _REV_AXES.get(axis, _REV_AXES["z"])
+        self.center = np.array([center.x, center.y, center.z], dtype=float)
+        self.angle = float(angle_deg)
+
+    def _profile_extent(self):
+        p = self.profile
+        cx, cy = p.get("cx", 0.0), p.get("cy", 0.0)
+        kind = p.get("type", "rect")
+        if kind == "circle":
+            r = p.get("radius", 0.02)
+            return cx + r, cy - r, cy + r
+        if kind == "polygon":
+            verts = np.asarray(p.get("points", [[0, 0]]), dtype=float)
+            return float(verts[:, 0].max()), float(verts[:, 1].min()), float(verts[:, 1].max())
+        hw, hh = p.get("width", 0.04) / 2.0, p.get("height", 0.03) / 2.0
+        return cx + hw, cy - hh, cy + hh
+
+    def __call__(self, points: np.ndarray) -> np.ndarray:
+        rel = points - self.center
+        a = rel[:, self.ai]              # along the revolve axis (height)
+        b = rel[:, self.bi]
+        c = rel[:, self.ci]
+        r = np.sqrt(b * b + c * c)       # radius from the axis
+        d = profile_sdf_2d(self.profile, r, a)
+        if self.angle < 359.999:
+            # Intersect with an angular wedge [0, angle] about the b-axis.
+            ang = np.degrees(np.arctan2(c, b)) % 360.0
+            half = self.angle / 2.0
+            centered = np.abs(((ang - half + 180.0) % 360.0) - 180.0)
+            wedge = centered - half      # <=0 inside the wedge
+            d = np.maximum(d, wedge * (r + 1e-6) * np.pi / 180.0)
+        return d
+
+    def bounds(self) -> Bounds:
+        rmax, hmin, hmax = self._profile_extent()
+        rmax = abs(rmax)
+        lo = self.center.copy()
+        hi = self.center.copy()
+        lo[self.ai] += hmin; hi[self.ai] += hmax
+        for idx in (self.bi, self.ci):
+            lo[idx] -= rmax; hi[idx] += rmax
+        return Bounds(lo, hi)
+
+
+class MirrorSDF(SDF):
+    """Union of a child SDF with its reflection across an axis-aligned plane."""
+
+    def __init__(self, child: SDF, plane: str, offset: float):
+        self.child = child
+        self.normal = _PLANE_NORMAL.get(plane, "x")
+        self.axis = {"x": 0, "y": 1, "z": 2}[self.normal]
+        self.offset = float(offset)
+
+    def __call__(self, points: np.ndarray) -> np.ndarray:
+        reflected = points.copy()
+        reflected[:, self.axis] = 2.0 * self.offset - reflected[:, self.axis]
+        return np.minimum(self.child(points), self.child(reflected))
+
+    def bounds(self) -> Bounds:
+        b = self.child.bounds()
+        lo = b.min.copy(); hi = b.max.copy()
+        # Reflect the bbox extents across the plane and take the union.
+        rlo = 2 * self.offset - hi[self.axis]
+        rhi = 2 * self.offset - lo[self.axis]
+        lo[self.axis] = min(lo[self.axis], rlo)
+        hi[self.axis] = max(hi[self.axis], rhi)
+        return Bounds(lo, hi)
+
+
+class SweepSDF(SDF):
+    """A tube of a given radius swept along a polyline path (union of capsules)."""
+
+    def __init__(self, path, radius: float):
+        self.pts = np.asarray(path, dtype=float)
+        self.radius = float(radius)
+
+    def __call__(self, points: np.ndarray) -> np.ndarray:
+        best = np.full(len(points), 1e9)
+        for i in range(len(self.pts) - 1):
+            a = self.pts[i]; b = self.pts[i + 1]
+            ab = b - a
+            denom = float(ab @ ab) or 1e-12
+            t = np.clip(((points - a) @ ab) / denom, 0.0, 1.0)
+            proj = a + t[:, None] * ab
+            dist = np.linalg.norm(points - proj, axis=1) - self.radius
+            best = np.minimum(best, dist)
+        return best
+
+    def bounds(self) -> Bounds:
+        lo = self.pts.min(axis=0) - self.radius
+        hi = self.pts.max(axis=0) + self.radius
+        return Bounds(lo, hi)
+
+
+class LoftSDF(SDF):
+    """Linear blend between two profiles along a plane normal (morphing slab)."""
+
+    def __init__(self, profile_a: dict, profile_b: dict, plane: str, offset_a: float, offset_b: float):
+        self.pa = profile_a or {}
+        self.pb = profile_b or {}
+        self.normal = _PLANE_NORMAL.get(plane, "z")
+        self.o0 = float(min(offset_a, offset_b))
+        self.o1 = float(max(offset_a, offset_b))
+        if offset_a > offset_b:
+            self.pa, self.pb = self.pb, self.pa
+
+    def _local(self, points: np.ndarray):
+        if self.normal == "z":
+            return points[:, 0], points[:, 1], points[:, 2]
+        if self.normal == "y":
+            return points[:, 0], points[:, 2], points[:, 1]
+        return points[:, 1], points[:, 2], points[:, 0]
+
+    def __call__(self, points: np.ndarray) -> np.ndarray:
+        u, v, w = self._local(points)
+        span = max(self.o1 - self.o0, 1e-9)
+        t = np.clip((w - self.o0) / span, 0.0, 1.0)
+        blended = (1 - t) * profile_sdf_2d(self.pa, u, v) + t * profile_sdf_2d(self.pb, u, v)
+        slab = np.abs(w - (self.o0 + self.o1) / 2.0) - span / 2.0
+        return np.maximum(blended, slab)
+
+    def bounds(self) -> Bounds:
+        ext = []
+        for p in (self.pa, self.pb):
+            cx, cy = p.get("cx", 0.0), p.get("cy", 0.0)
+            kind = p.get("type", "rect")
+            if kind == "circle":
+                r = p.get("radius", 0.02); ext.append((cx - r, cx + r, cy - r, cy + r))
+            elif kind == "polygon":
+                verts = np.asarray(p.get("points", [[0, 0]]), dtype=float)
+                ext.append((verts[:, 0].min(), verts[:, 0].max(), verts[:, 1].min(), verts[:, 1].max()))
+            else:
+                hw, hh = p.get("width", 0.04) / 2.0, p.get("height", 0.03) / 2.0
+                ext.append((cx - hw, cx + hw, cy - hh, cy + hh))
+        umin = min(e[0] for e in ext); umax = max(e[1] for e in ext)
+        vmin = min(e[2] for e in ext); vmax = max(e[3] for e in ext)
+        if self.normal == "z":
+            return Bounds(np.array([umin, vmin, self.o0]), np.array([umax, vmax, self.o1]))
+        if self.normal == "y":
+            return Bounds(np.array([umin, self.o0, vmin]), np.array([umax, self.o1, vmax]))
+        return Bounds(np.array([self.o0, umin, vmin]), np.array([self.o1, umax, vmax]))
+
+
 def sdf_from_feature(feature) -> SDF:
     """Convert a feature-tree feature into an SDF expression."""
     from app.cad_kernel.ops.primitives import (
@@ -460,7 +615,16 @@ def sdf_from_feature(feature) -> SDF:
     from app.cad_kernel.ops.generative import OptimizeFeature
     from app.cad_kernel.ops.imported import ImportFeature
     from app.cad_kernel.ops.sketch import ExtrudeFeature
+    from app.cad_kernel.ops.advanced import RevolveFeature, MirrorFeature, SweepFeature, LoftFeature
 
+    if isinstance(feature, RevolveFeature):
+        return RevolveSDF(feature.profile, feature.axis, feature.center, feature.angle)
+    if isinstance(feature, MirrorFeature):
+        return MirrorSDF(sdf_from_feature(feature.children[0]), feature.plane, feature.offset)
+    if isinstance(feature, SweepFeature):
+        return SweepSDF(feature.path, feature.radius)
+    if isinstance(feature, LoftFeature):
+        return LoftSDF(feature.profile_a, feature.profile_b, feature.plane, feature.offset_a, feature.offset_b)
     if isinstance(feature, BoxFeature):
         return BoxSDF(feature.size, feature.center)
     if isinstance(feature, SphereFeature):

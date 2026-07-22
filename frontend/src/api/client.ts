@@ -292,6 +292,19 @@ export const api = {
     fetchJson<DocumentRevisionMeta>(`/documents/${id}/revisions`, { method: 'POST', body: JSON.stringify({ notes }) }),
   setLifecycleState: (id: string, state: string) =>
     fetchJson<DesignDocument>(`/documents/${id}/state`, { method: 'POST', body: JSON.stringify({ state }) }),
+  profileCut: (id: string, kerfMm = 0.2, plane = 'xy') =>
+    fetchJson<{ path_count: number; cut_length_mm: number; estimated_minutes: number; size_mm: { u: number; v: number } }>(
+      `/documents/${id}/profile-cut?kerf_mm=${kerfMm}&plane=${plane}`),
+  downloadProfileCut: async (id: string, name = 'part', kerfMm = 0.2) => {
+    const res = await fetch(`${API_BASE}/documents/${id}/profile-cut.gcode?kerf_mm=${kerfMm}`, { headers: authHeaders() })
+    if (!res.ok) throw new Error(`Cut unavailable (${res.status})`)
+    const blob = await res.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${name.slice(0, 40).replace(/\s+/g, '_') || 'part'}_cut.gcode`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  },
   downloadDrawing: async (id: string, name = 'part') => {
     const res = await fetch(`${API_BASE}/documents/${id}/drawing.svg`, { headers: authHeaders() })
     if (!res.ok) throw new Error(`Drawing unavailable (${res.status})`)

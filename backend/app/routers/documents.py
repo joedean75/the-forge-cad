@@ -509,6 +509,31 @@ def drawing(section: bool = True, doc: DesignDocument = Depends(readable_documen
         raise HTTPException(status_code=422, detail=str(exc))
 
 
+@router.get("/{doc_id}/profile-cut")
+def profile_cut(kerf_mm: float = 0.2, plane: str = "xy", feed_mm_min: float = 1200.0,
+                power: float = 100.0, doc: DesignDocument = Depends(readable_document)):
+    """2D laser/plasma/waterjet cut paths + G-code for the part outline."""
+    from app.services.cam import profile_cut as pc
+
+    try:
+        return pc.profile_cut(doc.id, kerf_mm=kerf_mm, plane=plane, feed_mm_min=feed_mm_min, power=power)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/{doc_id}/profile-cut.gcode", response_class=PlainTextResponse)
+def profile_cut_gcode(kerf_mm: float = 0.2, plane: str = "xy", feed_mm_min: float = 1200.0,
+                      power: float = 100.0, doc: DesignDocument = Depends(readable_document)):
+    from app.services.cam import profile_cut as pc
+
+    try:
+        out = pc.profile_cut(doc.id, kerf_mm=kerf_mm, plane=plane, feed_mm_min=feed_mm_min, power=power)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return PlainTextResponse(out["gcode"], media_type="text/plain",
+                             headers={"Content-Disposition": f"attachment; filename={doc.name[:40].replace(' ', '_') or 'part'}_cut.gcode"})
+
+
 @router.get("/{doc_id}/drawing.svg")
 def drawing_svg(section: bool = True, doc: DesignDocument = Depends(readable_document)):
     from fastapi.responses import Response

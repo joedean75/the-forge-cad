@@ -16,10 +16,11 @@ sampler on the hot path) and a real **3D SIMP topology optimizer**
 |---|---|
 | **Text-to-CAD** | A prompt bar that turns "a 100×50×30 mm bracket with two mounting holes" into an editable feature tree. LLM-first with validation + self-repair; a rule-based parser covers everything credential-free. |
 | **Forge Copilot** | An agentic loop that plans and executes multi-step edits ("shell it to 2 mm and fillet the top edges") through the same operation API agents use — every step visible and undoable. |
-| **Parametric modeling** | Feature tree (box/cylinder/sphere/cone, booleans, fillet/chamfer/shell/hole/pattern/transform, constrained sketches extruded on faces) with a CAD-standard tool ribbon, dimensions, and version history. |
+| **Parametric modeling** | Feature tree (box/cylinder/sphere/cone, booleans, fillet/chamfer/shell/hole/pattern/transform, constrained sketches, **revolve/mirror/sweep/loft**) with a CAD-standard tool ribbon, driving parameters, configurations, dimensions, and version history. |
 | **Generative design** | SIMP topology optimization scoped to *your part* — the result folds back into the tree as an `OptimizeFeature` and stays editable. |
 | **Universal import** | STL / OBJ / PLY / GLB / OFF and faceted STEP become editable bodies (voxelized into the SDF representation). |
 | **Validate & Make** | Simulation on the evaluated solid, DFM checks, instant quotes across CNC / FDM / SLA / LPBF with order placement (RFQs; pluggable supplier API). |
+| **CAM** | CNC 2.5D roughing + finishing toolpaths, and **2D laser / plasma / waterjet profile cutting** (kerf-compensated sheet-cut G-code) — both from the same SDF section machinery. |
 | **3D printing** | A built-in SDF-native FDM slicer — walls, solid top/bottom skins, infill, skirt, retraction, cooling — producing Klipper/Marlin G-code, with a layer preview and one-click upload to a Moonraker printer. See [docs/PRINTING.md](docs/PRINTING.md). |
 | **Machine control** | Moonraker/Klipper status, temperatures, jog, job progress. |
 | **Collaboration** | Owner-scoped documents, role-based sharing (viewer/editor), live presence + real-time updates over WebSocket, version snapshots/restore/branch. |
