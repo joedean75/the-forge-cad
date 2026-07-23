@@ -36,7 +36,7 @@ _MACHINES: Dict[str, Machine] = {
         Machine(id="ender3", name="Ender 3", vendor="Creality", process="fdm",
                 bed=[220, 220, 250], dialect="marlin", connection="moonraker",
                 notes="Desktop FDM. Drive live over Moonraker/Klipper."),
-        Machine(id="prusa-mk4", name="Prusa MK4", vendor="Prusa", process="fdm",
+        Machine(id="prusa-mk4", name="MK4", vendor="Prusa", process="fdm",
                 bed=[250, 210, 220], dialect="marlin", connection="moonraker",
                 notes="FDM. Marlin dialect, Moonraker-capable."),
         Machine(id="tci-dl1530", name="DynamicLine 1530", vendor="TCI Cutting", process="laser",
