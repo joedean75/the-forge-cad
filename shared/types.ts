@@ -431,6 +431,35 @@ export interface CopilotResult {
   document?: DesignDocument | null
 }
 
+// --- Machines: the shop's real equipment ---
+export interface MachineSpec {
+  id: string
+  name: string
+  vendor: string
+  /** fdm | laser | press_brake | cnc */
+  process: string
+  /** working envelope in mm (x, y, z); sheet machines use z = 0 */
+  bed: number[]
+  dialect: string
+  /** moonraker (drive live) | dispatch (export job) | quote (send out) */
+  connection: string
+  notes: string
+}
+
+export interface NestResult {
+  machine: { id: string; name: string; sheet_mm: number[] }
+  requested: number
+  per_sheet: number
+  placed: number
+  sheets_needed: number
+  grid: { cols: number; rows: number }
+  part_mm: number[]
+  utilisation_pct: number
+  placements: { index: number; x: number; y: number }[]
+  paths: number[][][]
+  cut_length_mm: number
+}
+
 // --- FDM slicing (3D printing) ---
 export interface SliceSettings {
   layer_height?: number
@@ -552,7 +581,12 @@ export interface FeatureTreeDict {
   root: FeatureNode
 }
 
-export type EditorMode = 'model' | 'optimize' | 'validate' | 'make' | 'machine'
+/**
+ * The workflow pipeline, in order: design the part, optimize it, analyse it
+ * structurally, prepare the job (G-code + nest + post), validate that job by
+ * simulating the build, then send it to a real machine.
+ */
+export type EditorMode = 'model' | 'optimize' | 'analysis' | 'make' | 'validate' | 'machine'
 
 export interface MachinePrinter {
   name: string

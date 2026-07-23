@@ -11,6 +11,7 @@ import { DocumentViewport } from '../components/DocumentViewport'
 import { FeatureTreePanel } from '../features/tree/FeatureTreePanel'
 import { ModelInspector } from '../features/model/ModelInspector'
 import { OptimizePanel } from '../features/optimize/OptimizePanel'
+import { AnalysisPanel } from '../features/analysis/AnalysisPanel'
 import { ValidatePanel } from '../features/validate/ValidatePanel'
 import { MakePanel } from '../features/make/MakePanel'
 import { MachinePanel } from '../features/machine/MachinePanel'
@@ -22,8 +23,9 @@ import type { EditorMode } from '../../../shared/types'
 const MODE_TITLE: Record<EditorMode, string> = {
   model: 'Model',
   optimize: 'Optimize',
-  validate: 'Validate',
+  analysis: 'Analysis',
   make: 'Make',
+  validate: 'Validate',
   machine: 'Machine',
 }
 
@@ -45,10 +47,12 @@ function RightPanel() {
           <ModelInspector />
         ) : mode === 'optimize' ? (
           <OptimizePanel />
-        ) : mode === 'validate' ? (
-          <ValidatePanel />
+        ) : mode === 'analysis' ? (
+          <AnalysisPanel />
         ) : mode === 'make' ? (
           <MakePanel />
+        ) : mode === 'validate' ? (
+          <ValidatePanel />
         ) : (
           <MachinePanel />
         )}

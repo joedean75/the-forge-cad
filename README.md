@@ -51,14 +51,21 @@ quote provider, printers) are enabled by env vars — see
 ## The workflow
 
 Sign in → part library → editor. The editor is a single persistent document
-with five modes strung on the load-path spine:
+with six modes strung on the load-path spine — design it, prove it, prepare the
+job, watch it run, then send it out:
 
-1. **Model** — prompt bar, tool ribbon (Sketch | Create | Modify), feature
-   tree, Copilot.
+1. **Model** — prompt bar, tool ribbon (Sketch | Create | Forms | Modify),
+   feature tree, Copilot.
 2. **Optimize** — generative topology optimization on the current body.
-3. **Validate** — simulation results on the evaluated solid.
-4. **Make** — DFM report, instant quotes, "Get it made" orders, CNC toolpaths.
-5. **Machine** — slice for FDM printing and drive a Klipper printer.
+3. **Analysis** — structural FEA estimate: stress, deflection, safety margin.
+4. **Make** — prepare the job: drawing & release, slice / laser cut / CNC
+   toolpaths, DFM, then **nest** copies onto the machine's sheet and **post**
+   the program to its dialect.
+5. **Validate** — replay that job as a build simulation: an FDM print builds
+   layer by layer, a laser traces its cut paths, on the selected machine.
+6. **Machine** — pick the real machine (Ender 3, TCI DynamicLine 1530,
+   Gasparini XP165 …) and either **send it out for a quote** or **run it** —
+   live over Moonraker, or exported as a posted job for the control.
 
 Assemblies compose part documents with placement transforms.
 

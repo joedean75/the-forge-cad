@@ -86,6 +86,14 @@ def list_printers(acc: accounts.Account = Depends(current_account)):
     return _configured_printers()
 
 
+@router.get("/machines")
+def list_machines(acc: accounts.Account = Depends(current_account)):
+    """The shop's machines — process, envelope, dialect and how a job reaches them."""
+    from app.services import machines as reg
+
+    return {"machines": [m.model_dump() for m in reg.list_machines()]}
+
+
 @router.post("/status")
 def status(body: UrlBody, acc: accounts.Account = Depends(current_account)):
     return mr.get_status(_safe_url(body.url))

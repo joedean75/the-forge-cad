@@ -87,6 +87,10 @@ interface DocumentState {
   /** The single geometry-mutation path (same operations agents call). Returns the op result. */
   runOp: (op: string, args?: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>
   aiEdit: (instruction: string) => Promise<void>
+  /** The machine the job is being prepared for — drives nesting sheet, posting
+   *  dialect, the build simulation and dispatch. Shared by Make/Validate/Machine. */
+  machineId: string
+  setMachineId: (id: string) => void
   /** Assign an engineering material (drives mass/sim/DFM/quote). */
   setMaterial: (materialId: string) => Promise<void>
   /** Replace the driving parameters/equations and re-evaluate. */
@@ -190,6 +194,9 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       set({ busy: false })
     }
   },
+
+  machineId: 'ender3',
+  setMachineId: (id) => set({ machineId: id }),
 
   setMaterial: async (materialId) => {
     const { doc } = get()

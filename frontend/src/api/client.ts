@@ -36,6 +36,8 @@ import type {
   DocumentRevisionMeta,
   SliceSettings,
   SliceResponse,
+  MachineSpec,
+  NestResult,
 } from '../../../shared/types'
 
 const API_BASE = '/api'
@@ -292,6 +294,12 @@ export const api = {
     fetchJson<DocumentRevisionMeta>(`/documents/${id}/revisions`, { method: 'POST', body: JSON.stringify({ notes }) }),
   setLifecycleState: (id: string, state: string) =>
     fetchJson<DesignDocument>(`/documents/${id}/state`, { method: 'POST', body: JSON.stringify({ state }) }),
+  listMachines: () => fetchJson<{ machines: MachineSpec[] }>('/machine/machines'),
+  nestSheet: (id: string, machineId: string, quantity = 1, kerfMm = 0.2) =>
+    fetchJson<NestResult>(`/documents/${id}/nest?machine_id=${machineId}&quantity=${quantity}&kerf_mm=${kerfMm}`),
+  postGcode: (id: string, machineId: string, source: 'print' | 'cut' = 'print') =>
+    fetchJson<{ machine: { id: string; name: string; dialect: string }; gcode: string; lines: number; stripped: number; bytes: number }>(
+      `/documents/${id}/post`, { method: 'POST', body: JSON.stringify({ machine_id: machineId, source }) }),
   profileCut: (id: string, kerfMm = 0.2, plane = 'xy') =>
     fetchJson<{ path_count: number; cut_length_mm: number; estimated_minutes: number; size_mm: { u: number; v: number } }>(
       `/documents/${id}/profile-cut?kerf_mm=${kerfMm}&plane=${plane}`),

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Search, Box, Circle, Cylinder, Cone, Rotate3d, FlipHorizontal2, Spline, Layers,
   Blend, Triangle, Shell, CircleDot, Grid3x3, Move3d, PencilRuler, Boxes, Waypoints,
-  Activity, Wrench, Printer, Undo2, Redo2, Save, Maximize, FileText, Scissors, Bot,
+  Activity, Wrench, Printer, Undo2, Redo2, Save, Maximize, FileText, Scissors, Bot, PlayCircle,
 } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import type { EditorMode } from '../../../shared/types'
@@ -53,7 +53,8 @@ export function CommandPalette({ onOpenCopilot }: { onOpenCopilot: () => void })
 
     return [
       mode('model', 'Model', Boxes), mode('optimize', 'Optimize', Waypoints),
-      mode('validate', 'Validate', Activity), mode('make', 'Make', Wrench), mode('machine', 'Machine', Printer),
+      mode('analysis', 'Analysis', Activity), mode('make', 'Make', Wrench),
+      mode('validate', 'Validate', PlayCircle), mode('machine', 'Machine', Printer),
 
       prim('box', 'box', Box), prim('cylinder', 'cylinder', Cylinder),
       prim('sphere', 'sphere', Circle), prim('cone', 'cone', Cone),

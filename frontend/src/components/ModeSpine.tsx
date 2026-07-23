@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Boxes, Waypoints, Activity, Wrench, Printer } from 'lucide-react'
+import { Boxes, Waypoints, Activity, Wrench, Printer, PlayCircle } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import type { EditorMode } from '../../../shared/types'
 
@@ -14,8 +14,9 @@ import type { EditorMode } from '../../../shared/types'
 const STATIONS: { id: EditorMode; label: string; icon: typeof Boxes }[] = [
   { id: 'model', label: 'Model', icon: Boxes },
   { id: 'optimize', label: 'Optimize', icon: Waypoints },
-  { id: 'validate', label: 'Validate', icon: Activity },
+  { id: 'analysis', label: 'Analysis', icon: Activity },
   { id: 'make', label: 'Make', icon: Wrench },
+  { id: 'validate', label: 'Validate', icon: PlayCircle },
   { id: 'machine', label: 'Machine', icon: Printer },
 ]
 
@@ -30,7 +31,7 @@ export function ModeSpine() {
       if (e.ctrlKey || e.metaKey || e.altKey) return
       const t = e.target as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
-      const i = '12345'.indexOf(e.key)
+      const i = '123456'.indexOf(e.key)
       if (i >= 0 && useDocumentStore.getState().doc) {
         e.preventDefault()
         useDocumentStore.getState().setMode(STATIONS[i].id)

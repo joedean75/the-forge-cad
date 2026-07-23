@@ -1,178 +1,132 @@
 import { useEffect, useRef, useState } from 'react'
-import { Home, Send, Loader2, Wifi, WifiOff, Layers, Download } from 'lucide-react'
+import { Home, Send, Loader2, Wifi, WifiOff, Download, ShoppingCart, PackageCheck } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
 import { api } from '../../api/client'
-import type { MachineStatus, SliceResponse } from '../../../../shared/types'
+import type { MachineStatus, MachineSpec, QuoteBundle, ManufacturingOrder } from '../../../../shared/types'
 
 const JOG_STEPS = [0.1, 1, 10]
 
-function Num({ label, value, step, min, suffix, onChange }: {
-  label: string; value: number; step: number; min: number; suffix: string
-  onChange: (v: number) => void
-}) {
-  return (
-    <label className="text-[10px] text-cad-text flex flex-col gap-1">
-      <span>{label}</span>
-      <div className="flex items-center gap-1 px-2 py-1 rounded-sm bg-cad-bg border border-cad-border focus-within:border-cad-accent transition-colors">
-        <input
-          type="number"
-          value={value}
-          step={step}
-          min={min}
-          onChange={(e) => {
-            const v = parseFloat(e.target.value)
-            if (!Number.isNaN(v)) onChange(v)
-          }}
-          className="tabular w-full bg-transparent text-xs text-cad-text-heading outline-none"
-        />
-        <span className="text-[9px] text-cad-text/60">{suffix}</span>
-      </div>
-    </label>
-  )
+const PROCESS_LABEL: Record<string, string> = {
+  'cnc-3axis': 'CNC machining · Al 6061',
+  fdm: 'FDM printing · PLA',
+  sla: 'SLA printing · resin',
+  'lpbf-metal': 'Metal printing · AlSi10Mg',
 }
 
-/** One sliced layer drawn to scale: walls in ember, infill in steel. */
-function LayerView({ slice, index }: { slice: SliceResponse; index: number }) {
-  const layer = slice.preview[index]
-  if (!layer) return null
-  const all = [...layer.walls, ...layer.skin, ...layer.infill].flat()
-  if (all.length === 0) return <p className="text-[10px] text-cad-text/50">Empty layer.</p>
-  const xs = all.map((p) => p[0])
-  const ys = all.map((p) => p[1])
-  const minX = Math.min(...xs), maxX = Math.max(...xs)
-  const minY = Math.min(...ys), maxY = Math.max(...ys)
-  const pad = 2
-  const toPts = (poly: number[][]) => poly.map((p) => `${p[0]},${-p[1]}`).join(' ')
-  return (
-    <svg
-      viewBox={`${minX - pad} ${-maxY - pad} ${maxX - minX + 2 * pad} ${maxY - minY + 2 * pad}`}
-      className="w-full aspect-square rounded-sm border border-cad-border bg-cad-bg"
-    >
-      {layer.infill.map((poly, i) => (
-        <polyline key={`i${i}`} points={toPts(poly)} fill="none"
-          stroke="var(--color-stress-void)" strokeWidth={0.25} strokeLinecap="round" />
-      ))}
-      {layer.skin.map((poly, i) => (
-        <polyline key={`s${i}`} points={toPts(poly)} fill="none"
-          stroke="var(--color-cad-accent-hot)" strokeWidth={0.25} strokeLinecap="round" opacity={0.75} />
-      ))}
-      {layer.walls.map((poly, i) => (
-        <polygon key={`w${i}`} points={toPts(poly)} fill="none"
-          stroke="var(--color-cad-accent)" strokeWidth={0.35} strokeLinejoin="round" />
-      ))}
-    </svg>
-  )
-}
+function SendOut({ docId }: { docId?: string }) {
+  const [quantity, setQuantity] = useState(1)
+  const [bundle, setBundle] = useState<QuoteBundle | null>(null)
+  const [order, setOrder] = useState<ManufacturingOrder | null>(null)
+  const [working, setWorking] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-function SlicerSection() {
-  const { doc, refreshDoc } = useDocumentStore()
-  const [layerHeight, setLayerHeight] = useState(0.2)
-  const [infill, setInfill] = useState(15)
-  const [walls, setWalls] = useState(2)
-  const [skins, setSkins] = useState(3)
-  const [tempNozzle, setTempNozzle] = useState(210)
-  const [tempBed, setTempBed] = useState(60)
-  const [slicing, setSlicing] = useState(false)
-  const [result, setResult] = useState<SliceResponse | null>(null)
-  const [layerIdx, setLayerIdx] = useState(0)
-  const [err, setErr] = useState<string | null>(null)
-
-  const slice = async () => {
-    if (!doc || slicing) return
-    setSlicing(true)
-    setErr(null)
+  const getQuotes = async () => {
+    if (!docId) return
+    setWorking(true)
+    setError(null)
+    setOrder(null)
     try {
-      const res = await api.sliceDocument(doc.id, {
-        layer_height: layerHeight,
-        infill: infill / 100,
-        wall_count: walls,
-        skin_layers: skins,
-        temp_nozzle: tempNozzle,
-        temp_bed: tempBed,
-      })
-      setResult(res)
-      setLayerIdx(Math.max(0, res.preview.length - 1))
-      refreshDoc() // pick up derived.cam so Send job unlocks
+      setBundle(await api.quoteDocument(docId, quantity))
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Slicing failed')
+      setError(e instanceof Error ? e.message : 'Quoting failed')
     } finally {
-      setSlicing(false)
+      setWorking(false)
     }
   }
 
-  if (!doc) return null
-  const s = result?.stats
-  return (
-    <div className="space-y-3">
-      <h3 className="sec-head">Slice for printing</h3>
-      <div className="grid grid-cols-2 gap-2">
-        <Num label="Layer height" value={layerHeight} step={0.05} min={0.05} suffix="mm" onChange={setLayerHeight} />
-        <Num label="Infill" value={infill} step={5} min={0} suffix="%" onChange={setInfill} />
-        <Num label="Walls" value={walls} step={1} min={1} suffix="" onChange={setWalls} />
-        <Num label="Top/bottom layers" value={skins} step={1} min={0} suffix="" onChange={setSkins} />
-        <Num label="Nozzle" value={tempNozzle} step={5} min={150} suffix="°C" onChange={setTempNozzle} />
-        <Num label="Bed" value={tempBed} step={5} min={0} suffix="°C" onChange={setTempBed} />
-      </div>
-      <button
-        onClick={slice}
-        disabled={slicing}
-        className="w-full flex items-center justify-center gap-1.5 py-2 rounded-sm bg-cad-accent text-cad-bg font-semibold hover:bg-cad-accent-hot transition-colors text-xs disabled:opacity-50"
-      >
-        {slicing ? <Loader2 size={13} className="animate-spin" /> : <Layers size={13} />}
-        {slicing ? 'Slicing…' : 'Slice'}
-      </button>
-      {err && <p className="text-[10px] text-cad-danger">{err}</p>}
+  const place = async (process: string) => {
+    if (!docId) return
+    setWorking(true)
+    setError(null)
+    try {
+      setOrder(await api.placeOrder(docId, process, quantity))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Order failed')
+    } finally {
+      setWorking(false)
+    }
+  }
 
-      {result && s && (
-        <div className="space-y-2.5">
-          <div className="grid grid-cols-3 gap-2 text-center">
-            {[
-              [`${s.layers}`, 'layers'],
-              [`${s.estimated_minutes < 90 ? `${Math.round(s.estimated_minutes)} min` : `${(s.estimated_minutes / 60).toFixed(1)} h`}`, 'print time'],
-              [`${s.filament_g} g`, 'filament'],
-            ].map(([v, l]) => (
-              <div key={l} className="p-2 rounded-sm border border-cad-border bg-cad-bg/50">
-                <div className="font-display text-sm font-semibold text-cad-text-heading">{v}</div>
-                <div className="eyebrow text-cad-text/50 mt-0.5">{l}</div>
+  return (
+    <div className="pt-4 border-t border-cad-border space-y-3">
+      <h3 className="sec-head">Send out for quote</h3>
+      <div className="flex items-end gap-2">
+        <label className="text-[10px] text-cad-text flex flex-col gap-1 w-20">
+          <span className="tabular">Quantity</span>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={quantity}
+            onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+            className="tabular px-2 py-1 rounded-sm bg-cad-bg border border-cad-border text-xs text-cad-text-heading outline-none focus:border-cad-accent"
+          />
+        </label>
+        <button
+          onClick={getQuotes}
+          disabled={working}
+          className="flex-1 flex items-center justify-center gap-2 py-2 rounded-sm bg-cad-accent text-cad-bg text-xs font-semibold hover:bg-cad-accent-hot transition-colors disabled:opacity-50"
+        >
+          {working ? <Loader2 size={14} className="animate-spin" /> : <ShoppingCart size={14} />}
+          {working ? 'Working…' : 'Get instant quotes'}
+        </button>
+      </div>
+
+      {error && <p className="text-[11px] text-cad-danger">{error}</p>}
+
+      {order ? (
+        <div className="p-3 rounded-sm border border-cad-success/50 bg-cad-success/5 space-y-1">
+          <div className="flex items-center gap-2 text-cad-success text-xs font-semibold">
+            <PackageCheck size={14} /> Order submitted
+          </div>
+          <p className="tabular text-[11px] text-cad-text">
+            {PROCESS_LABEL[order.process] ?? order.process} · qty {order.quantity} · ${order.quote.total.toFixed(2)}
+            {order.quote.lead_time_days != null && ` · ~${order.quote.lead_time_days} days`}
+          </p>
+          <p className="text-[10px] text-cad-text/60">Ref {order.id.slice(0, 8)} · {order.provider}</p>
+        </div>
+      ) : (
+        bundle && (
+          <div className="space-y-1.5">
+            <p className="tabular text-[10px] text-cad-text/60">
+              {bundle.volume_cm3.toFixed(1)} cm³ · {bundle.bbox_mm.map((v) => v.toFixed(0)).join('×')} mm · {bundle.provider}
+            </p>
+            {bundle.quotes.map((q) => (
+              <div key={q.process} className="flex items-center justify-between p-2 rounded-sm border border-cad-border bg-cad-bg/50">
+                <div>
+                  <div className="text-[11px] text-cad-text-heading font-medium">{PROCESS_LABEL[q.process] ?? q.process}</div>
+                  <div className="tabular text-[10px] text-cad-text/60">
+                    ${q.total.toFixed(2)}{q.lead_time_days != null && ` · ${q.lead_time_days} days`}
+                  </div>
+                </div>
+                <button
+                  onClick={() => place(q.process)}
+                  disabled={working}
+                  className="px-2.5 py-1 rounded-sm border border-cad-accent/50 text-cad-accent-hot text-[10px] font-semibold hover:bg-cad-accent/10 transition-colors disabled:opacity-40"
+                >
+                  Order
+                </button>
               </div>
             ))}
           </div>
-
-          <LayerView slice={result} index={layerIdx} />
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min={0}
-              max={result.preview.length - 1}
-              value={layerIdx}
-              onChange={(e) => setLayerIdx(parseInt(e.target.value, 10))}
-              className="flex-1 accent-[var(--color-cad-accent)]"
-            />
-            <span className="tabular text-[10px] text-cad-text w-20 text-right">
-              layer {result.preview[layerIdx]?.layer} · z{result.preview[layerIdx]?.z}
-            </span>
-          </div>
-
-          <button
-            onClick={() => api.downloadGcode(doc.id, doc.name).catch((e) => setErr(String(e)))}
-            className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading transition text-[11px]"
-          >
-            <Download size={12} /> Download G-code ({(s.gcode_bytes / 1e6).toFixed(1)} MB)
-          </button>
-        </div>
+        )
       )}
     </div>
   )
 }
 
 export function MachinePanel() {
-  const { doc, cam } = useDocumentStore()
+  const { doc, cam, machineId } = useDocumentStore()
+  const [machines, setMachines] = useState<MachineSpec[]>([])
   const [url, setUrl] = useState('http://localhost:7125')
   const [status, setStatus] = useState<MachineStatus | null>(null)
   const [step, setStep] = useState(1)
   const [msg, setMsg] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const timer = useRef<number | null>(null)
+
+  useEffect(() => { api.listMachines().then((r) => setMachines(r.machines)).catch(() => {}) }, [])
+  const machine = machines.find((m) => m.id === machineId)
 
   // Poll printer status while the panel is mounted.
   useEffect(() => {
@@ -221,8 +175,12 @@ export function MachinePanel() {
 
   return (
     <div className="space-y-5">
-      <SlicerSection />
+      <MachineChooser />
 
+      <SendOut docId={doc?.id} />
+
+      {machine?.connection === 'moonraker' ? (
+      <>
       <div className="pt-3 border-t border-cad-border">
         <h3 className="sec-head mb-2">Moonraker endpoint</h3>
         <input
@@ -300,8 +258,8 @@ export function MachinePanel() {
       )}
 
       <div className="pt-3 border-t border-cad-border space-y-2">
-        <h3 className="sec-head">Send job</h3>
-        {!hasGcode && <p className="text-[10px] text-cad-text/60">Slice the part above (or generate CNC toolpaths in Make) first.</p>}
+        <h3 className="sec-head">Run the job</h3>
+        {!hasGcode && <p className="text-[10px] text-cad-text/60">Prepare the program in Make (slice, cut or CAM) first.</p>}
         <div className="flex gap-2">
           <button
             onClick={() => send(false)}
@@ -321,6 +279,80 @@ export function MachinePanel() {
         </div>
         {msg && <p className="text-[10px] text-cad-text/70">{msg}</p>}
       </div>
+      </>
+      ) : (
+        <DispatchJob docId={doc?.id} docName={doc?.name ?? 'part'} />
+      )}
+    </div>
+  )
+}
+
+/** Pick the machine this job is destined for — drives Make, Validate and dispatch. */
+function MachineChooser() {
+  const { machineId, setMachineId } = useDocumentStore()
+  const [machines, setMachines] = useState<MachineSpec[]>([])
+  useEffect(() => { api.listMachines().then((r) => setMachines(r.machines)).catch(() => {}) }, [])
+  const m = machines.find((x) => x.id === machineId)
+  const ROUTE: Record<string, string> = {
+    moonraker: 'Drive it live', dispatch: 'Export the job', quote: 'Send out for quote',
+  }
+  return (
+    <div>
+      <h3 className="sec-head mb-2">Machine</h3>
+      <select value={machineId} onChange={(e) => setMachineId(e.target.value)}
+        className="w-full px-2 py-1.5 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-xs focus:border-cad-accent outline-none">
+        {machines.map((x) => <option key={x.id} value={x.id}>{x.vendor} {x.name}</option>)}
+      </select>
+      {m && (
+        <div className="mt-2 p-2.5 rounded-sm border border-cad-border bg-cad-bg/50 space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="eyebrow text-cad-text/60">{m.process}</span>
+            <span className="text-[9px] px-1.5 py-0.5 rounded-sm border border-cad-accent/40 text-cad-accent-hot">
+              {ROUTE[m.connection] ?? m.connection}
+            </span>
+          </div>
+          <p className="tabular text-[10px] text-cad-text">
+            {m.bed[1] > 0 ? `${m.bed[0]}×${m.bed[1]}${m.bed[2] ? `×${m.bed[2]}` : ''} mm` : `${m.bed[0]} mm`} · {m.dialect}
+          </p>
+          <p className="text-[10px] text-cad-text/60">{m.notes}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Machines we don't drive directly: hand off the posted program. */
+function DispatchJob({ docId, docName }: { docId?: string; docName: string }) {
+  const { machineId } = useDocumentStore()
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  const exportJob = async () => {
+    if (!docId) return
+    setBusy(true); setMsg(null)
+    try {
+      const posted = await api.postGcode(docId, machineId, 'cut')
+      const blob = new Blob([posted.gcode], { type: 'text/plain' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `${docName.slice(0, 40).replace(/\s+/g, '_')}_${machineId}.gcode`
+      a.click()
+      URL.revokeObjectURL(a.href)
+      setMsg(`Job posted for ${posted.machine.name} (${posted.lines} lines) and downloaded.`)
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Could not post the job')
+    } finally { setBusy(false) }
+  }
+  return (
+    <div className="pt-3 border-t border-cad-border space-y-2">
+      <h3 className="sec-head">Run the job</h3>
+      <p className="text-[10px] text-cad-text/60">
+        This machine isn't driven live from here — export the posted program and load it at the control.
+      </p>
+      <button onClick={exportJob} disabled={busy || !docId}
+        className="w-full flex items-center justify-center gap-1.5 py-2 rounded-sm bg-cad-accent text-cad-bg text-xs font-semibold hover:bg-cad-accent-hot transition-colors disabled:opacity-50">
+        {busy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Export job for machine
+      </button>
+      {msg && <p className="text-[10px] text-cad-text/70">{msg}</p>}
     </div>
   )
 }

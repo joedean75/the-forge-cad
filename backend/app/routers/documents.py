@@ -521,6 +521,43 @@ def profile_cut(kerf_mm: float = 0.2, plane: str = "xy", feed_mm_min: float = 12
         raise HTTPException(status_code=422, detail=str(exc))
 
 
+@router.get("/{doc_id}/nest")
+def nest_sheet(machine_id: str = "tci-dl1530", quantity: int = 1, kerf_mm: float = 0.2,
+               spacing_mm: float = 5.0, doc: DesignDocument = Depends(readable_document)):
+    """Nest copies of the part's cut profile onto the machine's sheet."""
+    from app.services.cam import nesting
+
+    try:
+        return nesting.nest(doc.id, machine_id, quantity=quantity, kerf_mm=kerf_mm, spacing_mm=spacing_mm)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+class PostRequest(BaseModel):
+    machine_id: str
+    gcode: str | None = None
+    source: str = "print"  # print | cut — which generated program to post
+
+
+@router.post("/{doc_id}/post")
+def post_gcode(body: PostRequest, doc: DesignDocument = Depends(readable_document)):
+    """Post-process a program to a machine's dialect (the last step before dispatch)."""
+    import base64
+
+    from app.services.cam import post, profile_cut as pc
+
+    src = body.gcode
+    if not src:
+        if body.source == "cut":
+            src = pc.profile_cut(doc.id)["gcode"]
+        else:
+            cam = doc.derived.cam
+            if cam is None or not cam.gcode_url:
+                raise HTTPException(status_code=400, detail="No program yet — slice or cut the part first")
+            src = base64.b64decode(cam.gcode_url.split(",", 1)[1]).decode("utf-8")
+    return post.post_process(src, body.machine_id)
+
+
 @router.get("/{doc_id}/profile-cut.gcode", response_class=PlainTextResponse)
 def profile_cut_gcode(kerf_mm: float = 0.2, plane: str = "xy", feed_mm_min: float = 1200.0,
                       power: float = 100.0, doc: DesignDocument = Depends(readable_document)):
