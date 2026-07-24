@@ -1,4 +1,4 @@
-import { Suspense, useMemo } from 'react'
+import { Suspense, useEffect, useMemo, useRef } from 'react'
 import { Canvas, useLoader } from '@react-three/fiber'
 import { CameraControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
@@ -91,13 +91,20 @@ export function AssemblyViewport({
 }) {
   const fit = useFit(bbox)
   const placed = components.filter((c) => c.mesh_url && !c.missing)
+  // CameraControls doesn't auto-frame — explicitly frame the origin-normalized
+  // assembly once components are placed, so it isn't an empty viewport on open.
+  const controlsRef = useRef<{ setLookAt: (px: number, py: number, pz: number, tx: number, ty: number, tz: number, t?: boolean) => void } | null>(null)
+  useEffect(() => {
+    if (fit && placed.length) controlsRef.current?.setLookAt(2.6, 1.9, 3.4, 0, 0, 0, false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fit, placed.length])
 
   return (
     <div
       className="relative flex-1 min-w-0"
       style={{ background: 'radial-gradient(120% 120% at 50% 20%, #1a1f27 0%, var(--color-cad-bg) 55%, #0e1116 100%)' }}
     >
-      <Canvas camera={{ position: [3, 2, 4], fov: 45, near: 0.01, far: 200 }} shadows onPointerMissed={() => onSelect(null)}>
+      <Canvas camera={{ position: [3, 2, 4], fov: 45, near: 0.02, far: 100 }} shadows gl={{ logarithmicDepthBuffer: true }} onPointerMissed={() => onSelect(null)}>
         <Suspense fallback={null}>
           <ambientLight intensity={0.6} />
           <directionalLight position={[5, 10, 7]} intensity={1.2} castShadow />
@@ -129,8 +136,9 @@ export function AssemblyViewport({
               />
             ))}
           <CameraControls
+            ref={controlsRef as never}
             makeDefault
-            minDistance={0.05}
+            minDistance={0.08}
             maxDistance={50}
             dollyToCursor
             smoothTime={0.08}

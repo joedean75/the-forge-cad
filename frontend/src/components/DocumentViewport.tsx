@@ -213,6 +213,17 @@ export function DocumentViewport() {
   const [fitNonce, setFitNonce] = useState(0)
   const fit = useFit(doc?.id, bbox, fitNonce)
   const dims = doc?.dimensions ?? []
+  // The model is normalized to ~1.5 units at the origin; CameraControls does not
+  // auto-frame it (OrbitControls did implicitly), so an empty viewport greets a
+  // freshly opened part until you interact. Frame it explicitly on load and on
+  // Fit. Ref holds the camera-controls instance drei forwards.
+  const controlsRef = useRef<{ setLookAt: (px: number, py: number, pz: number, tx: number, ty: number, tz: number, t?: boolean) => void } | null>(null)
+  const frameModel = (animate: boolean) => controlsRef.current?.setLookAt(2.6, 1.9, 3.4, 0, 0, 0, animate)
+  useEffect(() => {
+    // When a document's geometry becomes available, frame it.
+    if (meshUrl) frameModel(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.id, meshUrl])
 
   // F re-fits the part to the standard display size (after big edits).
   useEffect(() => {
@@ -221,9 +232,11 @@ export function DocumentViewport() {
       const t = e.target as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
       setFitNonce((n) => n + 1)
+      frameModel(true)
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Highlight only non-root selections (root would outline every primitive).
@@ -352,6 +365,7 @@ export function DocumentViewport() {
               OrbitControls' zoomToCursor it doesn't drift or jump when the
               dolly clamps at close working distance */}
           <CameraControls
+            ref={controlsRef as never}
             makeDefault
             minDistance={0.08}
             maxDistance={50}
@@ -375,7 +389,7 @@ export function DocumentViewport() {
       {bbox && (
         <div className="absolute top-9 left-3 flex items-center gap-1.5">
           <button
-            onClick={() => setFitNonce((n) => n + 1)}
+            onClick={() => { setFitNonce((n) => n + 1); frameModel(true) }}
             title="Fit the part to the view (F)"
             className="flex items-center gap-1.5 text-[10px] px-2 py-1 rounded-sm border border-cad-border text-cad-text bg-cad-panel/70 hover:text-cad-text-heading backdrop-blur-sm transition-colors"
           >
