@@ -80,8 +80,15 @@ async def _security_headers(request: Request, call_next):
         "Content-Security-Policy",
         # The SPA bundles its own assets; allow same-origin + inline styles (Vite)
         # and connect to self. Tightened from a permissive default.
+        #
+        # connect-src must allow data: — evaluated solids reach the viewport as
+        # `derived.mesh_url`, an STL data: URI (see document_service.solid_to_stl_data_uri),
+        # which three.js STLLoader fetches via XHR. Without it the loader throws
+        # "Could not load data:…" and the editor's ErrorBoundary swallows the app.
+        # This only bites when FastAPI serves the SPA (production / single-origin);
+        # the Vite dev server sends no CSP, which is why dev never caught it.
         "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "
-        "script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; "
+        "script-src 'self'; connect-src 'self' data:; object-src 'none'; frame-ancestors 'none'; "
         "base-uri 'self'",
     )
     return response
