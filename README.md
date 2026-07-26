@@ -17,6 +17,8 @@ sampler on the hot path) and a real **3D SIMP topology optimizer**
 | **Text-to-CAD** | A prompt bar that turns "a 100×50×30 mm bracket with two mounting holes" into an editable feature tree. LLM-first with validation + self-repair; a rule-based parser covers everything credential-free. |
 | **Forge Copilot** | An agentic loop that plans and executes multi-step edits ("shell it to 2 mm and fillet the top edges") through the same operation API agents use — every step visible and undoable. |
 | **Parametric modeling** | Feature tree (box/cylinder/sphere/cone, booleans, fillet/chamfer/shell/hole/pattern/transform, constrained sketches, **revolve/mirror/sweep/loft**) with a CAD-standard tool ribbon, driving parameters, configurations, dimensions, and version history. |
+| **Sheet metal** | Base flange + edge flanges with real bend geometry (inside radius, angle, up or down), and **flat-pattern unfold** — developed blank size, K-factor bend allowances and bend-line positions, ready for the brake. |
+| **Materials** | 43 grades in 12 browsable categories, tagged maker or professional — filaments and resins through to tool steel, titanium, PEEK and composites — driving mass, simulation, DFM and quotes. |
 | **Generative design** | SIMP topology optimization scoped to *your part* — the result folds back into the tree as an `OptimizeFeature` and stays editable. |
 | **Universal import** | STL / OBJ / PLY / GLB / OFF and faceted STEP become editable bodies (voxelized into the SDF representation). |
 | **Validate & Make** | Simulation on the evaluated solid, DFM checks, instant quotes across CNC / FDM / SLA / LPBF with order placement (RFQs; pluggable supplier API). |

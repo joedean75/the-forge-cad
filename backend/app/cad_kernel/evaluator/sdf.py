@@ -9,6 +9,7 @@ controllable geometry pipeline.
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable, List, Tuple
@@ -387,6 +388,135 @@ def profile_sdf_2d(profile: dict, u: np.ndarray, v: np.ndarray) -> np.ndarray:
     return np.sqrt(np.maximum(qx, 0) ** 2 + np.maximum(qy, 0) ** 2) + np.minimum(np.maximum(qx, qy), 0.0)
 
 
+class SheetMetalSDF(SDF):
+    """A flat base flange plus bent edge flanges, all at one thickness.
+
+    Each flange is two pieces welded to the base: a circular *bend* and a
+    straight *leg* tangent to the end of that bend. Both are solved in the 2D
+    plane normal to the bend line and then extruded across the part width, so
+    the whole thing stays an exact distance field that composes with booleans,
+    fillets and shells like any other body.
+
+    Geometry of one bend, for a flange on the +X edge bending up:
+    the base plate occupies ``z in [0, t]`` and ends at ``x = x_e``. The centre
+    of curvature sits at ``(x_e, t + r)`` — directly above the plate end — so
+    the plate's top surface is the inside of the bend (radius ``r``) and its
+    bottom surface the outside (radius ``r + t``). Sweeping from straight-down
+    through the bend angle carries the material round to the leg.
+    """
+
+    def __init__(self, feature):
+        self.t = float(feature.thickness)
+        self.length = float(feature.length)
+        self.width = float(feature.width)
+        self.flanges = feature.normalized_flanges()
+
+    # -- 2D helpers, all operating on (a, z) where `a` is the in-plane axis ---
+
+    @staticmethod
+    def _box2(a, z, a_min, a_max, z_min, z_max):
+        ca, cz = (a_min + a_max) / 2.0, (z_min + z_max) / 2.0
+        ha, hz = (a_max - a_min) / 2.0, (z_max - z_min) / 2.0
+        qa, qz = np.abs(a - ca) - ha, np.abs(z - cz) - hz
+        return (np.sqrt(np.maximum(qa, 0.0) ** 2 + np.maximum(qz, 0.0) ** 2)
+                + np.minimum(np.maximum(qa, qz), 0.0))
+
+    def _bend2(self, a, z, ca, cz, r_in, sweep, out_sign, up_sign):
+        """Annular sector: radii [r_in, r_in+t], swept `sweep` radians."""
+        qa = (a - ca) * out_sign
+        qz = (z - cz) * up_sign
+        rho = np.sqrt(qa * qa + qz * qz)
+        # Distance to the annulus wall.
+        mid = r_in + self.t / 2.0
+        d = np.abs(rho - mid) - self.t / 2.0
+        # Restrict to the sector: it starts pointing straight "down" (-qz) and
+        # rotates toward +qa. For sweeps up to 180 deg that is the intersection
+        # of two half planes through the centre.
+        d = np.maximum(d, -qa)
+        n_a, n_z = -math.cos(sweep), -math.sin(sweep)
+        d = np.maximum(d, -(qa * n_a + qz * n_z))
+        return d
+
+    def _leg2(self, a, z, ca, cz, r_in, sweep, leg_len, out_sign, up_sign):
+        """Straight leg tangent to the end of the bend."""
+        qa = (a - ca) * out_sign
+        qz = (z - cz) * up_sign
+        # Frame at the end of the bend: radial points outward from the centre,
+        # tangent is the direction the sheet continues travelling.
+        rad_a, rad_z = math.sin(sweep), -math.cos(sweep)
+        tan_a, tan_z = math.cos(sweep), math.sin(sweep)
+        s = qa * tan_a + qz * tan_z          # along the leg
+        rdist = qa * rad_a + qz * rad_z      # across the thickness
+        qs = np.abs(s - leg_len / 2.0) - leg_len / 2.0
+        qr = np.abs(rdist - (r_in + self.t / 2.0)) - self.t / 2.0
+        return (np.sqrt(np.maximum(qs, 0.0) ** 2 + np.maximum(qr, 0.0) ** 2)
+                + np.minimum(np.maximum(qs, qr), 0.0))
+
+    def __call__(self, points: np.ndarray) -> np.ndarray:
+        x, y, z = points[:, 0], points[:, 1], points[:, 2]
+        hx, hy = self.length / 2.0, self.width / 2.0
+
+        # Base flange.
+        base = self._box2(x, z, -hx, hx, 0.0, self.t)
+        base = np.maximum(base, np.abs(y) - hy)
+        d = base
+
+        for f in self.flanges:
+            axis, sign = f["edge"][0], f["edge"][1]
+            out_sign = 1.0 if sign == "+" else -1.0
+            up_sign = 1.0 if f["angle"] > 0 else -1.0
+            sweep = math.radians(abs(f["angle"]))
+            r_in = f["radius"]
+
+            if axis == "x":
+                a, across, edge, half_across = x, y, hx, hy
+            else:
+                a, across, edge, half_across = y, x, hy, hx
+
+            ca = edge * out_sign
+            cz = self.t + r_in if up_sign > 0 else -r_in
+
+            bend = self._bend2(a, z, ca, cz, r_in, sweep, out_sign, up_sign)
+            leg = self._leg2(a, z, ca, cz, r_in, sweep, f["length"], out_sign, up_sign)
+            piece = np.minimum(bend, leg)
+            # Flanges span the full width of the edge they sit on.
+            piece = np.maximum(piece, np.abs(across) - half_across)
+            d = np.minimum(d, piece)
+
+        return d
+
+    def bounds(self) -> Bounds:
+        hx, hy = self.length / 2.0, self.width / 2.0
+        lo = np.array([-hx, -hy, 0.0])
+        hi = np.array([hx, hy, self.t])
+        for f in self.flanges:
+            axis, sign = f["edge"][0], f["edge"][1]
+            out_sign = 1.0 if sign == "+" else -1.0
+            up_sign = 1.0 if f["angle"] > 0 else -1.0
+            sweep = math.radians(abs(f["angle"]))
+            r_out = f["radius"] + self.t
+            edge = hx if axis == "x" else hy
+            ca = edge * out_sign
+            cz = self.t + f["radius"] if up_sign > 0 else -f["radius"]
+
+            # Furthest reach: end of the leg, plus the bend's own swept extent.
+            rad_a, rad_z = math.sin(sweep), -math.cos(sweep)
+            tan_a, tan_z = math.cos(sweep), math.sin(sweep)
+            tip_a = ca + out_sign * (rad_a * r_out + tan_a * f["length"])
+            tip_z = cz + up_sign * (rad_z * r_out + tan_z * f["length"])
+            arc_a = ca + out_sign * r_out * max(math.sin(sweep), 0.0)
+            arc_z = cz + up_sign * r_out * max(-math.cos(sweep), -1.0)
+
+            idx = 0 if axis == "x" else 1
+            for va in (tip_a, arc_a, ca):
+                lo[idx] = min(lo[idx], va)
+                hi[idx] = max(hi[idx], va)
+            for vz in (tip_z, arc_z, cz):
+                lo[2] = min(lo[2], vz)
+                hi[2] = max(hi[2], vz)
+        return Bounds(lo, hi)
+
+
 class ExtrudeSDF(SDF):
     """A 2D profile (rect/circle/polygon) on a base plane, extruded to a depth.
 
@@ -616,7 +746,10 @@ def sdf_from_feature(feature) -> SDF:
     from app.cad_kernel.ops.imported import ImportFeature
     from app.cad_kernel.ops.sketch import ExtrudeFeature
     from app.cad_kernel.ops.advanced import RevolveFeature, MirrorFeature, SweepFeature, LoftFeature
+    from app.cad_kernel.ops.sheet_metal import SheetMetalFeature
 
+    if isinstance(feature, SheetMetalFeature):
+        return SheetMetalSDF(feature)
     if isinstance(feature, RevolveFeature):
         return RevolveSDF(feature.profile, feature.axis, feature.center, feature.angle)
     if isinstance(feature, MirrorFeature):

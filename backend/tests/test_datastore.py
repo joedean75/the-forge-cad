@@ -74,7 +74,7 @@ def test_concurrent_writes_do_not_corrupt():
     # Many threads writing at once must all land — the file-JSON layer could lose
     # or truncate records under this; the DB serializes them safely.
     def write(i):
-        persistence.save_candidate(f"conc-{i}", {"i": i})
+        persistence.save_document(f"conc-{i}", {"i": i})
 
     threads = [threading.Thread(target=write, args=(i,)) for i in range(25)]
     for t in threads:
@@ -83,4 +83,4 @@ def test_concurrent_writes_do_not_corrupt():
         t.join()
 
     for i in range(25):
-        assert persistence.load_candidate(f"conc-{i}") == {"i": i}
+        assert persistence.load_document(f"conc-{i}") == {"i": i}

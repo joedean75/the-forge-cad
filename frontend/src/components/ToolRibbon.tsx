@@ -3,6 +3,7 @@ import {
   Box, Circle, Cylinder, Cone, Plus, Minus,
   Blend, Triangle, Shell, CircleDot, Grid3x3, Move3d, PencilRuler,
   Rotate3d, FlipHorizontal2, Spline, Layers,
+  Sheet, CornerUpRight, CornerDownRight, UnfoldHorizontal,
 } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { flatten, type BooleanOp, type ModifierType, type PrimitiveType } from '../util/featureTree'
@@ -90,10 +91,26 @@ function Divider() {
   return <span aria-hidden className="w-px self-stretch my-2.5 bg-cad-border" />
 }
 
+/** Flat-pattern readout returned by the `flat_pattern` operation. */
+type FlatPattern = {
+  blank_size_mm: { x: number; y: number }
+  thickness: number
+  k_factor: number
+  bend_count: number
+  bends: {
+    edge: string
+    angle: number
+    radius: number
+    bend_allowance_mm: number
+    distance_from_edge_mm: number
+  }[]
+}
+
 export function ToolRibbon() {
   const { doc, mode, busy, runOp, select, selectedFeatureId,
     sketchPick, startSketchPick, cancelSketchPick } = useDocumentStore()
   const [op, setOp] = useState<BooleanOp>('union')
+  const [flatPattern, setFlatPattern] = useState<FlatPattern | null>(null)
 
   // CAD-standard keys: Esc cancels a sketch pick; Delete removes the selected
   // feature (never while typing in a field).
@@ -149,10 +166,29 @@ export function ToolRibbon() {
     if (r?.feature_id) select(r.feature_id as string)
   }
 
+  // Sheet metal: a base flange is a normal body, then flanges bend off its
+  // edges. `hasSheetMetal` gates the flange/unfold tools so they only offer
+  // themselves once there is something to bend.
+  const hasSheetMetal = doc
+    ? flatten(doc.feature_tree).some((f) => f.node.type === 'SheetMetalFeature')
+    : false
+  const addSheetMetal = async () => {
+    const r = await runOp('add_sheet_metal', { operation: op })
+    if (r?.feature_id) select(r.feature_id as string)
+  }
+  const addFlange = async (edge: string, angle: number) => {
+    const r = await runOp('add_flange', { edge, angle })
+    if (r?.feature_id) select(r.feature_id as string)
+  }
+  const unfold = async () => {
+    const r = await runOp('flat_pattern', {})
+    if (r) setFlatPattern(r as FlatPattern)
+  }
+
   const cut = op === 'subtract'
 
   return (
-    <div className="border-b border-cad-border bg-cad-panel flex items-stretch gap-2 px-3 shrink-0 z-10">
+    <div className="relative border-b border-cad-border bg-cad-panel flex items-stretch gap-2 px-3 shrink-0 z-10">
       <Group label="Sketch">
         <Tool
           icon={PencilRuler}
@@ -222,6 +258,23 @@ export function ToolRibbon() {
 
       <Divider />
 
+      <Group label="Sheet metal">
+        <Tool icon={Sheet} label="Base flange"
+          title="Start a sheet-metal part — a flat plate of constant thickness to bend flanges from"
+          onClick={addSheetMetal} disabled={busy} />
+        <Tool icon={CornerUpRight} label="Flange up"
+          title={hasSheetMetal ? 'Bend a 90° flange up off the +X edge' : 'Add a base flange first'}
+          onClick={() => addFlange('x+', 90)} disabled={busy || !hasSheetMetal} />
+        <Tool icon={CornerDownRight} label="Flange down"
+          title={hasSheetMetal ? 'Bend a 90° flange down off the +X edge' : 'Add a base flange first'}
+          onClick={() => addFlange('x+', -90)} disabled={busy || !hasSheetMetal} />
+        <Tool icon={UnfoldHorizontal} label="Unfold"
+          title={hasSheetMetal ? 'Flat pattern: developed blank size, bend allowances and bend lines' : 'Add a base flange first'}
+          onClick={unfold} disabled={busy || !hasSheetMetal} />
+      </Group>
+
+      <Divider />
+
       <Group label="Modify">
         {MODIFIERS.map((m) => {
           const targets = (m.type === 'PatternFeature' || m.type === 'TransformFeature') && targetable
@@ -240,6 +293,51 @@ export function ToolRibbon() {
           )
         })}
       </Group>
+
+      {flatPattern && <FlatPatternReadout pattern={flatPattern} onClose={() => setFlatPattern(null)} />}
+    </div>
+  )
+}
+
+/** Brake setup sheet: the blank to cut and where each bend line lands. */
+function FlatPatternReadout({ pattern, onClose }: { pattern: FlatPattern; onClose: () => void }) {
+  return (
+    <div className="absolute right-3 top-14 z-20 w-72 rounded-sm border border-cad-border bg-cad-panel shadow-lg">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-cad-border">
+        <h3 className="sec-head">Flat pattern</h3>
+        <button onClick={onClose} className="text-cad-text hover:text-cad-text-heading text-xs px-1">✕</button>
+      </div>
+      <div className="px-3 py-2 space-y-2 text-xs">
+        <div className="flex justify-between">
+          <span className="text-cad-text">Blank</span>
+          <span className="text-cad-text-heading font-mono">
+            {pattern.blank_size_mm.x.toFixed(2)} × {pattern.blank_size_mm.y.toFixed(2)} mm
+          </span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-cad-text">Thickness · K</span>
+          <span className="text-cad-text-heading font-mono">
+            {(pattern.thickness * 1000).toFixed(2)} mm · {pattern.k_factor}
+          </span>
+        </div>
+        {pattern.bend_count === 0 ? (
+          <p className="text-cad-text opacity-70">No bends — this blank is already flat.</p>
+        ) : (
+          <div className="pt-1 border-t border-cad-border">
+            <div className="grid grid-cols-4 gap-1 text-[10px] uppercase tracking-wide text-cad-text pb-1">
+              <span>Edge</span><span>Angle</span><span>Allow</span><span>At</span>
+            </div>
+            {pattern.bends.map((b, i) => (
+              <div key={i} className="grid grid-cols-4 gap-1 font-mono text-[11px] text-cad-text-heading">
+                <span>{b.edge}</span>
+                <span>{b.angle}°</span>
+                <span>{b.bend_allowance_mm.toFixed(2)}</span>
+                <span>{b.distance_from_edge_mm.toFixed(1)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

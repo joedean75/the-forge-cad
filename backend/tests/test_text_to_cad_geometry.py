@@ -46,15 +46,14 @@ def test_box_with_hole():
 
 def test_text_to_cad_generate_endpoint():
     resp = client.post(
-        "/api/text-to-cad/generate",
+        "/api/documents",
         json={"prompt": "box 100x50x30 mm with a 10 mm hole through center", "resolution": 64},
     )
     assert resp.status_code == 200, resp.text
-    cand = resp.json()
-    assert cand["name"].startswith("box 100x50x30 mm")
-    assert cand["mesh_url"].startswith("data:")
-    assert cand["cad"] is not None
-    assert cand["cad"]["feature_tree"]["root"]["type"] == "BooleanFeature"
+    doc = resp.json()
+    assert doc["provenance"] == "text_to_cad"
+    assert doc["derived"]["mesh_url"].startswith("data:")
+    assert doc["feature_tree"]["root"]["type"] == "BooleanFeature"
 
 
 def test_cube_prompt():
@@ -77,21 +76,22 @@ def test_pipe_prompt():
     assert inner.radius == 0.017
 
 
-def test_cad_reevaluate_endpoint():
-    resp = client.post("/api/text-to-cad/generate", json={"prompt": "box 100x50x30 mm", "resolution": 64})
+def test_document_reevaluates_after_feature_tree_edit():
+    """Editing the tree re-evaluates the solid: doubling height grows the mass."""
+    resp = client.post("/api/documents", json={"prompt": "box 100x50x30 mm", "resolution": 64})
     assert resp.status_code == 200
-    cand = resp.json()
-    cid = cand["id"]
-    original_mass = cand["mass"]
+    doc = resp.json()
+    doc_id = doc["id"]
+    original_mass = doc["derived"]["mass"]
 
-    ft = cand["cad"]["feature_tree"]
+    ft = doc["feature_tree"]
     ft["root"]["params"]["size"]["z"] *= 2.0
 
-    resp2 = client.post(f"/api/cad/{cid}/reevaluate", json={"feature_tree": ft, "resolution": 64})
+    resp2 = client.put(f"/api/documents/{doc_id}", json={"feature_tree": ft, "resolution": 64})
     assert resp2.status_code == 200, resp2.text
     updated = resp2.json()
-    assert updated["id"] == cid
-    assert updated["mass"] > original_mass * 1.5
+    assert updated["id"] == doc_id
+    assert updated["derived"]["mass"] > original_mass * 1.5
 
 
 def test_chassis_prompt():
@@ -111,14 +111,14 @@ def test_chassis_prompt():
 
 def test_chassis_prompt_endpoint():
     resp = client.post(
-        "/api/text-to-cad/generate",
+        "/api/documents",
         json={"prompt": "a rally style rc chassis on a 185x185x185 3d printer build plate", "resolution": 64},
     )
     assert resp.status_code == 200, resp.text
-    cand = resp.json()
-    assert "chassis" in cand["name"].lower()
-    assert cand["mesh_url"].startswith("data:")
-    assert cand["cad"] is not None
+    doc = resp.json()
+    assert "chassis" in doc["name"].lower()
+    assert doc["derived"]["mesh_url"].startswith("data:")
+    assert doc["feature_tree"]["root"] is not None
 
 
 def test_default_unit_inferred_for_printer_context():

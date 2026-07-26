@@ -22,8 +22,6 @@ from app.db import DATA_DIR, Record, SessionLocal, engine, init_db
 
 # Kinds (row namespaces in the `records` table).
 _ACCOUNT = "account"
-_CANDIDATE = "candidate"
-_ASSEMBLY = "assembly"  # legacy generated AssemblyResult (trusses/frames)
 _DOCUMENT = "document"
 _ASSEMBLY_DOC = "assembly_doc"  # parts-composition assembly
 _ORDER = "order"  # manufacturing orders / RFQs
@@ -83,38 +81,6 @@ def load_account(account_id: str) -> Optional[dict]:
 
 def list_accounts() -> List[str]:
     return _list(_ACCOUNT)
-
-
-# ---------------------------------------------------------------------------
-# Candidates
-# ---------------------------------------------------------------------------
-
-def save_candidate(candidate_id: str, candidate: dict) -> None:
-    _save(_CANDIDATE, candidate_id, candidate)
-
-
-def load_candidate(candidate_id: str) -> Optional[dict]:
-    return _load(_CANDIDATE, candidate_id)
-
-
-def list_candidates() -> List[str]:
-    return _list(_CANDIDATE)
-
-
-# ---------------------------------------------------------------------------
-# Assemblies
-# ---------------------------------------------------------------------------
-
-def save_assembly(assembly_id: str, assembly: dict) -> None:
-    _save(_ASSEMBLY, assembly_id, assembly)
-
-
-def load_assembly(assembly_id: str) -> Optional[dict]:
-    return _load(_ASSEMBLY, assembly_id)
-
-
-def list_assemblies() -> List[str]:
-    return _list(_ASSEMBLY)
 
 
 # ---------------------------------------------------------------------------
@@ -258,10 +224,11 @@ def migrate_json_files() -> int:
     init_db()
     if _load(_META, _MIGRATION_MARKER) is not None:
         return 0
+    # Candidate / generated-assembly folders are deliberately absent: those
+    # record kinds were removed with the legacy pipeline, so importing them
+    # would only create rows nothing can read.
     mapping = {
         _ACCOUNT: DATA_DIR / "accounts",
-        _CANDIDATE: DATA_DIR / "candidates",
-        _ASSEMBLY: DATA_DIR / "assemblies",
         _DOCUMENT: DATA_DIR / "documents",
     }
     with SessionLocal() as s:

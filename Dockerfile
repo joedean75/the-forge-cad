@@ -39,5 +39,11 @@ EXPOSE 8000
 # indexes, optimize jobs, solid cache, rate-limit counters). Scale vertically for
 # now; DEPLOY.md documents the path to multiple workers/instances. The long
 # timeout accommodates CPU-bound SIMP optimization solves.
+# `--forwarded-allow-ips=` (empty) stops uvicorn/gunicorn rewriting the peer
+# address from client-supplied X-Forwarded-For. Left on, any caller can spoof its
+# own IP and get a fresh rate-limit bucket per request, which silently defeats
+# the login brute-force limiter. The app parses the header itself, deliberately,
+# under FORGE_TRUSTED_PROXY_HOPS — see app/rate_limit.py.
 CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", \
-     "-w", "1", "-b", "0.0.0.0:8000", "--timeout", "600", "--graceful-timeout", "30"]
+     "-w", "1", "-b", "0.0.0.0:8000", "--timeout", "600", "--graceful-timeout", "30", \
+     "--forwarded-allow-ips="]

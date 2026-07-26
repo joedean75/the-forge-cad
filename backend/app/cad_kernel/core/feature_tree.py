@@ -61,6 +61,7 @@ class Feature:
             SweepFeature,
             LoftFeature,
         )
+        from app.cad_kernel.ops.sheet_metal import SheetMetalFeature
 
         registry = {
             "BoxFeature": BoxFeature,
@@ -81,6 +82,7 @@ class Feature:
             "MirrorFeature": MirrorFeature,
             "SweepFeature": SweepFeature,
             "LoftFeature": LoftFeature,
+            "SheetMetalFeature": SheetMetalFeature,
         }
         cls = registry.get(data["type"])
         if cls is None:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from io import StringIO
-from typing import List, Tuple, Union
+from typing import Iterator, List, Tuple, Union
 
 import numpy as np
 
@@ -85,7 +85,8 @@ class _StepBuilder:
         return self.add(f"SHAPE_REPRESENTATION('NONE',(#{manifold_id}),#{axis_id})")
 
 
-def write_step(mesh: Union[FaceMesh, Solid], name: str = "part") -> str:
+def _build(mesh: Union[FaceMesh, Solid]) -> "_StepBuilder":
+    """Construct every STEP entity for the mesh, returning the populated builder."""
     if isinstance(mesh, Solid):
         mesh = solid_to_mesh(mesh)
     verts = mesh.vertices
@@ -143,18 +144,53 @@ def write_step(mesh: Union[FaceMesh, Solid], name: str = "part") -> str:
     prod_def = b.add(f"PRODUCT_DEFINITION('NONE','NONE',#{product},#{prod_def_ctx})")
     prod_def_shape = b.add(f"PRODUCT_DEFINITION_SHAPE('NONE','NONE',#{prod_def})")
     b.add(f"SHAPE_DEFINITION_REPRESENTATION(#{prod_def_shape},#{shape_id})")
+    return b
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+
+def write_step(mesh: Union[FaceMesh, Solid], name: str = "part") -> str:
+    """Return a STEP AP214 file as a single string (see stream_step to avoid the copy)."""
     out = StringIO()
-    out.write("ISO-10303-21;\n")
-    out.write("HEADER;\n")
-    out.write("FILE_DESCRIPTION(('Forge CAD kernel export'),'2;1');\n")
-    out.write(f"FILE_NAME('{name}.step','{now}',(''),(''),'','Forge CAD kernel','');\n")
-    out.write("FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 3 1 1 }'));\n")
-    out.write("ENDSEC;\n")
-    out.write("DATA;\n")
-    for line in b.lines:
-        out.write(line + "\n")
-    out.write("ENDSEC;\n")
-    out.write("END-ISO-10303-21;\n")
+    for chunk in _emit(_build(mesh), name):
+        out.write(chunk)
     return out.getvalue()
+
+
+def _header(name: str) -> str:
+    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+    return (
+        "ISO-10303-21;\n"
+        "HEADER;\n"
+        "FILE_DESCRIPTION(('Forge CAD kernel export'),'2;1');\n"
+        f"FILE_NAME('{name}.step','{now}',(''),(''),'','Forge CAD kernel','');\n"
+        "FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 3 1 1 }'));\n"
+        "ENDSEC;\n"
+        "DATA;\n"
+    )
+
+
+def _emit(b: "_StepBuilder", name: str, batch: int = 2000) -> Iterator[str]:
+    """Yield the finished file in batches of entity lines."""
+    yield _header(name)
+    for start in range(0, len(b.lines), batch):
+        yield "".join(line + "\n" for line in b.lines[start:start + batch])
+    yield "ENDSEC;\nEND-ISO-10303-21;\n"
+
+
+def triangle_count(mesh: Union[FaceMesh, Solid]) -> int:
+    """Triangles the export would emit — used to budget a request before building."""
+    if isinstance(mesh, Solid):
+        mesh = solid_to_mesh(mesh)
+    return int(len(mesh.faces))
+
+
+def stream_step(mesh: Union[FaceMesh, Solid], name: str = "part") -> Iterator[str]:
+    """Stream a STEP AP214 file instead of materializing it as one string.
+
+    A faceted STEP carries ~20 entity lines per triangle, so a modest part at a
+    high meshing resolution runs to hundreds of megabytes. Building that as a
+    single ``str`` and handing it to the response layer costs roughly twice the
+    file size in peak RSS, which is enough to OOM a small instance. Emitting in
+    batches keeps one batch resident instead of a second full copy.
+    """
+    b = _build(mesh)
+    yield from _emit(b, name)

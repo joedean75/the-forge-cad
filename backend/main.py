@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.routers import materials, optimize, simulate, manufacturing, text_to_cad, assembly, export, cad, design, llm, documents, machine, operations, sketch, auth, assemblies, collab
+from app.routers import llm, documents, machine, operations, sketch, auth, assemblies, collab
 from app.services import accounts, persistence
 
 
@@ -98,10 +98,27 @@ async def _security_headers(request: Request, call_next):
 # the SPA is served same-origin (StaticFiles mount) so CORS is not needed for it —
 # only set FORGE_CORS_ORIGINS for genuinely separate front-end origins. A wildcard
 # is refused together with credentials (browsers reject it and it is unsafe).
-_cors_origins = [o.strip() for o in os.environ.get("FORGE_CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
+def _default_cors_origins() -> str:
+    """Dev convenience, but never in production.
+
+    The Vite dev server origin is only a sensible default when auth is not being
+    enforced. Once FORGE_AUTH_REQUIRED is on, defaulting to an origin the
+    operator never asked for would let a page on localhost:5173 make credentialed
+    cross-origin calls; production is same-origin and needs no CORS at all.
+    """
+    from app.security import AUTH_REQUIRED
+
+    return "" if AUTH_REQUIRED else "http://localhost:5173"
+
+
+_cors_origins = [
+    o.strip()
+    for o in os.environ.get("FORGE_CORS_ORIGINS", _default_cors_origins()).split(",")
+    if o.strip()
+]
 if "*" in _cors_origins:
     logging.getLogger(__name__).warning("Ignoring wildcard CORS origin with credentials; set explicit origins.")
-    _cors_origins = ["http://localhost:5173"]
+    _cors_origins = [o for o in _cors_origins if o != "*"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -111,15 +128,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(materials.router)
-app.include_router(optimize.router)
-app.include_router(simulate.router)
-app.include_router(manufacturing.router)
-app.include_router(text_to_cad.router)
-app.include_router(assembly.router)
-app.include_router(export.router)
-app.include_router(cad.router)
-app.include_router(design.router)
 app.include_router(llm.router)
 app.include_router(documents.router)
 app.include_router(assemblies.router)

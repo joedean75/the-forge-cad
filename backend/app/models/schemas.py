@@ -90,28 +90,6 @@ class OptimizeJob(BaseModel):
     message: str
 
 
-class CadRepresentation(BaseModel):
-    format: str = "brep-v1"
-    feature_tree: dict
-    step_url: Optional[str] = None
-
-
-class Candidate(BaseModel):
-    id: str
-    name: str
-    score: float
-    mass: float
-    stiffness: float
-    max_stress: float
-    mesh_url: str
-    cad: Optional[CadRepresentation] = None
-
-
-class OptimizeResult(BaseModel):
-    job_id: str
-    candidates: List[Candidate]
-
-
 class SimulationResult(BaseModel):
     max_stress: float
     max_displacement: float
@@ -119,48 +97,6 @@ class SimulationResult(BaseModel):
     compliance: float
     mass: float
     stress_field_url: Optional[str] = None
-
-
-class ManufacturingResult(BaseModel):
-    build_orientation: str
-    build_orientation_vector: Optional[Vector3] = None
-    overhang_angle: float
-    overhang_area: float
-    support_volume: float
-    printability_score: int
-    print_time_minutes: int
-    feature_size_ok: bool
-    enclosed_cavities: bool
-
-
-class NodePart(BaseModel):
-    id: str
-    name: str
-    material: str
-    quantity: int
-    print_time_minutes: int
-    position: Optional[Vector3] = None
-    candidate_id: Optional[str] = None
-    mesh_url: Optional[str] = None
-
-
-class Strut(BaseModel):
-    id: str
-    start: Vector3
-    end: Vector3
-    diameter: float
-
-
-class AssemblyResult(BaseModel):
-    id: str
-    kind: str = "truss"
-    nodes: List[NodePart]
-    struts: List[Strut]
-
-
-class AssemblyGenerateRequest(BaseModel):
-    prompt: str
-    resolution: int = 128
 
 
 # ---------------------------------------------------------------------------

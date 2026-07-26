@@ -3,7 +3,7 @@ import { Wand2, Loader2, ArrowUp, Plus, Trash2, Scale } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
 import { findNode, isBoolean } from '../../util/featureTree'
 import { api } from '../../api/client'
-import type { CatalogMaterial, DocumentParameter, MassProperties } from '../../../../shared/types'
+import type { CatalogMaterial, DocumentParameter, MassProperties, MaterialCategory } from '../../../../shared/types'
 
 type Vec = { x: number; y: number; z: number }
 
@@ -93,25 +93,95 @@ export function ModelInspector() {
   )
 }
 
+const TIER_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'maker', label: 'Maker' },
+  { id: 'professional', label: 'Pro' },
+] as const
+
+type TierFilter = (typeof TIER_FILTERS)[number]['id']
+
 function MaterialPicker() {
   const { doc, setMaterial, busy } = useDocumentStore()
   const [materials, setMaterials] = useState<CatalogMaterial[]>([])
-  useEffect(() => { api.listMaterials().then((r) => setMaterials(r.materials)).catch(() => {}) }, [])
+  const [categories, setCategories] = useState<MaterialCategory[]>([])
+  const [tier, setTier] = useState<TierFilter>('all')
+
+  useEffect(() => {
+    api.listMaterials()
+      .then((r) => { setMaterials(r.materials); setCategories(r.categories) })
+      .catch(() => {})
+  }, [])
+
+  const current = doc?.material_id ?? 'al-6061'
+  const selected = materials.find((m) => m.id === current)
+
+  // Group into the catalog's category order. The selected material always stays
+  // listed even when the tier filter would hide it, so the <select> can't show
+  // a blank value for what the document is actually made of.
+  const groups = categories
+    .map((c) => ({
+      category: c,
+      items: materials.filter(
+        (m) => m.category === c.id && (tier === 'all' || m.tier === tier || m.id === current),
+      ),
+    }))
+    .filter((g) => g.items.length > 0)
+
   if (!doc) return null
-  const current = doc.material_id ?? 'al-6061'
+
   return (
     <div className="pt-3 border-t border-cad-border">
-      <h3 className="sec-head mb-2">Material</h3>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="sec-head">Material</h3>
+        <div className="flex gap-px rounded-sm overflow-hidden border border-cad-border">
+          {TIER_FILTERS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTier(t.id)}
+              className={`px-1.5 py-0.5 text-[10px] uppercase tracking-wide transition-colors ${
+                tier === t.id
+                  ? 'bg-cad-accent text-cad-bg'
+                  : 'bg-cad-bg text-cad-text hover:text-cad-text-heading'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <select
         value={current}
         onChange={(e) => setMaterial(e.target.value)}
         disabled={busy}
         className="w-full px-2 py-1.5 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-xs focus:border-cad-accent outline-none disabled:opacity-50"
       >
-        {materials.map((m) => (
-          <option key={m.id} value={m.id}>{m.name} · {(m.density / 1000).toFixed(2)} g/cm³</option>
+        {groups.map((g) => (
+          <optgroup key={g.category.id} label={g.category.label}>
+            {g.items.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name} · {(m.density / 1000).toFixed(2)} g/cm³
+              </option>
+            ))}
+          </optgroup>
         ))}
       </select>
+
+      {selected && (
+        <div className="mt-2 space-y-1">
+          <div className="flex items-center gap-2 text-[10px] text-cad-text">
+            <span className="uppercase tracking-wide">{selected.tier}</span>
+            <span className="opacity-40">·</span>
+            <span>{(selected.yield_strength / 1e6).toFixed(0)} MPa yield</span>
+            <span className="opacity-40">·</span>
+            <span>${selected.cost_per_kg.toFixed(2)}/kg</span>
+          </div>
+          {selected.notes && (
+            <p className="text-[10px] leading-snug text-cad-text opacity-70">{selected.notes}</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

@@ -1,15 +1,8 @@
 import type {
-  Material,
-  DesignSpec,
   OptimizeJob,
-  OptimizeResult,
   SimulationResult,
-  ManufacturingResult,
-  AssemblyResult,
   DfmReport,
   CamResult,
-  Candidate,
-  DesignGenerationResponse,
   LlmConfig,
   DesignDocument,
   DocumentSummary,
@@ -30,6 +23,7 @@ import type {
   QuoteBundle,
   ManufacturingOrder,
   CatalogMaterial,
+  MaterialCategory,
   DocumentParameter,
   MassProperties,
   DrawingResult,
@@ -103,54 +97,6 @@ export interface PlanSummary {
 
 export const api = {
   health: () => fetchJson<{ status: string }>('/health'),
-  materials: () => fetchJson<Material[]>('/materials'),
-  optimize: (spec: DesignSpec) =>
-    fetchJson<OptimizeJob>('/optimize', {
-      method: 'POST',
-      body: JSON.stringify(spec),
-    }),
-  getJob: (jobId: string) => fetchJson<OptimizeJob>(`/optimize/${jobId}`),
-  getResult: (jobId: string) => fetchJson<OptimizeResult>(`/optimize/${jobId}/result`),
-  simulate: (candidateId: string) =>
-    fetchJson<SimulationResult>(`/simulate?candidate_id=${candidateId}`, { method: 'POST' }),
-  manufacture: (candidateId: string, buildAxis: string = 'auto') =>
-    fetchJson<ManufacturingResult>(`/manufacturing?candidate_id=${candidateId}&build_axis=${buildAxis}`, { method: 'POST' }),
-  textToCad: (prompt: string, spec: DesignSpec) =>
-    fetchJson<DesignSpec>('/text-to-cad', { method: 'POST', body: JSON.stringify({ prompt, spec }) }),
-  assembly: () => fetchJson<AssemblyResult>('/assembly'),
-  exportStep: (candidateId: string) =>
-    fetch(`/api/export/${candidateId}/step`).then((res) => {
-      if (!res.ok) throw new Error(`API error: ${res.status}`)
-      return res.text()
-    }),
-  generatePart: (prompt: string, resolution: number = 128) =>
-    fetchJson<Candidate>('/text-to-cad/generate', {
-      method: 'POST',
-      body: JSON.stringify({ prompt, resolution }),
-    }),
-  reevaluate: (candidateId: string, featureTree: object, resolution: number = 128) =>
-    fetchJson<Candidate>(`/cad/${candidateId}/reevaluate`, {
-      method: 'POST',
-      body: JSON.stringify({ feature_tree: featureTree, resolution }),
-    }),
-  generateAssembly: (prompt: string, resolution: number = 128) =>
-    fetchJson<AssemblyResult>('/assembly/generate', {
-      method: 'POST',
-      body: JSON.stringify({ prompt, resolution }),
-    }),
-  exportAssemblyStep: (assemblyId: string) =>
-    fetch(`/api/export/assembly/${assemblyId}/step`).then((res) => {
-      if (!res.ok) throw new Error(`API error: ${res.status}`)
-      return res.text()
-    }),
-  listSavedCandidates: () => fetchJson<Candidate[]>('/cad/candidates'),
-  listSavedAssemblies: () => fetchJson<AssemblyResult[]>('/cad/assemblies'),
-  getAssembly: (id: string) => fetchJson<AssemblyResult>(`/cad/assemblies/${id}`),
-  generateDesign: (prompt: string, resolution: number = 128) =>
-    fetchJson<DesignGenerationResponse>('/design/generate', {
-      method: 'POST',
-      body: JSON.stringify({ prompt, resolution }),
-    }),
   getLlmConfig: () => fetchJson<LlmConfig>('/llm/config'),
   setLlmModel: (model: string) =>
     fetchJson<LlmConfig>('/llm/model', {
@@ -273,7 +219,10 @@ export const api = {
     }>('/sketch/solve', { method: 'POST', body: JSON.stringify(spec) }),
 
   // ── Materials, parameters, mass properties ──
-  listMaterials: () => fetchJson<{ materials: CatalogMaterial[] }>('/documents/meta/materials'),
+  listMaterials: () =>
+    fetchJson<{ materials: CatalogMaterial[]; categories: MaterialCategory[] }>(
+      '/documents/meta/materials',
+    ),
   setMaterial: (id: string, materialId: string) =>
     fetchJson<DesignDocument>(`/documents/${id}/material`, {
       method: 'POST', body: JSON.stringify({ material_id: materialId }),

@@ -8,7 +8,7 @@ import asyncio
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.security import capped_resolution, current_account, require_entitlement
@@ -230,18 +230,37 @@ def dfm_document(
     return document_analysis.dfm_document(doc.id, build_axis=build_axis, resolution=resolution)
 
 
-@router.get("/{doc_id}/step", response_class=PlainTextResponse)
+@router.get("/{doc_id}/step")
 def export_document_step(
     resolution: int = Query(128, ge=32, le=512),
     acc: accounts.Account = Depends(require_entitlement(ENT_STEP_EXPORT)),
     doc: DesignDocument = Depends(readable_document),
 ):
+    """Stream a faceted STEP export, refusing ones too large to build safely.
+
+    A faceted STEP costs roughly 1.3 kB per triangle, so a part meshed at a high
+    resolution reaches hundreds of megabytes — enough to exhaust a small
+    instance. The triangle budget turns that into an actionable 413 instead of
+    an OOM, and streaming keeps a second full copy off the heap.
+    """
     resolution = capped_resolution(acc, resolution)
-    step_text = document_analysis.export_step_document(doc.id, resolution=resolution)
-    return PlainTextResponse(
-        step_text,
+    try:
+        chunks, triangles = document_analysis.stream_step_document(doc.id, resolution=resolution)
+    except document_analysis.ExportTooLargeError as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"STEP export would contain {exc.triangles:,} triangles (limit "
+                f"{exc.limit:,}). Re-request with a lower `resolution`."
+            ),
+        )
+    return StreamingResponse(
+        chunks,
         media_type="application/step",
-        headers={"Content-Disposition": f"attachment; filename={doc.id}.step"},
+        headers={
+            "Content-Disposition": f"attachment; filename={doc.id}.step",
+            "X-Forge-Triangles": str(triangles),
+        },
     )
 
 
@@ -369,9 +388,17 @@ def cam_document(body: CamRequest,
 
 @router.get("/meta/materials")
 def list_materials(acc: accounts.Account = Depends(current_account)):
+    """The material catalog plus its category descriptors.
+
+    Categories come down alongside the materials (rather than being inferred by
+    the client) so display order and labels stay owned by the catalog.
+    """
     from app.services import materials
 
-    return {"materials": [m.model_dump() for m in materials.list_materials()]}
+    return {
+        "materials": [m.model_dump() for m in materials.list_materials()],
+        "categories": materials.list_categories(),
+    }
 
 
 class MaterialRequest(BaseModel):

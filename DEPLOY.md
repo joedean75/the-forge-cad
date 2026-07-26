@@ -74,11 +74,19 @@ docker compose up -d          # brings up postgres + backend (edit compose for p
 | `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_*` | Live billing. Omit for local/self-serve plan changes. |
 | `FORGE_CORS_ORIGINS` | Only if the SPA is hosted on a different origin than the API. Same-origin (default) needs nothing. |
 | `MOONRAKER_URLS` / `FORGE_ALLOW_PRIVATE_MACHINE_URLS` | Machine control SSRF policy — see below. |
+| `FORGE_TRUSTED_PROXY_HOPS` | How many reverse proxies sit in front of the app. `0` (default) ignores `X-Forwarded-For` entirely; set `1` behind a single PaaS load balancer so the auth rate limiter sees real client IPs instead of the balancer's. |
+| `FORGE_STEP_MAX_TRIANGLES` | Cap on a single STEP export (default 100000, ~130 MB). Oversized requests get a 413 telling them to lower `resolution` rather than exhausting RAM. |
 
 ## Security posture (enforced in code)
 
 - **Auth**: JWT sessions + API keys; PBKDF2-hashed passwords; login is
   rate-limited and constant-time against account enumeration.
+- **Client identity**: the app parses `X-Forwarded-For` itself under
+  `FORGE_TRUSTED_PROXY_HOPS`, and the image runs gunicorn with
+  `--forwarded-allow-ips=` so the server never rewrites the peer address from a
+  client-supplied header. Leaving the server's default `--proxy-headers` on lets
+  any caller spoof its IP and mint a fresh rate-limit bucket per request. If you
+  run the app outside this image, pass `--no-proxy-headers`.
 - **Tenant isolation**: documents are owner-scoped with role-based sharing,
   enforced on every route (404 for non-members, 403 for insufficient role).
 - **SSRF protection**: outbound machine-control requests are validated

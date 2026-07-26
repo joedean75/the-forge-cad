@@ -7,6 +7,7 @@ consumes a document's evaluated solid via `document_service.get_solid`.
 from __future__ import annotations
 
 import math
+import os
 from typing import Optional
 
 import numpy as np
@@ -29,7 +30,7 @@ from app.services.cad_service import (
     kernel_manufacturing_analysis,
     solid_to_step_string,
 )
-from app.routers.materials import _MATERIALS
+from app.services import materials as materials_catalog
 
 
 # Default LPBF process constants (rough averages for aluminum)
@@ -73,7 +74,9 @@ def _spec_from_optimization(doc_name: str, opt: OptimizationSetup) -> DesignSpec
 
 
 def _material_for_spec(spec: DesignSpec) -> Material:
-    return next((m for m in _MATERIALS if m.id == spec.material_id), _MATERIALS[0])
+    # Solver-schema view (MPa/GPa) of the catalog entry; unknown ids fall back to
+    # the catalog default rather than to whichever material happened to be first.
+    return materials_catalog.spec_material_for(spec.material_id)
 
 
 def _approximate_simulation(solid, spec: DesignSpec, mat: Material) -> SimulationResult:
@@ -204,6 +207,43 @@ def export_step_document(doc_id: str, resolution: int = 128) -> str:
         raise HTTPException(status_code=404, detail="Document not found")
     solid = docs.get_solid(doc_id, resolution=resolution)
     return solid_to_step_string(solid, name=f"doc_{doc_id}")
+
+
+class ExportTooLargeError(Exception):
+    """A STEP export exceeded the triangle budget and was not built."""
+
+    def __init__(self, triangles: int, limit: int):
+        super().__init__(f"{triangles} triangles exceeds the {limit} budget")
+        self.triangles = triangles
+        self.limit = limit
+
+
+def _step_triangle_budget() -> int:
+    """Max triangles a single STEP export may emit (~1.3 kB of file each)."""
+    try:
+        return max(1000, int(os.environ.get("FORGE_STEP_MAX_TRIANGLES", "100000")))
+    except ValueError:
+        return 100000
+
+
+def stream_step_document(doc_id: str, resolution: int = 128):
+    """Return ``(chunk_iterator, triangle_count)`` for a document's STEP export.
+
+    The triangle count is checked *before* any entity is built, so an oversized
+    request costs a meshing pass rather than gigabytes of string building.
+    """
+    from app.cad_kernel.io.step import stream_step, triangle_count
+
+    doc = docs.get_document(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    solid = docs.get_solid(doc_id, resolution=resolution)
+
+    triangles = triangle_count(solid)
+    limit = _step_triangle_budget()
+    if triangles > limit:
+        raise ExportTooLargeError(triangles, limit)
+    return stream_step(solid, name=f"doc_{doc_id}"), triangles
 
 
 def cam_document(doc_id: str, tool) -> "object":

@@ -6,7 +6,9 @@ cd "$(dirname "$0")"
 # Start backend in background
 cd backend
 source .venv/bin/activate
-uvicorn main:app --host 0.0.0.0 --port 8000 &
+# --no-proxy-headers: don't let a client's X-Forwarded-For become the peer
+# address, which would defeat the auth rate limiter (see app/rate_limit.py).
+uvicorn main:app --host 0.0.0.0 --port 8000 --no-proxy-headers &
 BACKEND_PID=$!
 cd ..
 

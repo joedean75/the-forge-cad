@@ -158,6 +158,86 @@ def _add_loft(doc_id, args):
     return {"message": "added loft", "feature_id": node["id"]}
 
 
+def _add_sheet_metal(doc_id, args):
+    doc = _get(doc_id)
+    node = {"type": "SheetMetalFeature", "name": "Sheet metal", "params": {
+        "thickness": args.get("thickness", 0.0015),
+        "length": args.get("length", 0.10),
+        "width": args.get("width", 0.06),
+        "bend_radius": args.get("bend_radius", 0.002),
+        "k_factor": args.get("k_factor", 0.44),
+        "flanges": args.get("flanges", [])}}
+    tree = feature_ops.add_primitive(doc.feature_tree, node, args.get("operation", "union"))
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": "added sheet metal base flange", "feature_id": node["id"]}
+
+
+def _add_flange(doc_id, args):
+    """Attach an edge flange to an existing sheet-metal feature."""
+    import copy
+
+    doc = _get(doc_id)
+    # Deep-copy before mutating: update_document decides whether to re-evaluate by
+    # comparing the new tree against the stored one, so editing in place would
+    # compare equal and silently skip the rebuild.
+    tree = copy.deepcopy(doc.feature_tree)
+    target = args.get("feature_id")
+
+    node = _find_sheet_metal(tree, target)
+    if node is None:
+        raise ValueError("no sheet-metal feature found; create one with add_sheet_metal first")
+
+    flange = {
+        "edge": args.get("edge", "x+"),
+        "length": args.get("length", 0.02),
+        "angle": args.get("angle", 90.0),
+    }
+    if args.get("radius") is not None:
+        flange["radius"] = args["radius"]
+    node["params"].setdefault("flanges", []).append(flange)
+
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": f"added {flange['edge']} flange", "feature_id": node.get("id")}
+
+
+def _find_sheet_metal(node, target_id=None):
+    """Depth-first search for a SheetMetalFeature node in a serialized tree."""
+    if isinstance(node, dict):
+        if node.get("type") == "SheetMetalFeature" and (target_id is None or node.get("id") == target_id):
+            return node
+        for key in ("root", "children"):
+            child = node.get(key)
+            if isinstance(child, dict):
+                found = _find_sheet_metal(child, target_id)
+                if found is not None:
+                    return found
+            elif isinstance(child, list):
+                for c in child:
+                    found = _find_sheet_metal(c, target_id)
+                    if found is not None:
+                        return found
+    return None
+
+
+def _flat_pattern(doc_id, args):
+    """Developed blank size and bend table for the document's sheet-metal body."""
+    from app.cad_kernel.ops.sheet_metal import SheetMetalFeature
+
+    doc = _get(doc_id)
+    node = _find_sheet_metal(doc.feature_tree, args.get("feature_id"))
+    if node is None:
+        raise ValueError("this document has no sheet-metal feature")
+
+    feature = SheetMetalFeature._from_dict(node)
+    pattern = feature.flat_pattern()
+    # Report in mm as well — a brake setup sheet is never in metres.
+    pattern["blank_size_mm"] = {k: round(v * 1000.0, 3) for k, v in pattern["blank_size"].items()}
+    for bend in pattern["bends"]:
+        bend["bend_allowance_mm"] = round(bend["bend_allowance"] * 1000.0, 3)
+        bend["distance_from_edge_mm"] = round(bend["distance_from_edge"] * 1000.0, 3)
+    return pattern
+
+
 def _add_mirror(doc_id, args):
     doc = _get(doc_id)
     mod = {"type": "MirrorFeature", "name": "Mirror",
@@ -511,6 +591,33 @@ OPERATIONS: Dict[str, Operation] = {
                   {"plane": {"enum": ["xy", "xz", "yz"], "default": "yz"}, "offset": {"type": "number"},
                    "target": {"type": "string", "description": "feature id to mirror (default: whole body)"}},
                   _add_mirror),
+        Operation("add_sheet_metal", "mutate",
+                  "Create a sheet-metal base flange: a flat plate of constant thickness that edge "
+                  "flanges can be bent from. Lengths in metres. Optionally pass 'flanges' up front, "
+                  "each {edge: x+|x-|y+|y-, length, angle, radius}.",
+                  {"thickness": {"type": "number", "default": 0.0015},
+                   "length": {"type": "number", "default": 0.10},
+                   "width": {"type": "number", "default": 0.06},
+                   "bend_radius": {"type": "number", "default": 0.002,
+                                   "description": "default inside bend radius"},
+                   "k_factor": {"type": "number", "default": 0.44,
+                                "description": "neutral-axis position, 0.33 hard / 0.44 soft"},
+                   "flanges": {"type": "array", "description": "[{edge, length, angle, radius}, …]"},
+                   "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}},
+                  _add_sheet_metal),
+        Operation("add_flange", "mutate",
+                  "Bend a new edge flange off a sheet-metal body. Positive angle bends up, negative down.",
+                  {"edge": {"enum": ["x+", "x-", "y+", "y-"], "default": "x+"},
+                   "length": {"type": "number", "default": 0.02, "description": "flat leg length, metres"},
+                   "angle": {"type": "number", "default": 90.0, "description": "bend angle, degrees"},
+                   "radius": {"type": "number", "description": "inside radius (default: the part's)"},
+                   "feature_id": {"type": "string", "description": "sheet-metal feature (default: the first)"}},
+                  _add_flange),
+        Operation("flat_pattern", "query",
+                  "Unfold the sheet-metal body: developed blank size, bend allowances and bend-line "
+                  "positions — what you need to cut and set up the brake.",
+                  {"feature_id": {"type": "string", "description": "sheet-metal feature (default: the first)"}},
+                  _flat_pattern),
         Operation("add_sweep", "mutate",
                   "Sweep a round profile of 'radius' along a polyline 'path' (metres) — pipe, tube, wire, rail.",
                   {"path": {"type": "array", "description": "[[x,y,z], …] in metres"},

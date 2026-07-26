@@ -78,28 +78,6 @@ export interface OptimizeJob {
   message: string
 }
 
-export interface CadRepresentation {
-  format: string
-  feature_tree: object
-  step_url?: string
-}
-
-export interface Candidate {
-  id: string
-  name: string
-  score: number
-  mass: number
-  stiffness: number
-  max_stress: number
-  mesh_url: string
-  cad?: CadRepresentation
-}
-
-export interface OptimizeResult {
-  job_id: string
-  candidates: Candidate[]
-}
-
 export interface SimulationResult {
   max_stress: number
   max_displacement: number
@@ -107,58 +85,6 @@ export interface SimulationResult {
   compliance: number
   mass: number
   stress_field_url?: string
-}
-
-export interface ManufacturingResult {
-  build_orientation: string
-  build_orientation_vector?: Vector3
-  overhang_angle: number
-  overhang_area: number
-  support_volume: number
-  printability_score: number
-  print_time_minutes: number
-  feature_size_ok: boolean
-  enclosed_cavities: boolean
-}
-
-export interface NodePart {
-  id: string
-  name: string
-  material: string
-  quantity: number
-  print_time_minutes: number
-  position?: Vector3
-  candidate_id?: string
-  mesh_url?: string
-}
-
-export interface Strut {
-  id: string
-  start: Vector3
-  end: Vector3
-  diameter: number
-}
-
-export interface AssemblyResult {
-  id: string
-  kind: string
-  nodes: NodePart[]
-  struts: Strut[]
-}
-
-export type WorkflowStep =
-  | 'requirements'
-  | 'generative'
-  | 'topology'
-  | 'simulation'
-  | 'manufacturing'
-  | 'assembly'
-  | 'export'
-
-export interface DesignGenerationResponse {
-  kind: 'part' | 'assembly'
-  part?: Candidate
-  assembly?: AssemblyResult
 }
 
 export interface LlmConfig {
@@ -359,12 +285,23 @@ export interface CatalogMaterial {
   id: string
   name: string
   category: string
+  /** 'maker' (shelf-stock for hobbyists) | 'professional' (specified engineering stock) */
+  tier: string
   density: number
   youngs_modulus: number
   poisson_ratio: number
   yield_strength: number
   cost_per_kg: number
   process: string
+  notes: string
+}
+
+/** Display descriptor for a material category, in catalog-defined order. */
+export interface MaterialCategory {
+  id: string
+  label: string
+  blurb: string
+  count: number
 }
 
 export interface MassProperties {

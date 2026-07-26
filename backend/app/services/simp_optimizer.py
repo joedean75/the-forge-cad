@@ -641,8 +641,8 @@ def run_simp(
     mesh = _density_to_mesh(x_phys, nelx, nely, nelz, size, origin)
 
     # Estimate mass using real material density
-    from app.routers.materials import _MATERIALS
-    mat = next((m for m in _MATERIALS if m.id == spec.material_id), _MATERIALS[0])
+    from app.services import materials as materials_catalog
+    mat = materials_catalog.get_material(spec.material_id)
     solid_volume_frac = float((x_phys > 0.5).mean())
     total_domain_volume = size.x * size.y * size.z
     # scale to mm^3 then g (density in kg/m^3 -> g/mm^3)
