@@ -177,13 +177,13 @@ def _add_flange(doc_id, args):
     import copy
 
     doc = _get(doc_id)
-    # Deep-copy before mutating: update_document decides whether to re-evaluate by
-    # comparing the new tree against the stored one, so editing in place would
-    # compare equal and silently skip the rebuild.
+    # Work on a copy so a rejected flange can't leave the stored tree half-edited.
     tree = copy.deepcopy(doc.feature_tree)
     target = args.get("feature_id")
 
-    node = _find_sheet_metal(tree, target)
+    from app.cad_kernel.ops.sheet_metal import find_sheet_metal
+
+    node = find_sheet_metal(tree, target)
     if node is None:
         raise ValueError("no sheet-metal feature found; create one with add_sheet_metal first")
 
@@ -200,41 +200,30 @@ def _add_flange(doc_id, args):
     return {"message": f"added {flange['edge']} flange", "feature_id": node.get("id")}
 
 
-def _find_sheet_metal(node, target_id=None):
-    """Depth-first search for a SheetMetalFeature node in a serialized tree."""
-    if isinstance(node, dict):
-        if node.get("type") == "SheetMetalFeature" and (target_id is None or node.get("id") == target_id):
-            return node
-        for key in ("root", "children"):
-            child = node.get(key)
-            if isinstance(child, dict):
-                found = _find_sheet_metal(child, target_id)
-                if found is not None:
-                    return found
-            elif isinstance(child, list):
-                for c in child:
-                    found = _find_sheet_metal(c, target_id)
-                    if found is not None:
-                        return found
-    return None
+def _sheet_metal_feature(doc, feature_id=None):
+    """The document's sheet-metal feature, or a clear error if it has none."""
+    from app.cad_kernel.ops.sheet_metal import SheetMetalFeature, find_sheet_metal
+
+    node = find_sheet_metal(doc.feature_tree, feature_id)
+    if node is None:
+        raise ValueError("this document has no sheet-metal feature")
+    return SheetMetalFeature._from_dict(node)
 
 
 def _flat_pattern(doc_id, args):
-    """Developed blank size and bend table for the document's sheet-metal body."""
-    from app.cad_kernel.ops.sheet_metal import SheetMetalFeature
-
+    """Developed blank, bend table and cut outline for the sheet-metal body."""
     doc = _get(doc_id)
-    node = _find_sheet_metal(doc.feature_tree, args.get("feature_id"))
-    if node is None:
-        raise ValueError("this document has no sheet-metal feature")
+    feature = _sheet_metal_feature(doc, args.get("feature_id"))
 
-    feature = SheetMetalFeature._from_dict(node)
     pattern = feature.flat_pattern()
     # Report in mm as well — a brake setup sheet is never in metres.
     pattern["blank_size_mm"] = {k: round(v * 1000.0, 3) for k, v in pattern["blank_size"].items()}
     for bend in pattern["bends"]:
         bend["bend_allowance_mm"] = round(bend["bend_allowance"] * 1000.0, 3)
         bend["distance_from_edge_mm"] = round(bend["distance_from_edge"] * 1000.0, 3)
+    # Cut geometry, so the blank is directly manufacturable rather than a number
+    # someone has to redraw.
+    pattern.update(feature.flat_pattern_outline())
     return pattern
 
 

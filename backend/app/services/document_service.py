@@ -461,6 +461,28 @@ def list_documents(owner_id: Optional[str] = None) -> List[DocumentSummary]:
     return summaries
 
 
+def _tree_needs_rebuild(doc: DesignDocument, feature_tree: dict) -> bool:
+    """Whether `feature_tree` differs from what the derived cache was built from.
+
+    Comparing the incoming tree against ``doc.feature_tree`` is not enough: a
+    caller that edits the stored tree **in place** and hands the same object back
+    compares equal to itself, so the edit silently never re-evaluates and the
+    document keeps stale geometry. Hashing the tree's current contents against
+    the hash recorded at the last evaluation catches that, because the hash moves
+    with the content regardless of object identity.
+
+    Ids are assigned server-side before hashing, so a tree that arrives without
+    them (LLM output) is normalized the same way the stored one was.
+    """
+    _ensure_feature_ids(feature_tree)
+    last_built = doc.derived.solid_hash if doc.derived else None
+    if last_built is None:
+        # Never successfully evaluated — fall back to a value comparison, and
+        # rebuild whenever the object is the very same one we already hold.
+        return feature_tree is doc.feature_tree or feature_tree != doc.feature_tree
+    return _hash_tree(feature_tree) != last_built
+
+
 def update_document(
     doc_id: str,
     name: Optional[str] = None,
@@ -477,7 +499,7 @@ def update_document(
         doc.name = name
     if optimization is not None:
         doc.optimization = optimization
-    if feature_tree is not None and feature_tree != doc.feature_tree:
+    if feature_tree is not None and _tree_needs_rebuild(doc, feature_tree):
         doc.feature_tree = feature_tree
         tree_changed = True
         if doc.provenance == "text_to_cad":

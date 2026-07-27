@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Box, Circle, Cylinder, Cone, Plus, Minus,
   Blend, Triangle, Shell, CircleDot, Grid3x3, Move3d, PencilRuler,
   Rotate3d, FlipHorizontal2, Spline, Layers,
   Sheet, CornerUpRight, CornerDownRight, UnfoldHorizontal,
 } from 'lucide-react'
+import { api } from '../api/client'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { flatten, type BooleanOp, type ModifierType, type PrimitiveType } from '../util/featureTree'
 
@@ -188,7 +190,7 @@ export function ToolRibbon() {
   const cut = op === 'subtract'
 
   return (
-    <div className="relative border-b border-cad-border bg-cad-panel flex items-stretch gap-2 px-3 shrink-0 z-10">
+    <div className="border-b border-cad-border bg-cad-panel flex items-stretch gap-2 px-3 shrink-0 z-10">
       <Group label="Sketch">
         <Tool
           icon={PencilRuler}
@@ -294,15 +296,28 @@ export function ToolRibbon() {
         })}
       </Group>
 
-      {flatPattern && <FlatPatternReadout pattern={flatPattern} onClose={() => setFlatPattern(null)} />}
+      {flatPattern && (
+        <FlatPatternReadout
+          pattern={flatPattern}
+          onClose={() => setFlatPattern(null)}
+          onExport={() => doc && api.downloadFlatPattern(doc.id, doc.name)}
+        />
+      )}
     </div>
   )
 }
 
 /** Brake setup sheet: the blank to cut and where each bend line lands. */
-function FlatPatternReadout({ pattern, onClose }: { pattern: FlatPattern; onClose: () => void }) {
-  return (
-    <div className="absolute right-3 top-14 z-20 w-72 rounded-sm border border-cad-border bg-cad-panel shadow-lg">
+function FlatPatternReadout({ pattern, onClose, onExport }: {
+  pattern: FlatPattern
+  onClose: () => void
+  onExport: () => void
+}) {
+  // Portalled to <body>: the ribbon sits inside the editor's layout, whose
+  // panels form their own stacking contexts, so a panel rendered in place paints
+  // *underneath* the inspector no matter how high its z-index goes.
+  return createPortal(
+    <div className="fixed right-3 top-28 z-50 w-72 rounded-sm border border-cad-border bg-cad-panel shadow-lg">
       <div className="flex items-center justify-between px-3 py-2 border-b border-cad-border">
         <h3 className="sec-head">Flat pattern</h3>
         <button onClick={onClose} className="text-cad-text hover:text-cad-text-heading text-xs px-1">✕</button>
@@ -337,7 +352,15 @@ function FlatPatternReadout({ pattern, onClose }: { pattern: FlatPattern; onClos
             ))}
           </div>
         )}
+        <button
+          onClick={onExport}
+          className="w-full mt-1 px-2 py-1.5 rounded-sm border border-cad-border text-cad-text-heading hover:border-cad-accent hover:text-cad-accent transition-colors text-[11px]"
+          title="Blank outline on the CUT layer, bend lines on BEND — ready for a laser or waterjet"
+        >
+          Export DXF
+        </button>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

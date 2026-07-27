@@ -19,6 +19,7 @@ from skimage import measure
 
 from app.cad_kernel.core.feature_tree import FeatureTree
 from app.cad_kernel.evaluator.sdf import sdf_from_feature
+from app.cad_kernel.ops import sheet_metal
 from app.services import document_service, feature_ops
 
 MM = 1000.0
@@ -33,6 +34,9 @@ def profile_cut(doc_id: str, kerf_mm: float = 0.2, plane: str = "xy",
     if doc is None:
         raise KeyError(doc_id)
     active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
+    # Sheet metal is cut as its unfolded blank. Sectioning the folded part would
+    # trace its silhouette, which is not a shape that folds back into the part.
+    active = sheet_metal.unfold_tree(active)
     sdf = sdf_from_feature(FeatureTree.from_dict(active).root)
     b = sdf.bounds()
     lo = np.asarray(b.min, dtype=float)

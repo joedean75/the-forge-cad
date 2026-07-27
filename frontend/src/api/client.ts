@@ -262,6 +262,17 @@ export const api = {
     a.click()
     URL.revokeObjectURL(a.href)
   },
+  /** Sheet-metal blank as DXF — outline on the CUT layer, bend lines on BEND. */
+  downloadFlatPattern: async (id: string, name = 'part') => {
+    const res = await fetch(`${API_BASE}/documents/${id}/flat-pattern.dxf`, { headers: authHeaders() })
+    if (!res.ok) throw new Error(`Flat pattern unavailable (${res.status})`)
+    const blob = await res.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${name.slice(0, 40).replace(/\s+/g, '_') || 'part'}_flat.dxf`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  },
   downloadDrawing: async (id: string, name = 'part') => {
     const res = await fetch(`${API_BASE}/documents/${id}/drawing.svg`, { headers: authHeaders() })
     if (!res.ok) throw new Error(`Drawing unavailable (${res.status})`)

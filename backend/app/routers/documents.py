@@ -598,6 +598,32 @@ def profile_cut_gcode(kerf_mm: float = 0.2, plane: str = "xy", feed_mm_min: floa
                              headers={"Content-Disposition": f"attachment; filename={doc.name[:40].replace(' ', '_') or 'part'}_cut.gcode"})
 
 
+@router.get("/{doc_id}/flat-pattern.dxf", response_class=PlainTextResponse)
+def flat_pattern_dxf(doc: DesignDocument = Depends(readable_document)):
+    """The sheet-metal blank as a DXF: outline on CUT, bend lines on BEND.
+
+    This is the handoff to the shop — the blank goes straight to a laser or
+    waterjet, with the bend lines on their own layer so they are marked, never
+    cut.
+    """
+    from app.cad_kernel.io.dxf import write_dxf
+    from app.services import cad_operations
+
+    try:
+        feature = cad_operations._sheet_metal_feature(docs.get_document(doc.id))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    pattern = feature.flat_pattern_outline()
+    dxf = write_dxf([pattern["outline_mm"]], pattern["bend_lines_mm"])
+    name = (doc.name[:40].replace(" ", "_") or "part")
+    return PlainTextResponse(
+        dxf,
+        media_type="image/vnd.dxf",
+        headers={"Content-Disposition": f"attachment; filename={name}_flat.dxf"},
+    )
+
+
 @router.get("/{doc_id}/drawing.svg")
 def drawing_svg(section: bool = True, doc: DesignDocument = Depends(readable_document)):
     from fastapi.responses import Response

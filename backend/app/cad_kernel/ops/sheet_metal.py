@@ -47,6 +47,59 @@ def bend_deduction(angle_deg: float, radius: float, thickness: float, k_factor: 
     return 2.0 * outside_setback - bend_allowance(angle_deg, radius, thickness, k_factor)
 
 
+def find_sheet_metal(node: Any, target_id: str | None = None) -> Dict[str, Any] | None:
+    """Depth-first search for a SheetMetalFeature node in a serialized tree."""
+    if isinstance(node, dict):
+        if node.get("type") == "SheetMetalFeature" and (target_id is None or node.get("id") == target_id):
+            return node
+        for key in ("root", "children"):
+            child = node.get(key)
+            if isinstance(child, dict):
+                found = find_sheet_metal(child, target_id)
+                if found is not None:
+                    return found
+            elif isinstance(child, list):
+                for c in child:
+                    found = find_sheet_metal(c, target_id)
+                    if found is not None:
+                        return found
+    return None
+
+
+def unfold_tree(tree: Dict[str, Any]) -> Dict[str, Any]:
+    """Return `tree` with every sheet-metal body replaced by its flat blank.
+
+    The cutting pipeline (profile cut, nesting, posting) needs the blank, not a
+    section through the folded part — sectioning a bent bracket would cut its
+    silhouette, which is not a shape that folds back into the part. Trees with no
+    sheet metal come back unchanged, so callers can apply this unconditionally.
+    """
+    import copy
+
+    if find_sheet_metal(tree) is None:
+        return tree
+
+    flat = copy.deepcopy(tree)
+
+    def walk(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "SheetMetalFeature":
+            blank = SheetMetalFeature._from_dict(node).flattened()
+            node["params"] = blank._serialize_params()
+            return
+        for key in ("root", "children"):
+            child = node.get(key)
+            if isinstance(child, dict):
+                walk(child)
+            elif isinstance(child, list):
+                for c in child:
+                    walk(c)
+
+    walk(flat)
+    return flat
+
+
 def _normalize_flange(f: Dict[str, Any], default_radius: float) -> Dict[str, Any]:
     edge = str(f.get("edge", "x+"))
     if edge not in EDGES:
@@ -90,19 +143,14 @@ class SheetMetalFeature(Feature):
         distance from the blank edge, which is how they are set up on a brake.
         """
         t, k = self.thickness, self.k_factor
-        spans = {"x": [0.0, self.length], "y": [0.0, self.width]}
+        spans = self._spans()
         bends: List[Dict[str, Any]] = []
 
         for f in self.normalized_flanges():
-            axis, sign = f["edge"][0], f["edge"][1]
             ba = bend_allowance(f["angle"], f["radius"], t, k)
             # Flat leg measured from the end of the bend, so the developed
             # addition is the allowance plus the remaining straight length.
             developed = ba + f["length"]
-            if sign == "+":
-                spans[axis][1] += developed
-            else:
-                spans[axis][0] -= developed
             bends.append({
                 "edge": f["edge"],
                 "angle": f["angle"],
@@ -131,6 +179,80 @@ class SheetMetalFeature(Feature):
             "bends": bends,
             "bend_count": len(bends),
         }
+
+    def flat_pattern_outline(self) -> Dict[str, Any]:
+        """The blank as a closed 2D outline plus bend lines, in millimetres.
+
+        This is what actually goes to a cutter: the outline on a cut layer, the
+        bend lines on a marking layer. Bend lines are drawn where the bend
+        *starts* — the tangent line at the edge of the base flange — which is the
+        line an operator sets against the brake's back gauge.
+        """
+        pattern = self.flat_pattern()
+        spans = self._spans()
+        x0, x1 = spans["x"]
+        y0, y1 = spans["y"]
+
+        mm = 1000.0
+        # Closed rectangle, origin shifted so the blank starts at (0, 0). Rounded
+        # to a micron and to the same precision as the reported blank size, so the
+        # DXF and the on-screen numbers can never disagree.
+        w = round((x1 - x0) * mm, 3)
+        h = round((y1 - y0) * mm, 3)
+        outline = [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h), (0.0, 0.0)]
+
+        bend_lines: List[Dict[str, Any]] = []
+        for bend in pattern["bends"]:
+            axis = bend["edge"][0]
+            pos = round(bend["distance_from_edge"] * mm, 3)
+            if axis == "x":
+                seg = [(pos, 0.0), (pos, h)]
+            else:
+                seg = [(0.0, pos), (w, pos)]
+            bend_lines.append({
+                "start": seg[0],
+                "end": seg[1],
+                "angle": bend["angle"],
+                "radius": bend["radius"],
+                "edge": bend["edge"],
+            })
+
+        return {
+            "outline_mm": [list(p) for p in outline],
+            "bend_lines_mm": bend_lines,
+            "blank_size_mm": {"x": w, "y": h},
+            "thickness_mm": round(self.thickness * mm, 3),
+        }
+
+    def flattened(self) -> "SheetMetalFeature":
+        """This part as its unfolded blank: a flat plate of the developed size.
+
+        Used by the cutting pipeline — profile-cut, nesting and posting all want
+        the blank, not a section through the bent body.
+        """
+        pattern = self.flat_pattern()
+        return SheetMetalFeature(
+            id=self.id,
+            name=f"{self.name} (flat)",
+            thickness=self.thickness,
+            length=pattern["blank_size"]["x"],
+            width=pattern["blank_size"]["y"],
+            bend_radius=self.bend_radius,
+            k_factor=self.k_factor,
+            flanges=[],
+        )
+
+    def _spans(self) -> Dict[str, List[float]]:
+        """Blank extent on each axis, in metres, before recentring."""
+        spans = {"x": [0.0, self.length], "y": [0.0, self.width]}
+        for f in self.normalized_flanges():
+            axis, sign = f["edge"][0], f["edge"][1]
+            developed = bend_allowance(f["angle"], f["radius"], self.thickness, self.k_factor) + f["length"]
+            if sign == "+":
+                spans[axis][1] += developed
+            else:
+                spans[axis][0] -= developed
+        return spans
 
     def _serialize_params(self) -> Dict[str, Any]:
         return {
