@@ -341,6 +341,25 @@ def _set_feature_suppressed(doc_id, args):
     return {"message": f"{state} feature {args['feature_id']}"}
 
 
+def _set_feature_keep(doc_id, args):
+    doc = _get(doc_id)
+    keep = bool(args.get("keep", True))
+    tree = feature_ops.set_keep(doc.feature_tree, args["feature_id"], keep)
+    # Flagging a keep changes no geometry, so this must not invalidate the solid;
+    # persist the tree without forcing a re-evaluation.
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {
+        "message": f"{'keeping' if keep else 'no longer keeping'} feature {args['feature_id']}",
+        "kept_features": [n.get("id") for n in feature_ops.kept_features(tree)],
+    }
+
+
+def _list_kept_features(doc_id, args):
+    doc = _get(doc_id)
+    return {"features": [{"id": n.get("id"), "type": n.get("type"), "name": n.get("name")}
+                         for n in feature_ops.kept_features(doc.feature_tree)]}
+
+
 def _reorder_feature(doc_id, args):
     doc = _get(doc_id)
     tree = feature_ops.reorder(doc.feature_tree, args["feature_id"], args.get("direction", "up"))
@@ -640,6 +659,15 @@ OPERATIONS: Dict[str, Operation] = {
         Operation("set_feature_suppressed", "mutate",
                   "Suppress or unsuppress a feature (skip it during regeneration without deleting).",
                   {"feature_id": {"type": "string"}, "suppressed": {"type": "boolean"}}, _set_feature_suppressed),
+        Operation("set_feature_keep", "mutate",
+                  "Mark a feature as must-keep so generative optimization cannot remove it. Use this "
+                  "for anything the part needs regardless of load — mounting bosses, bearing seats, "
+                  "bolt holes. Its material is pinned solid and the optimizer routes load around it.",
+                  {"feature_id": {"type": "string"}, "keep": {"type": "boolean", "default": True}},
+                  _set_feature_keep),
+        Operation("list_kept_features", "query",
+                  "List the features currently flagged must-keep for optimization.",
+                  {}, _list_kept_features),
         Operation("reorder_feature", "mutate", "Move a feature up/down within its parent group.",
                   {"feature_id": {"type": "string"}, "direction": {"enum": ["up", "down"]}}, _reorder_feature),
         Operation("add_dimension", "mutate", "Add a point-to-point dimension (metres).",

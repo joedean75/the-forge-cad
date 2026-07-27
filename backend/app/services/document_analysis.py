@@ -6,6 +6,7 @@ consumes a document's evaluated solid via `document_service.get_solid`.
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 from typing import Optional
@@ -40,6 +41,8 @@ _SCAN_SPEED_MPS = 1.0
 _MIN_FEATURE_SIZE_M = 1e-3
 _OVERHANG_THRESHOLD_DEG = 45.0
 _DEFAULT_DENSITY = 2700.0  # kg/m^3
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _default_spec() -> DesignSpec:
@@ -207,6 +210,45 @@ def export_step_document(doc_id: str, resolution: int = 128) -> str:
         raise HTTPException(status_code=404, detail="Document not found")
     solid = docs.get_solid(doc_id, resolution=resolution)
     return solid_to_step_string(solid, name=f"doc_{doc_id}")
+
+
+def flat_pattern_dxf(doc_id: str) -> str:
+    """The sheet-metal blank as a DXF: real cut contours plus bend lines.
+
+    The outline is contoured from the *unfolded* body rather than assumed
+    rectangular, so holes, notches and non-rectangular blanks all come through —
+    each closed contour becomes its own loop on the CUT layer. Kerf is
+    deliberately zero: a DXF carries nominal geometry and the cutter applies its
+    own compensation, unlike the G-code path which bakes it in.
+
+    Falls back to the analytic rectangle if the body cannot be sectioned, so a
+    valid file always comes back for a part that has a computable blank.
+    """
+    from app.cad_kernel.io.dxf import write_dxf
+    from app.services import cad_operations
+    from app.services.cam import profile_cut as pc
+
+    feature = cad_operations._sheet_metal_feature(docs.get_document(doc_id))
+    pattern = feature.flat_pattern_outline()
+
+    try:
+        cut = pc.profile_cut(doc_id, kerf_mm=0.0)
+        outlines = [p for p in cut["paths"] if len(p) >= 3]
+    except Exception:  # degenerate section — fall back to the computed rectangle
+        _LOGGER.warning("Falling back to the analytic blank outline for %s", doc_id, exc_info=True)
+        outlines = []
+
+    if outlines:
+        # Contours come out in the body's own frame; move the blank to the origin
+        # so the DXF lands in the positive quadrant like the analytic outline.
+        xs = [p[0] for path in outlines for p in path]
+        ys = [p[1] for path in outlines for p in path]
+        dx, dy = -min(xs), -min(ys)
+        outlines = [[(round(x + dx, 4), round(y + dy, 4)) for x, y in path] for path in outlines]
+    else:
+        outlines = [pattern["outline_mm"]]
+
+    return write_dxf(outlines, pattern["bend_lines_mm"])
 
 
 class ExportTooLargeError(Exception):

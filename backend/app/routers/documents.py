@@ -313,9 +313,17 @@ async def _run_optimize_job(job_id: str, doc_id: str, setup: OptimizationSetup, 
 
     poller = asyncio.create_task(poll())
     try:
-        await asyncio.to_thread(docs.run_document_optimize, doc_id, setup, resolution, progress)
+        doc = await asyncio.to_thread(docs.run_document_optimize, doc_id, setup, resolution, progress)
+        removed = (doc.feature_tree.get("root", {}).get("params", {})
+                   .get("setup", {}).get("removed_features", []))
+        message = "Optimization complete"
+        if removed:
+            names = ", ".join(r["name"] for r in removed[:3])
+            more = f" +{len(removed) - 3} more" if len(removed) > 3 else ""
+            message = f"Optimization complete — removed {names}{more}. Mark features to keep and re-run."
         docs._OPTIMIZE_JOBS[job_id] = OptimizeJob(
-            id=job_id, status=JobStatus.DONE, progress=1.0, message="Optimization complete"
+            id=job_id, status=JobStatus.DONE, progress=1.0,
+            message=message, removed_features=removed,
         )
     except Exception as exc:
         docs._OPTIMIZE_JOBS[job_id] = OptimizeJob(
@@ -606,16 +614,11 @@ def flat_pattern_dxf(doc: DesignDocument = Depends(readable_document)):
     waterjet, with the bend lines on their own layer so they are marked, never
     cut.
     """
-    from app.cad_kernel.io.dxf import write_dxf
-    from app.services import cad_operations
-
     try:
-        feature = cad_operations._sheet_metal_feature(docs.get_document(doc.id))
+        dxf = document_analysis.flat_pattern_dxf(doc.id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    pattern = feature.flat_pattern_outline()
-    dxf = write_dxf([pattern["outline_mm"]], pattern["bend_lines_mm"])
     name = (doc.name[:40].replace(" ", "_") or "part")
     return PlainTextResponse(
         dxf,

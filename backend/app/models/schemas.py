@@ -88,6 +88,18 @@ class OptimizeJob(BaseModel):
     status: JobStatus
     progress: float = Field(0.0, ge=0.0, le=1.0)
     message: str
+    # Features the solve ate through (see simp_optimizer._audit_removed_features).
+    # Advisory: removing unloaded material is the point, but a part that comes
+    # back missing a mounting boss should say so rather than look finished.
+    removed_features: List["RemovedFeature"] = []
+
+
+class RemovedFeature(BaseModel):
+    feature_id: Optional[str] = None
+    name: str
+    type: str
+    remaining_fraction: float   # 0..1 of the feature's own volume still solid
+    kept: bool = False          # was it flagged must-keep and removed anyway?
 
 
 class SimulationResult(BaseModel):

@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { Loader2, Zap } from 'lucide-react'
+import { AlertTriangle, Loader2, Zap } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
-import type { Objective } from '../../../../shared/types'
+import type { Objective, RemovedFeature } from '../../../../shared/types'
 
 const OBJECTIVES: { value: Objective['target']; label: string }[] = [
   { value: 'minimize_mass', label: 'Minimize mass' },
@@ -10,7 +10,7 @@ const OBJECTIVES: { value: Objective['target']; label: string }[] = [
 ]
 
 export function OptimizePanel() {
-  const { doc, busy, optimizeJob, runOptimize } = useDocumentStore()
+  const { doc, busy, optimizeJob, runOptimize, runOp } = useDocumentStore()
   const [volumeFraction, setVolumeFraction] = useState(0.4)
   const [objective, setObjective] = useState<Objective['target']>('minimize_mass')
 
@@ -20,6 +20,14 @@ export function OptimizePanel() {
 
   const running = busy && optimizeJob !== null
   const pct = optimizeJob ? Math.round(optimizeJob.progress * 100) : 0
+
+  // The job carries the warning while it's fresh; the tree carries it across a
+  // reload, so a part reopened later still explains what its solve removed.
+  const setup = doc.feature_tree.root?.params?.setup as { removed_features?: RemovedFeature[] } | undefined
+  const persisted = setup?.removed_features ?? []
+  const removed: RemovedFeature[] = optimizeJob?.removed_features ?? persisted
+
+  const keepFeature = (featureId: string) => runOp('set_feature_keep', { feature_id: featureId, keep: true })
 
   return (
     <div className="space-y-5">
@@ -91,6 +99,47 @@ export function OptimizePanel() {
             />
           </div>
           <p className="text-[10px] text-cad-text/70 truncate">{optimizeJob.message}</p>
+        </div>
+      )}
+
+      {!running && removed.length > 0 && (
+        <div className="rounded-sm border border-cad-warning/40 bg-cad-warning/5 p-2.5 space-y-2">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={13} className="text-cad-warning shrink-0 mt-px" />
+            <div className="space-y-1">
+              <h3 className="text-[11px] font-semibold text-cad-text-heading">
+                Optimization removed {removed.length === 1 ? 'a feature' : `${removed.length} features`}
+              </h3>
+              <p className="text-[10px] text-cad-text/70 leading-snug">
+                These carried no load, so the solve ate through them. If the part needs them anyway,
+                mark them keep and run again.
+              </p>
+            </div>
+          </div>
+          <ul className="space-y-1">
+            {removed.map((r) => (
+              <li key={r.feature_id ?? r.name} className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-cad-text-heading truncate">
+                  {r.name}
+                  {r.kept && <span className="ml-1 text-cad-warning">(kept, still removed)</span>}
+                </span>
+                <span className="flex items-center gap-2 shrink-0">
+                  <span className="tabular text-[10px] text-cad-text/60">
+                    {Math.round(r.remaining_fraction * 100)}% left
+                  </span>
+                  {r.feature_id && !r.kept && (
+                    <button
+                      onClick={() => keepFeature(r.feature_id as string)}
+                      disabled={busy}
+                      className="px-1.5 py-0.5 rounded-sm border border-cad-border text-[10px] text-cad-text hover:text-cad-accent hover:border-cad-accent transition-colors disabled:opacity-50"
+                    >
+                      Keep
+                    </button>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

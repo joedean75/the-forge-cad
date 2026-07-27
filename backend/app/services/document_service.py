@@ -704,6 +704,55 @@ def get_optimize_job(job_id: str) -> Optional[OptimizeJob]:
     return _OPTIMIZE_JOBS.get(job_id)
 
 
+def _optimize_feature_scope(tree: dict):
+    """Split a tree into ``(keep_features, audit_features)`` for an optimize run.
+
+    Keeps are the nodes flagged must-keep — their material is pinned solid.
+    Audited features are every *leaf* body in the tree: they are what a user
+    would recognise as "the boss" or "that hole", and after the solve each is
+    checked for how much of it survived. Interior boolean/modifier nodes are
+    skipped because their extent is the whole body, which is never informative.
+    """
+    from app.cad_kernel.core.feature_tree import Feature
+    from app.services import feature_ops
+
+    keep_nodes = feature_ops.kept_features(tree)
+    keep_ids = {n.get("id") for n in keep_nodes}
+
+    keep_features = []
+    for node in keep_nodes:
+        try:
+            keep_features.append(Feature.from_dict(node))
+        except Exception:  # a keep we can't rebuild must not break the solve
+            _LOGGER.warning("Ignoring un-evaluable keep feature %s", node.get("id"))
+
+    audit: list = []
+
+    def walk(node: dict) -> None:
+        if not isinstance(node, dict):
+            return
+        kids = feature_ops.children_of(node)
+        for c in kids:
+            walk(c)
+        if kids:
+            return  # only leaves carry a meaningful extent
+        try:
+            feature = Feature.from_dict(node)
+        except Exception:
+            return
+        audit.append({
+            "feature": feature,
+            "id": node.get("id"),
+            "name": node.get("name") or node.get("type"),
+            "type": node.get("type"),
+            "kept": node.get("id") in keep_ids,
+        })
+
+    if tree.get("root"):
+        walk(tree["root"])
+    return keep_features, audit
+
+
 def run_document_optimize(doc_id: str, setup, resolution: int = 128, progress=None) -> DesignDocument:
     """Run SIMP scoped to the document body and fold the result in as an OptimizeFeature."""
     import numpy as np
@@ -720,7 +769,10 @@ def run_document_optimize(doc_id: str, setup, resolution: int = 128, progress=No
     # Re-optimize from the original body, not a prior generative result.
     body = root.children[0] if isinstance(root, OptimizeFeature) and root.children else root
 
-    result = run_simp_from_solid(body, setup, progress=progress)
+    keep, audit = _optimize_feature_scope(doc.feature_tree)
+    result = run_simp_from_solid(
+        body, setup, progress=progress, keep_features=keep, audit_features=audit
+    )
     density = np.asarray(result["density"], dtype=float).round(3).tolist()
 
     opt_feature = OptimizeFeature(
@@ -736,6 +788,10 @@ def run_document_optimize(doc_id: str, setup, resolution: int = 128, progress=No
             "volume_fraction": setup.volume_fraction,
             "objective": setup.objective.target,
             "material_id": setup.material_id,
+            # Persisted with the tree so the warning survives a reload and is
+            # visible to agents through get_feature, not just to the poller.
+            "removed_features": result["info"].get("removed_features", []),
+            "kept_feature_count": result["info"].get("kept_feature_count", 0),
         },
         inputs_hash=_hash_tree(body.to_dict()),
     )

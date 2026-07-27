@@ -447,6 +447,7 @@ def run_simp(
     progress: Optional[ProgressState] = None,
     design_mask: Optional[np.ndarray] = None,
     volfrac_override: Optional[float] = None,
+    preserve_mask: Optional[np.ndarray] = None,
 ) -> SimpResult:
     """
     Run 3D SIMP topology optimization from a DesignSpec.
@@ -517,6 +518,17 @@ def run_simp(
     for region in spec.preserve_regions:
         mask = _sphere_element_mask(nelx, nely, nelz, region.center, region.radius, size)
         passive_solid |= mask
+
+    # Feature-derived keeps: an exact element mask rasterized from the flagged
+    # features' own geometry, rather than a sphere the user had to guess. Unlike
+    # `preserve_regions` these do not also become fixed supports — keeping a
+    # mounting boss says nothing about how the part is grounded.
+    if preserve_mask is not None:
+        if preserve_mask.shape[0] != nelem:
+            raise ValueError(
+                f"preserve_mask has {preserve_mask.shape[0]} elements, expected {nelem}"
+            )
+        passive_solid |= preserve_mask.astype(bool)
 
     for region in spec.obstacle_regions:
         if region.type == "sphere":
@@ -701,11 +713,19 @@ def run_simp_from_solid(
     max_iter: int = 40,
     target_elements: int = 2600,
     progress: Optional[ProgressState] = None,
+    keep_features: Optional[list] = None,
+    audit_features: Optional[list] = None,
 ) -> dict:
     """Optimize an existing part: voxelize its solid as the SIMP design domain.
 
     The body's interior becomes the design region (material may be removed to hit
     the volume target); keep-in regions are held solid, keep-out subtracted.
+
+    ``keep_features`` are evaluated features whose material is pinned solid — the
+    optimizer routes load around them instead of deleting them. ``audit_features``
+    are checked *after* the solve and reported in ``info["removed_features"]``, so
+    a part that lost something it needed says so instead of silently coming back
+    wrong.
 
     Returns a dict with the optimized ``mesh`` (in the part's world frame) plus a
     ``density`` grid + framing so an OptimizeFeature can rebuild it as a GridSDF.
@@ -744,6 +764,20 @@ def run_simp_from_solid(
     if design_count == 0:
         raise ValueError("Body did not intersect the optimization grid")
 
+    # Rasterize each flagged feature onto the same element centres. Doing it here
+    # (rather than approximating with a sphere) means a keep covers exactly the
+    # geometry the user pointed at.
+    def _feature_mask(feature) -> np.ndarray:
+        return sdf_from_feature(feature)(pts) <= 0.0
+
+    preserve_mask = None
+    if keep_features:
+        preserve_mask = np.zeros(pts.shape[0], dtype=bool)
+        for feat in keep_features:
+            preserve_mask |= _feature_mask(feat)
+        # A keep outside the body can't be honoured — it isn't in the design domain.
+        preserve_mask &= occupancy
+
     volume_fraction = float(getattr(setup, "volume_fraction", 0.4))
     volfrac_override = volume_fraction * design_count / nelem
 
@@ -775,6 +809,7 @@ def run_simp_from_solid(
             progress=progress,
             design_mask=occupancy,
             volfrac_override=volfrac_override,
+            preserve_mask=preserve_mask,
         )
 
     constraints = user_constraints if len(user_constraints) >= 3 else []
@@ -790,14 +825,56 @@ def run_simp_from_solid(
 
     density = simp.rho.reshape(nelz, nely, nelx).transpose(2, 1, 0)  # -> [i, j, k]
 
+    info = dict(simp.info)
+    info["removed_features"] = _audit_removed_features(
+        audit_features or [], _feature_mask, simp.rho, threshold=0.5
+    )
+    info["kept_feature_count"] = len(keep_features or [])
+
     return {
         "mesh": mesh,
         "density": density,
         "origin": {"x": cx, "y": cy, "z": cz},
         "size": {"x": float(span[0]), "y": float(span[1]), "z": float(span[2])},
         "threshold": 0.5,
-        "info": simp.info,
+        "info": info,
     }
+
+
+# How much of a feature has to survive before we stop calling it removed. Below
+# this the geometry is gone in any practical sense — a boss eaten to a third of
+# its volume no longer accepts a fastener.
+_FEATURE_INTACT_FRACTION = 0.5
+
+
+def _audit_removed_features(features, mask_fn, rho: np.ndarray, threshold: float = 0.5) -> list:
+    """Report which features the solve ate through.
+
+    For each feature, the fraction of its own elements that still hold material.
+    Optimization legitimately removes unloaded material, so this is advisory —
+    but it is the difference between a part that quietly comes back missing its
+    mounting bosses and one that says so.
+    """
+    report = []
+    for entry in features:
+        feature = entry["feature"] if isinstance(entry, dict) else entry
+        mask = mask_fn(feature)
+        total = int(mask.sum())
+        if total == 0:
+            continue  # outside the grid; nothing meaningful to say
+        surviving = int((rho[mask] > threshold).sum())
+        fraction = surviving / total
+        if fraction >= _FEATURE_INTACT_FRACTION:
+            continue
+        meta = entry if isinstance(entry, dict) else {}
+        report.append({
+            "feature_id": meta.get("id") or getattr(feature, "id", None),
+            "name": meta.get("name") or getattr(feature, "name", "feature"),
+            "type": meta.get("type") or type(feature).__name__,
+            "remaining_fraction": round(fraction, 3),
+            "kept": bool(meta.get("kept")),
+        })
+    return report
 
 
 def _density_to_mesh(

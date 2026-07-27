@@ -47,22 +47,30 @@ def bend_deduction(angle_deg: float, radius: float, thickness: float, k_factor: 
     return 2.0 * outside_setback - bend_allowance(angle_deg, radius, thickness, k_factor)
 
 
+def _child_nodes(node: Any) -> List[Dict[str, Any]]:
+    """Children of a serialized feature node.
+
+    Children live under ``params.children`` — a node has no top-level ``children``
+    key, so walking for one silently finds nothing below the root.
+    """
+    if not isinstance(node, dict):
+        return []
+    kids = node.get("params", {}).get("children") or []
+    return [k for k in kids if isinstance(k, dict)]
+
+
 def find_sheet_metal(node: Any, target_id: str | None = None) -> Dict[str, Any] | None:
-    """Depth-first search for a SheetMetalFeature node in a serialized tree."""
-    if isinstance(node, dict):
-        if node.get("type") == "SheetMetalFeature" and (target_id is None or node.get("id") == target_id):
-            return node
-        for key in ("root", "children"):
-            child = node.get(key)
-            if isinstance(child, dict):
-                found = find_sheet_metal(child, target_id)
-                if found is not None:
-                    return found
-            elif isinstance(child, list):
-                for c in child:
-                    found = find_sheet_metal(c, target_id)
-                    if found is not None:
-                        return found
+    """Depth-first search for a SheetMetalFeature node in a tree or subtree."""
+    if not isinstance(node, dict):
+        return None
+    if "root" in node and "type" not in node:  # a whole tree, not a node
+        return find_sheet_metal(node.get("root"), target_id)
+    if node.get("type") == "SheetMetalFeature" and (target_id is None or node.get("id") == target_id):
+        return node
+    for child in _child_nodes(node):
+        found = find_sheet_metal(child, target_id)
+        if found is not None:
+            return found
     return None
 
 
@@ -88,15 +96,10 @@ def unfold_tree(tree: Dict[str, Any]) -> Dict[str, Any]:
             blank = SheetMetalFeature._from_dict(node).flattened()
             node["params"] = blank._serialize_params()
             return
-        for key in ("root", "children"):
-            child = node.get(key)
-            if isinstance(child, dict):
-                walk(child)
-            elif isinstance(child, list):
-                for c in child:
-                    walk(c)
+        for child in _child_nodes(node):
+            walk(child)
 
-    walk(flat)
+    walk(flat.get("root") if "root" in flat else flat)
     return flat
 
 

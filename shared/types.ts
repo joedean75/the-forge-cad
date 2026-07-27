@@ -76,6 +76,19 @@ export interface OptimizeJob {
   status: JobStatus
   progress: number
   message: string
+  /** Features the solve ate through — advisory, see RemovedFeature. */
+  removed_features?: RemovedFeature[]
+}
+
+/** A feature that lost most of its material during optimization. */
+export interface RemovedFeature {
+  feature_id?: string
+  name: string
+  type: string
+  /** 0..1 of the feature's own volume still solid after the solve. */
+  remaining_fraction: number
+  /** True if it was flagged must-keep and removed anyway. */
+  kept: boolean
 }
 
 export interface SimulationResult {
@@ -511,6 +524,8 @@ export interface FeatureNode {
   name: string
   params: Record<string, unknown>
   suppressed?: boolean
+  /** Must-keep: generative optimization pins this feature's material solid. */
+  keep?: boolean
 }
 
 export interface FeatureTreeDict {

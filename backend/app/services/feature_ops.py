@@ -135,6 +135,51 @@ def remove_node(tree: Dict[str, Any], node_id: str) -> Dict[str, Any]:
     return t
 
 
+def set_keep(tree: Dict[str, Any], node_id: str, keep: bool) -> Dict[str, Any]:
+    """Mark a feature as must-keep for generative optimization.
+
+    Topology optimization is free to delete any material that isn't carrying
+    load, which routinely removes things the part needs anyway — mounting bosses,
+    bearing seats, the walls around a bolt hole. Flagging the feature pins its
+    material solid for the whole solve, so the optimizer works around it instead
+    of through it.
+
+    Stored on the node like ``suppressed``, so it survives serialization and
+    version history without a schema change.
+    """
+    t = copy.deepcopy(tree)
+
+    def walk(n: Dict[str, Any]) -> bool:
+        if n.get("id") == node_id:
+            if keep:
+                n["keep"] = True
+            else:
+                n.pop("keep", None)
+            return True
+        return any(walk(c) for c in children_of(n))
+
+    if not (t.get("root") and walk(t["root"])):
+        raise KeyError(f"feature {node_id} not found")
+    return t
+
+
+def kept_features(tree: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Every node flagged must-keep, in tree order."""
+    out: List[Dict[str, Any]] = []
+
+    def walk(n: Dict[str, Any]) -> None:
+        if not isinstance(n, dict):
+            return
+        if n.get("keep"):
+            out.append(n)
+        for c in children_of(n):
+            walk(c)
+
+    if tree.get("root"):
+        walk(tree["root"])
+    return out
+
+
 def set_suppressed(tree: Dict[str, Any], node_id: str, suppressed: bool) -> Dict[str, Any]:
     t = copy.deepcopy(tree)
 

@@ -91,6 +91,41 @@ def test_dxf_separates_cut_geometry_from_bend_lines():
     assert dxf.count(f"\n{BEND_LAYER}\n") == 1 + 1
 
 
+def test_dxf_outline_follows_the_real_blank_not_a_bounding_rectangle():
+    """Holes in the blank must reach the cutter, so the outline is contoured."""
+    from app.services import document_analysis
+
+    doc = _bracket_doc()
+    ops.dispatch("add_primitive", doc.id, {
+        "shape": "cylinder", "operation": "subtract",
+        "params": {"radius": 0.004, "height": 0.02, "center": {"x": 0.0, "y": 0.0, "z": 0.0}},
+    })
+
+    dxf = document_analysis.flat_pattern_dxf(doc.id)
+    cut_lines = dxf.count(f"\n{CUT_LAYER}\n") - 1  # minus the layer-table entry
+    assert cut_lines > 4, "a rectangle-only outline would drop the hole"
+
+
+def test_dxf_outline_spans_the_developed_blank():
+    from app.services import document_analysis
+
+    doc = _bracket_doc()
+    blank = ops.dispatch("flat_pattern", doc.id, {})["blank_size_mm"]
+    dxf = document_analysis.flat_pattern_dxf(doc.id)
+
+    xs, ys = [], []
+    lines = dxf.split("\n")
+    for i in range(0, len(lines) - 1, 2):
+        code, value = lines[i].strip(), lines[i + 1]
+        if code in ("10", "11"):
+            xs.append(float(value))
+        elif code in ("20", "21"):
+            ys.append(float(value))
+    # Contouring is discretized, so allow a fraction of a millimetre.
+    assert max(xs) - min(xs) == pytest.approx(blank["x"], abs=0.5)
+    assert max(ys) - min(ys) == pytest.approx(blank["y"], abs=0.5)
+
+
 def test_dxf_endpoint_serves_a_downloadable_blank():
     doc = _bracket_doc()
     resp = client.get(f"/api/documents/{doc.id}/flat-pattern.dxf")

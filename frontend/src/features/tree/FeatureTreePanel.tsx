@@ -2,7 +2,7 @@ import { useState } from 'react'
 import {
   Box, Circle, Cylinder, Cone, Combine, Trash2,
   Blend, Triangle, Shell, CircleDot, Grid3x3, Move3d,
-  Eye, EyeOff, ChevronUp, ChevronDown, PencilRuler, Upload,
+  Eye, EyeOff, ChevronUp, ChevronDown, PencilRuler, Upload, Lock, LockOpen,
   Rotate3d, FlipHorizontal2, Spline, Layers,
 } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
@@ -65,6 +65,7 @@ export function FeatureTreePanel() {
   }
 
   const toggleSuppress = (id: string, cur: boolean) => runOp('set_feature_suppressed', { feature_id: id, suppressed: !cur })
+  const toggleKeep = (id: string, cur: boolean) => runOp('set_feature_keep', { feature_id: id, keep: !cur })
   const move = (id: string, dir: 'up' | 'down') => runOp('reorder_feature', { feature_id: id, direction: dir })
   const rootId = doc.feature_tree.root?.id
 
@@ -104,6 +105,7 @@ export function FeatureTreePanel() {
           const Icon = TYPE_ICON[node.type] ?? Box
           const active = node.id === selectedFeatureId
           const suppressed = isSuppressed(node)
+          const kept = node.keep === true
           const id = node.id ?? ''
           const isRoot = node.id === rootId
           return (
@@ -128,7 +130,9 @@ export function FeatureTreePanel() {
                 <Icon size={14} className={active && !suppressed ? 'text-cad-accent' : 'text-cad-text/70'} />
                 <span className={`text-xs truncate ${suppressed ? 'line-through' : ''}`}>{nodeLabel(node)}</span>
               </button>
-              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition">
+              {/* A must-keep flag stays visible unhovered — the whole point is
+                  that you can see at a glance what optimization may not touch. */}
+              <div className={`flex items-center gap-0.5 transition group-hover:opacity-100 ${kept ? 'opacity-100' : 'opacity-0'}`}>
                 {!isRoot && (
                   <>
                     <button onClick={() => move(id, 'up')} title="Move up" className="text-cad-text hover:text-cad-text-heading">
@@ -139,6 +143,15 @@ export function FeatureTreePanel() {
                     </button>
                   </>
                 )}
+                <button
+                  onClick={() => toggleKeep(id, kept)}
+                  title={kept
+                    ? 'Must-keep: optimization cannot remove this'
+                    : 'Mark must-keep so generative optimization cannot remove it'}
+                  className={kept ? 'text-cad-warning' : 'text-cad-text hover:text-cad-text-heading'}
+                >
+                  {kept ? <Lock size={12} /> : <LockOpen size={12} />}
+                </button>
                 <button
                   onClick={() => toggleSuppress(id, suppressed)}
                   title={suppressed ? 'Unsuppress' : 'Suppress'}
