@@ -21,6 +21,7 @@ import ast
 import math
 import operator
 from typing import Dict, List, Tuple
+from app.cad_kernel.core.feature_tree import node_children
 
 _BINOPS = {
     ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
@@ -138,7 +139,7 @@ def resolve_tree(tree: dict, scope: Dict[str, float]) -> dict:
                     params[k] = _resolve_leaf(v, scope)
                 except ParameterError:
                     pass  # leave non-expression strings (enums) untouched
-            for child in params.get("children") or []:
+            for child in node_children(node):
                 walk(child)
 
     root = out.get("root")

@@ -15,6 +15,40 @@ from typing import Any, Callable, Dict, List
 from app.services import document_service, feature_ops
 
 
+
+@dataclass
+class Operation:
+    name: str
+    kind: str  # "query" | "mutate"
+    description: str
+    params: Dict[str, Any]
+    handler: Callable[[str, Dict[str, Any]], Dict[str, Any]]
+
+
+_VEC = {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"}}}
+
+# Populated by @operation as each handler is defined, so a new operation is one
+# decorated function — the registry used to be a 180-line list sitting far from
+# the handlers it named, which meant editing two distant places and kept the
+# description away from the code it describes.
+OPERATIONS: Dict[str, Operation] = {}
+
+
+def operation(name: str, kind: str, description: str, params: Dict[str, Any]):
+    """Register a handler as a callable operation.
+
+    `kind` is "query" (read-only) or "mutate". `params` is the JSON-schema-ish
+    shape published to agents in the catalog.
+    """
+
+    def decorate(fn):
+        if name in OPERATIONS:
+            raise ValueError(f"duplicate operation {name!r}")
+        OPERATIONS[name] = Operation(name, kind, description, params, fn)
+        return fn
+
+    return decorate
+
 # ── node builders ──
 
 def _make_primitive(shape: str, params: Dict[str, Any] | None) -> Dict[str, Any]:
@@ -70,12 +104,16 @@ def _get(doc_id: str):
 
 # ── handlers ──
 
+@operation("list_features", "query", "List all features in the document (id, type, name).",
+           {})
 def _list_features(doc_id, args):
     doc = _get(doc_id)
     return {"features": [{"id": n.get("id"), "type": n["type"], "name": n.get("name")}
                          for n in feature_ops.flatten(doc.feature_tree)]}
 
 
+@operation("get_feature", "query", "Get one feature's full definition.",
+           {"feature_id": {"type": "string"}})
 def _get_feature(doc_id, args):
     doc = _get(doc_id)
     node = feature_ops.find_node(doc.feature_tree, args["feature_id"])
@@ -84,6 +122,8 @@ def _get_feature(doc_id, args):
     return {"feature": node}
 
 
+@operation("bounding_box", "query", "Overall size (mm) and mass (kg) of the current body.",
+           {})
 def _bounding_box(doc_id, args):
     doc = _get(doc_id)
     b = doc.derived.bbox
@@ -97,12 +137,18 @@ def _bounding_box(doc_id, args):
     }
 
 
+@operation("measure", "query", "Distance in mm between two points (metres).",
+           {"a": _VEC, "b": _VEC})
 def _measure(doc_id, args):
     a, b = args["a"], args["b"]
     d = math.dist([a["x"], a["y"], a["z"]], [b["x"], b["y"], b["z"]])
     return {"distance_mm": round(d * 1000, 4)}
 
 
+@operation("add_primitive", "mutate", "Add a box/sphere/cylinder/cone, unioned or subtracted. Lengths in metres.",
+           {"shape": {"enum": ["box", "sphere", "cylinder", "cone"]},
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
+           "params": {"type": "object"}})
 def _add_primitive(doc_id, args):
     doc = _get(doc_id)
     prim = _make_primitive(args["shape"], args.get("params"))
@@ -111,6 +157,11 @@ def _add_primitive(doc_id, args):
     return {"message": f"added {args['shape']} ({args.get('operation', 'union')})", "feature_id": prim["id"]}
 
 
+@operation("add_extrude", "mutate", "Sketch a 2D profile on a plane and extrude it into a solid (unioned or subtracted).",
+           {"profile": {"type": "object", "description": "{type:rect|circle|polygon, ...} in metres"},
+           "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
+           "offset": {"type": "number"}, "depth": {"type": "number"},
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
 def _add_extrude(doc_id, args):
     doc = _get(doc_id)
     node = {
@@ -127,6 +178,12 @@ def _add_extrude(doc_id, args):
     return {"message": "added extrude", "feature_id": node["id"]}
 
 
+@operation("add_revolve", "mutate", "Revolve a 2D profile (authored in radius/height, metres) about an axis to make a "
+           "turned part — shaft, wheel, pulley, bottle. angle<360 = partial revolve.",
+           {"profile": {"type": "object", "description": "{type:rect|circle|polygon} in (radius,height)"},
+           "axis": {"enum": ["x", "y", "z"], "default": "z"}, "center": _VEC,
+           "angle": {"type": "number", "default": 360},
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
 def _add_revolve(doc_id, args):
     doc = _get(doc_id)
     node = {"type": "RevolveFeature", "name": "Revolve", "params": {
@@ -138,6 +195,10 @@ def _add_revolve(doc_id, args):
     return {"message": "added revolve", "feature_id": node["id"]}
 
 
+@operation("add_sweep", "mutate", "Sweep a round profile of 'radius' along a polyline 'path' (metres) — pipe, tube, wire, rail.",
+           {"path": {"type": "array", "description": "[[x,y,z], …] in metres"},
+           "radius": {"type": "number"},
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
 def _add_sweep(doc_id, args):
     doc = _get(doc_id)
     node = {"type": "SweepFeature", "name": "Sweep", "params": {
@@ -147,6 +208,11 @@ def _add_sweep(doc_id, args):
     return {"message": "added sweep", "feature_id": node["id"]}
 
 
+@operation("add_loft", "mutate", "Loft between two profiles at two heights along a plane normal — adapters, tapers, funnels.",
+           {"profile_a": {"type": "object"}, "profile_b": {"type": "object"},
+           "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
+           "offset_a": {"type": "number"}, "offset_b": {"type": "number"},
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
 def _add_loft(doc_id, args):
     doc = _get(doc_id)
     node = {"type": "LoftFeature", "name": "Loft", "params": {
@@ -158,6 +224,18 @@ def _add_loft(doc_id, args):
     return {"message": "added loft", "feature_id": node["id"]}
 
 
+@operation("add_sheet_metal", "mutate", "Create a sheet-metal base flange: a flat plate of constant thickness that edge "
+           "flanges can be bent from. Lengths in metres. Optionally pass 'flanges' up front, "
+           "each {edge: x+|x-|y+|y-, length, angle, radius}.",
+           {"thickness": {"type": "number", "default": 0.0015},
+           "length": {"type": "number", "default": 0.10},
+           "width": {"type": "number", "default": 0.06},
+           "bend_radius": {"type": "number", "default": 0.002,
+           "description": "default inside bend radius"},
+           "k_factor": {"type": "number", "default": 0.44,
+           "description": "neutral-axis position, 0.33 hard / 0.44 soft"},
+           "flanges": {"type": "array", "description": "[{edge, length, angle, radius}, …]"},
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
 def _add_sheet_metal(doc_id, args):
     doc = _get(doc_id)
     node = {"type": "SheetMetalFeature", "name": "Sheet metal", "params": {
@@ -172,6 +250,12 @@ def _add_sheet_metal(doc_id, args):
     return {"message": "added sheet metal base flange", "feature_id": node["id"]}
 
 
+@operation("add_flange", "mutate", "Bend a new edge flange off a sheet-metal body. Positive angle bends up, negative down.",
+           {"edge": {"enum": ["x+", "x-", "y+", "y-"], "default": "x+"},
+           "length": {"type": "number", "default": 0.02, "description": "flat leg length, metres"},
+           "angle": {"type": "number", "default": 90.0, "description": "bend angle, degrees"},
+           "radius": {"type": "number", "description": "inside radius (default: the part's)"},
+           "feature_id": {"type": "string", "description": "sheet-metal feature (default: the first)"}})
 def _add_flange(doc_id, args):
     """Attach an edge flange to an existing sheet-metal feature."""
     import copy
@@ -210,6 +294,9 @@ def _sheet_metal_feature(doc, feature_id=None):
     return SheetMetalFeature._from_dict(node)
 
 
+@operation("flat_pattern", "query", "Unfold the sheet-metal body: developed blank size, bend allowances and bend-line "
+           "positions — what you need to cut and set up the brake.",
+           {"feature_id": {"type": "string", "description": "sheet-metal feature (default: the first)"}})
 def _flat_pattern(doc_id, args):
     """Developed blank, bend table and cut outline for the sheet-metal body."""
     doc = _get(doc_id)
@@ -227,6 +314,9 @@ def _flat_pattern(doc_id, args):
     return pattern
 
 
+@operation("add_mirror", "mutate", "Mirror the body (or a target feature) across a plane and union — symmetry in one op.",
+           {"plane": {"enum": ["xy", "xz", "yz"], "default": "yz"}, "offset": {"type": "number"},
+           "target": {"type": "string", "description": "feature id to mirror (default: whole body)"}})
 def _add_mirror(doc_id, args):
     doc = _get(doc_id)
     mod = {"type": "MirrorFeature", "name": "Mirror",
@@ -258,6 +348,14 @@ def _resolve_on_face(tree, args, params):
         pass  # fall back to explicit plane/offset already in params
 
 
+@operation("add_sketch", "mutate", "Solve a constrained 2D sketch (points/lines/arcs/circles + constraints) and extrude the profile. "
+           "Pass on_face to place the sketch on another feature's face so it follows that feature through edits.",
+           {"sketch": {"type": "object", "description": "{points, lines, arcs, circles, constraints}"},
+           "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
+           "depth": {"type": "number"}, "offset": {"type": "number"},
+           "on_face": {"type": "object",
+           "description": "{feature_id, face} face in top|bottom|left|right|front|back — overrides plane/offset, resolved live at regen"},
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
 def _add_sketch(doc_id, args):
     from app.services import sketch_solver
 
@@ -280,6 +378,10 @@ def _add_sketch(doc_id, args):
             "converged": solved["converged"], "residual": solved["residual"]}
 
 
+@operation("update_sketch", "mutate", "Re-solve an existing sketch extrude with an edited sketch spec (and optional plane/offset/depth/on_face).",
+           {"feature_id": {"type": "string"}, "sketch": {"type": "object"},
+           "plane": {"enum": ["xy", "xz", "yz"]}, "depth": {"type": "number"}, "offset": {"type": "number"},
+           "on_face": {"type": "object", "description": "{feature_id, face} — see add_sketch"}})
 def _update_sketch(doc_id, args):
     from app.services import sketch_solver
 
@@ -301,6 +403,11 @@ def _update_sketch(doc_id, args):
     return {"message": "updated sketch", "converged": solved["converged"], "residual": solved["residual"]}
 
 
+@operation("add_modifier", "mutate", "Apply a modifier: fillet/chamfer/shell/hole/pattern/transform. By default it wraps the "
+           "whole body; pass 'target' (a feature id) to apply it to one feature — e.g. pattern a single hole.",
+           {"modifier": {"enum": ["fillet", "chamfer", "shell", "hole", "pattern", "transform"]},
+           "target": {"type": "string", "description": "feature id to modify (default: whole body)"},
+           "params": {"type": "object"}})
 def _add_modifier(doc_id, args):
     doc = _get(doc_id)
     mod = _make_modifier(args["modifier"], args.get("params"))
@@ -309,6 +416,8 @@ def _add_modifier(doc_id, args):
     return {"message": f"added {args['modifier']}", "feature_id": mod["id"]}
 
 
+@operation("set_feature_params", "mutate", "Change a feature's parameters (merged). Lengths in metres.",
+           {"feature_id": {"type": "string"}, "params": {"type": "object"}})
 def _set_feature_params(doc_id, args):
     doc = _get(doc_id)
     tree = feature_ops.set_params(doc.feature_tree, args["feature_id"], args["params"])
@@ -316,6 +425,8 @@ def _set_feature_params(doc_id, args):
     return {"message": f"updated feature {args['feature_id']}"}
 
 
+@operation("delete_feature", "mutate", "Remove a feature by id.",
+           {"feature_id": {"type": "string"}})
 def _delete_feature(doc_id, args):
     doc = _get(doc_id)
     tree = feature_ops.remove_node(doc.feature_tree, args["feature_id"])
@@ -323,6 +434,8 @@ def _delete_feature(doc_id, args):
     return {"message": f"deleted feature {args['feature_id']}"}
 
 
+@operation("add_dimension", "mutate", "Add a point-to-point dimension (metres).",
+           {"a": _VEC, "b": _VEC, "label": {"type": "string"}})
 def _add_dimension(doc_id, args):
     from app.models.schemas import AddDimensionRequest
 
@@ -333,6 +446,8 @@ def _add_dimension(doc_id, args):
     return {"dimension": dim.model_dump()}
 
 
+@operation("set_feature_suppressed", "mutate", "Suppress or unsuppress a feature (skip it during regeneration without deleting).",
+           {"feature_id": {"type": "string"}, "suppressed": {"type": "boolean"}})
 def _set_feature_suppressed(doc_id, args):
     doc = _get(doc_id)
     tree = feature_ops.set_suppressed(doc.feature_tree, args["feature_id"], bool(args.get("suppressed", True)))
@@ -341,6 +456,10 @@ def _set_feature_suppressed(doc_id, args):
     return {"message": f"{state} feature {args['feature_id']}"}
 
 
+@operation("set_feature_keep", "mutate", "Mark a feature as must-keep so generative optimization cannot remove it. Use this "
+           "for anything the part needs regardless of load — mounting bosses, bearing seats, "
+           "bolt holes. Its material is pinned solid and the optimizer routes load around it.",
+           {"feature_id": {"type": "string"}, "keep": {"type": "boolean", "default": True}})
 def _set_feature_keep(doc_id, args):
     doc = _get(doc_id)
     keep = bool(args.get("keep", True))
@@ -354,12 +473,16 @@ def _set_feature_keep(doc_id, args):
     }
 
 
+@operation("list_kept_features", "query", "List the features currently flagged must-keep for optimization.",
+           {})
 def _list_kept_features(doc_id, args):
     doc = _get(doc_id)
     return {"features": [{"id": n.get("id"), "type": n.get("type"), "name": n.get("name")}
                          for n in feature_ops.kept_features(doc.feature_tree)]}
 
 
+@operation("reorder_feature", "mutate", "Move a feature up/down within its parent group.",
+           {"feature_id": {"type": "string"}, "direction": {"enum": ["up", "down"]}})
 def _reorder_feature(doc_id, args):
     doc = _get(doc_id)
     tree = feature_ops.reorder(doc.feature_tree, args["feature_id"], args.get("direction", "up"))
@@ -367,17 +490,23 @@ def _reorder_feature(doc_id, args):
     return {"message": f"moved {args['feature_id']} {args.get('direction', 'up')}"}
 
 
+@operation("ai_edit", "mutate", "Apply a natural-language edit to the whole part.",
+           {"instruction": {"type": "string"}})
 def _ai_edit(doc_id, args):
     document_service.ai_edit_document(doc_id, args["instruction"])
     return {"message": "applied AI edit"}
 
 
+@operation("list_materials", "query", "List the engineering material catalog (density, modulus, yield, cost).",
+           {})
 def _list_materials(doc_id, args):
     from app.services import materials
 
     return {"materials": [m.model_dump() for m in materials.list_materials()]}
 
 
+@operation("set_material", "mutate", "Assign an engineering material to the part (drives mass, sim, DFM, quotes).",
+           {"material_id": {"type": "string", "description": "e.g. al-6061, steel-304, ti-6al4v, pla"}})
 def _set_material(doc_id, args):
     doc = document_service.set_material(doc_id, args["material_id"])
     if doc is None:
@@ -388,6 +517,10 @@ def _set_material(doc_id, args):
     return {"message": f"material set to {m.name}", "material_id": m.id, "mass_kg": doc.derived.mass}
 
 
+@operation("set_parameters", "mutate", "Set named driving parameters/equations (width=100, hole_d=width/10). Feature params "
+           "may reference them as expression strings ('=width/1000'). Lengths are mm.",
+           {"parameters": {"type": "array",
+           "description": "[{name, expr, unit: mm|deg|count|ratio}], ordered; later may use earlier"}})
 def _set_parameters(doc_id, args):
     doc = document_service.set_parameters(doc_id, args.get("parameters") or [])
     if doc is None:
@@ -397,17 +530,25 @@ def _set_parameters(doc_id, args):
             "error": doc.derived.error}
 
 
+@operation("get_parameters", "query", "List the document's driving parameters/equations.",
+           {})
 def _get_parameters(doc_id, args):
     doc = _get(doc_id)
     return {"parameters": [p.model_dump() for p in doc.parameters]}
 
 
+@operation("mass_properties", "query", "Volume, mass, center of mass, surface area and inertia tensor (uses the assigned material).",
+           {})
 def _mass_properties(doc_id, args):
     from app.services import mass_properties
 
     return mass_properties.mass_properties(doc_id)
 
 
+@operation("profile_cut", "query", "2D laser/plasma/waterjet cut of the part outline from sheet, kerf-compensated. "
+           "Fetch G-code at GET /api/documents/{id}/profile-cut.gcode.",
+           {"kerf_mm": {"type": "number", "default": 0.2}, "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
+           "feed_mm_min": {"type": "number"}, "power": {"type": "number"}})
 def _profile_cut(doc_id, args):
     from app.services.cam import profile_cut
 
@@ -419,6 +560,9 @@ def _profile_cut(doc_id, args):
             "estimated_minutes": out["estimated_minutes"], "gcode_bytes": len(out["gcode"])}
 
 
+@operation("generate_drawing", "query", "Generate a dimensioned multi-view 2D engineering drawing (front/top/right + section). "
+           "Fetch the full SVG at GET /api/documents/{id}/drawing.svg.",
+           {"section": {"type": "boolean", "default": True}})
 def _generate_drawing(doc_id, args):
     from app.services import drawing
 
@@ -428,6 +572,9 @@ def _generate_drawing(doc_id, args):
             "bbox_mm": out["bbox_mm"], "material": out["material"], "svg_bytes": len(out["svg"])}
 
 
+@operation("compute_fit", "query", "ISO-286 fit/tolerance limits for a nominal size. 'fit' is a single spec ('H7') "
+           "or a hole/shaft fit ('H7/g6' → clearance range + classification).",
+           {"nominal_mm": {"type": "number"}, "fit": {"type": "string"}})
 def _compute_fit(doc_id, args):
     from app.services import tolerances
 
@@ -438,6 +585,11 @@ def _compute_fit(doc_id, args):
     return tolerances.limits_mm(nominal, code)
 
 
+@operation("set_tolerances", "mutate", "Set the drawing's general tolerance (ISO 2768 f|m|c|v), fit/± callouts and "
+           "GD&T feature-control frames.",
+           {"general_tolerance": {"type": "string"},
+           "tolerances": {"type": "array", "description": "[{label, nominal_mm, kind:fit|pm, spec, plus, minus}]"},
+           "gdt": {"type": "array", "description": "[{feature, symbol, tolerance_mm, datums:[]}]"}})
 def _set_tolerances(doc_id, args):
     doc = document_service.set_tolerances(
         doc_id, args.get("general_tolerance"), args.get("tolerances") or [], args.get("gdt") or [])
@@ -447,6 +599,8 @@ def _set_tolerances(doc_id, args):
             "general_tolerance": doc.general_tolerance}
 
 
+@operation("release_revision", "mutate", "Cut an immutable released revision (next letter A/B/C…) from the current geometry.",
+           {"notes": {"type": "string"}, "label": {"type": "string"}})
 def _release_revision(doc_id, args):
     rev = document_service.release_revision(doc_id, notes=args.get("notes", ""), label=args.get("label", ""))
     if rev is None:
@@ -455,6 +609,8 @@ def _release_revision(doc_id, args):
             "state": rev.state, "released_at": rev.released_at}
 
 
+@operation("set_lifecycle_state", "mutate", "Set the document lifecycle state: draft | in_review | released | obsolete.",
+           {"state": {"type": "string"}})
 def _set_lifecycle_state(doc_id, args):
     doc = document_service.set_lifecycle_state(doc_id, args["state"])
     if doc is None:
@@ -462,6 +618,8 @@ def _set_lifecycle_state(doc_id, args):
     return {"message": f"state = {doc.lifecycle_state}", "lifecycle_state": doc.lifecycle_state}
 
 
+@operation("list_revisions", "query", "Lifecycle state and released revisions (letters).",
+           {})
 def _list_revisions(doc_id, args):
     doc = _get(doc_id)
     return {"lifecycle_state": doc.lifecycle_state,
@@ -469,6 +627,10 @@ def _list_revisions(doc_id, args):
                            "released_at": r.released_at, "notes": r.notes} for r in doc.revisions]}
 
 
+@operation("set_configurations", "mutate", "Define part-family variants that override driving parameters, e.g. "
+           "[{name:'M4', overrides:{bore:'4'}}]. Pass 'active' to switch to one.",
+           {"configurations": {"type": "array", "description": "[{name, overrides:{param: expr}}]"},
+           "active": {"type": "string"}})
 def _set_configurations(doc_id, args):
     doc = document_service.set_configurations(doc_id, args.get("configurations") or [], args.get("active"))
     if doc is None:
@@ -478,6 +640,8 @@ def _set_configurations(doc_id, args):
             "active": doc.active_configuration}
 
 
+@operation("activate_configuration", "mutate", "Switch the live variant by name (empty = base parameters); geometry re-evaluates.",
+           {"name": {"type": "string"}})
 def _activate_configuration(doc_id, args):
     doc = document_service.activate_configuration(doc_id, args.get("name"))
     if doc is None:
@@ -487,6 +651,8 @@ def _activate_configuration(doc_id, args):
             "bbox": _bbox_summary(doc)}
 
 
+@operation("list_configurations", "query", "List the document's variants and the active one.",
+           {})
 def _list_configurations(doc_id, args):
     doc = _get(doc_id)
     return {"configurations": [c.model_dump() for c in doc.configurations],
@@ -502,6 +668,11 @@ def _bbox_summary(doc) -> dict:
             "z": round((b.max.z - b.min.z) * 1000, 2)}
 
 
+@operation("slice_part", "query", "Slice the body for FDM 3D printing (SDF slicer). Returns layer/time/filament "
+           "stats; the G-code is stored on the document for download or printing.",
+           {"settings": {"type": "object",
+           "description": "optional overrides: layer_height (mm), wall_count, "
+           "infill (0..1), temp_nozzle, temp_bed, speed_print …"}})
 def _slice_part(doc_id, args):
     """FDM-slice the body; stats come back, the G-code lands on the document."""
     import base64
@@ -523,6 +694,11 @@ def _slice_part(doc_id, args):
             "stats": stats}
 
 
+@operation("print_part", "mutate", "Upload the sliced G-code to a Moonraker/Klipper printer and optionally start it. "
+           "Slices with defaults first if the part hasn't been sliced.",
+           {"printer_url": {"type": "string", "description": "Moonraker base URL, e.g. http://printer.local:7125"},
+           "start": {"type": "boolean", "default": False},
+           "settings": {"type": "object", "description": "slice settings if slicing is needed"}})
 def _print_part(doc_id, args):
     """Upload the sliced G-code to a Moonraker/Klipper printer (slice first if needed)."""
     import base64
@@ -551,198 +727,7 @@ def _print_part(doc_id, args):
             "filename": filename, "started": start}
 
 
-@dataclass
-class Operation:
-    name: str
-    kind: str  # "query" | "mutate"
-    description: str
-    params: Dict[str, Any]
-    handler: Callable[[str, Dict[str, Any]], Dict[str, Any]]
 
-
-_VEC = {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"}}}
-
-OPERATIONS: Dict[str, Operation] = {
-    op.name: op for op in [
-        Operation("list_features", "query", "List all features in the document (id, type, name).", {}, _list_features),
-        Operation("get_feature", "query", "Get one feature's full definition.",
-                  {"feature_id": {"type": "string"}}, _get_feature),
-        Operation("bounding_box", "query", "Overall size (mm) and mass (kg) of the current body.", {}, _bounding_box),
-        Operation("measure", "query", "Distance in mm between two points (metres).",
-                  {"a": _VEC, "b": _VEC}, _measure),
-        Operation("add_primitive", "mutate",
-                  "Add a box/sphere/cylinder/cone, unioned or subtracted. Lengths in metres.",
-                  {"shape": {"enum": ["box", "sphere", "cylinder", "cone"]},
-                   "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
-                   "params": {"type": "object"}}, _add_primitive),
-        Operation("add_modifier", "mutate",
-                  "Apply a modifier: fillet/chamfer/shell/hole/pattern/transform. By default it wraps the "
-                  "whole body; pass 'target' (a feature id) to apply it to one feature — e.g. pattern a single hole.",
-                  {"modifier": {"enum": ["fillet", "chamfer", "shell", "hole", "pattern", "transform"]},
-                   "target": {"type": "string", "description": "feature id to modify (default: whole body)"},
-                   "params": {"type": "object"}}, _add_modifier),
-        Operation("add_extrude", "mutate",
-                  "Sketch a 2D profile on a plane and extrude it into a solid (unioned or subtracted).",
-                  {"profile": {"type": "object", "description": "{type:rect|circle|polygon, ...} in metres"},
-                   "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
-                   "offset": {"type": "number"}, "depth": {"type": "number"},
-                   "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}}, _add_extrude),
-        Operation("add_revolve", "mutate",
-                  "Revolve a 2D profile (authored in radius/height, metres) about an axis to make a "
-                  "turned part — shaft, wheel, pulley, bottle. angle<360 = partial revolve.",
-                  {"profile": {"type": "object", "description": "{type:rect|circle|polygon} in (radius,height)"},
-                   "axis": {"enum": ["x", "y", "z"], "default": "z"}, "center": _VEC,
-                   "angle": {"type": "number", "default": 360},
-                   "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}}, _add_revolve),
-        Operation("add_mirror", "mutate",
-                  "Mirror the body (or a target feature) across a plane and union — symmetry in one op.",
-                  {"plane": {"enum": ["xy", "xz", "yz"], "default": "yz"}, "offset": {"type": "number"},
-                   "target": {"type": "string", "description": "feature id to mirror (default: whole body)"}},
-                  _add_mirror),
-        Operation("add_sheet_metal", "mutate",
-                  "Create a sheet-metal base flange: a flat plate of constant thickness that edge "
-                  "flanges can be bent from. Lengths in metres. Optionally pass 'flanges' up front, "
-                  "each {edge: x+|x-|y+|y-, length, angle, radius}.",
-                  {"thickness": {"type": "number", "default": 0.0015},
-                   "length": {"type": "number", "default": 0.10},
-                   "width": {"type": "number", "default": 0.06},
-                   "bend_radius": {"type": "number", "default": 0.002,
-                                   "description": "default inside bend radius"},
-                   "k_factor": {"type": "number", "default": 0.44,
-                                "description": "neutral-axis position, 0.33 hard / 0.44 soft"},
-                   "flanges": {"type": "array", "description": "[{edge, length, angle, radius}, …]"},
-                   "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}},
-                  _add_sheet_metal),
-        Operation("add_flange", "mutate",
-                  "Bend a new edge flange off a sheet-metal body. Positive angle bends up, negative down.",
-                  {"edge": {"enum": ["x+", "x-", "y+", "y-"], "default": "x+"},
-                   "length": {"type": "number", "default": 0.02, "description": "flat leg length, metres"},
-                   "angle": {"type": "number", "default": 90.0, "description": "bend angle, degrees"},
-                   "radius": {"type": "number", "description": "inside radius (default: the part's)"},
-                   "feature_id": {"type": "string", "description": "sheet-metal feature (default: the first)"}},
-                  _add_flange),
-        Operation("flat_pattern", "query",
-                  "Unfold the sheet-metal body: developed blank size, bend allowances and bend-line "
-                  "positions — what you need to cut and set up the brake.",
-                  {"feature_id": {"type": "string", "description": "sheet-metal feature (default: the first)"}},
-                  _flat_pattern),
-        Operation("add_sweep", "mutate",
-                  "Sweep a round profile of 'radius' along a polyline 'path' (metres) — pipe, tube, wire, rail.",
-                  {"path": {"type": "array", "description": "[[x,y,z], …] in metres"},
-                   "radius": {"type": "number"},
-                   "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}}, _add_sweep),
-        Operation("add_loft", "mutate",
-                  "Loft between two profiles at two heights along a plane normal — adapters, tapers, funnels.",
-                  {"profile_a": {"type": "object"}, "profile_b": {"type": "object"},
-                   "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
-                   "offset_a": {"type": "number"}, "offset_b": {"type": "number"},
-                   "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}}, _add_loft),
-        Operation("add_sketch", "mutate",
-                  "Solve a constrained 2D sketch (points/lines/arcs/circles + constraints) and extrude the profile. "
-                  "Pass on_face to place the sketch on another feature's face so it follows that feature through edits.",
-                  {"sketch": {"type": "object", "description": "{points, lines, arcs, circles, constraints}"},
-                   "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
-                   "depth": {"type": "number"}, "offset": {"type": "number"},
-                   "on_face": {"type": "object",
-                               "description": "{feature_id, face} face in top|bottom|left|right|front|back — overrides plane/offset, resolved live at regen"},
-                   "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}}, _add_sketch),
-        Operation("update_sketch", "mutate",
-                  "Re-solve an existing sketch extrude with an edited sketch spec (and optional plane/offset/depth/on_face).",
-                  {"feature_id": {"type": "string"}, "sketch": {"type": "object"},
-                   "plane": {"enum": ["xy", "xz", "yz"]}, "depth": {"type": "number"}, "offset": {"type": "number"},
-                   "on_face": {"type": "object", "description": "{feature_id, face} — see add_sketch"}},
-                  _update_sketch),
-        Operation("set_feature_params", "mutate", "Change a feature's parameters (merged). Lengths in metres.",
-                  {"feature_id": {"type": "string"}, "params": {"type": "object"}}, _set_feature_params),
-        Operation("delete_feature", "mutate", "Remove a feature by id.",
-                  {"feature_id": {"type": "string"}}, _delete_feature),
-        Operation("set_feature_suppressed", "mutate",
-                  "Suppress or unsuppress a feature (skip it during regeneration without deleting).",
-                  {"feature_id": {"type": "string"}, "suppressed": {"type": "boolean"}}, _set_feature_suppressed),
-        Operation("set_feature_keep", "mutate",
-                  "Mark a feature as must-keep so generative optimization cannot remove it. Use this "
-                  "for anything the part needs regardless of load — mounting bosses, bearing seats, "
-                  "bolt holes. Its material is pinned solid and the optimizer routes load around it.",
-                  {"feature_id": {"type": "string"}, "keep": {"type": "boolean", "default": True}},
-                  _set_feature_keep),
-        Operation("list_kept_features", "query",
-                  "List the features currently flagged must-keep for optimization.",
-                  {}, _list_kept_features),
-        Operation("reorder_feature", "mutate", "Move a feature up/down within its parent group.",
-                  {"feature_id": {"type": "string"}, "direction": {"enum": ["up", "down"]}}, _reorder_feature),
-        Operation("add_dimension", "mutate", "Add a point-to-point dimension (metres).",
-                  {"a": _VEC, "b": _VEC, "label": {"type": "string"}}, _add_dimension),
-        Operation("ai_edit", "mutate", "Apply a natural-language edit to the whole part.",
-                  {"instruction": {"type": "string"}}, _ai_edit),
-        Operation("list_materials", "query",
-                  "List the engineering material catalog (density, modulus, yield, cost).", {}, _list_materials),
-        Operation("set_material", "mutate",
-                  "Assign an engineering material to the part (drives mass, sim, DFM, quotes).",
-                  {"material_id": {"type": "string", "description": "e.g. al-6061, steel-304, ti-6al4v, pla"}},
-                  _set_material),
-        Operation("get_parameters", "query", "List the document's driving parameters/equations.", {}, _get_parameters),
-        Operation("set_parameters", "mutate",
-                  "Set named driving parameters/equations (width=100, hole_d=width/10). Feature params "
-                  "may reference them as expression strings ('=width/1000'). Lengths are mm.",
-                  {"parameters": {"type": "array",
-                                  "description": "[{name, expr, unit: mm|deg|count|ratio}], ordered; later may use earlier"}},
-                  _set_parameters),
-        Operation("mass_properties", "query",
-                  "Volume, mass, center of mass, surface area and inertia tensor (uses the assigned material).",
-                  {}, _mass_properties),
-        Operation("generate_drawing", "query",
-                  "Generate a dimensioned multi-view 2D engineering drawing (front/top/right + section). "
-                  "Fetch the full SVG at GET /api/documents/{id}/drawing.svg.",
-                  {"section": {"type": "boolean", "default": True}}, _generate_drawing),
-        Operation("profile_cut", "query",
-                  "2D laser/plasma/waterjet cut of the part outline from sheet, kerf-compensated. "
-                  "Fetch G-code at GET /api/documents/{id}/profile-cut.gcode.",
-                  {"kerf_mm": {"type": "number", "default": 0.2}, "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
-                   "feed_mm_min": {"type": "number"}, "power": {"type": "number"}}, _profile_cut),
-        Operation("compute_fit", "query",
-                  "ISO-286 fit/tolerance limits for a nominal size. 'fit' is a single spec ('H7') "
-                  "or a hole/shaft fit ('H7/g6' → clearance range + classification).",
-                  {"nominal_mm": {"type": "number"}, "fit": {"type": "string"}}, _compute_fit),
-        Operation("set_tolerances", "mutate",
-                  "Set the drawing's general tolerance (ISO 2768 f|m|c|v), fit/± callouts and "
-                  "GD&T feature-control frames.",
-                  {"general_tolerance": {"type": "string"},
-                   "tolerances": {"type": "array", "description": "[{label, nominal_mm, kind:fit|pm, spec, plus, minus}]"},
-                   "gdt": {"type": "array", "description": "[{feature, symbol, tolerance_mm, datums:[]}]"}},
-                  _set_tolerances),
-        Operation("list_revisions", "query", "Lifecycle state and released revisions (letters).", {}, _list_revisions),
-        Operation("release_revision", "mutate",
-                  "Cut an immutable released revision (next letter A/B/C…) from the current geometry.",
-                  {"notes": {"type": "string"}, "label": {"type": "string"}}, _release_revision),
-        Operation("set_lifecycle_state", "mutate",
-                  "Set the document lifecycle state: draft | in_review | released | obsolete.",
-                  {"state": {"type": "string"}}, _set_lifecycle_state),
-        Operation("list_configurations", "query", "List the document's variants and the active one.", {},
-                  _list_configurations),
-        Operation("set_configurations", "mutate",
-                  "Define part-family variants that override driving parameters, e.g. "
-                  "[{name:'M4', overrides:{bore:'4'}}]. Pass 'active' to switch to one.",
-                  {"configurations": {"type": "array", "description": "[{name, overrides:{param: expr}}]"},
-                   "active": {"type": "string"}}, _set_configurations),
-        Operation("activate_configuration", "mutate",
-                  "Switch the live variant by name (empty = base parameters); geometry re-evaluates.",
-                  {"name": {"type": "string"}}, _activate_configuration),
-        Operation("slice_part", "query",
-                  "Slice the body for FDM 3D printing (SDF slicer). Returns layer/time/filament "
-                  "stats; the G-code is stored on the document for download or printing.",
-                  {"settings": {"type": "object",
-                                "description": "optional overrides: layer_height (mm), wall_count, "
-                                               "infill (0..1), temp_nozzle, temp_bed, speed_print …"}},
-                  _slice_part),
-        Operation("print_part", "mutate",
-                  "Upload the sliced G-code to a Moonraker/Klipper printer and optionally start it. "
-                  "Slices with defaults first if the part hasn't been sliced.",
-                  {"printer_url": {"type": "string", "description": "Moonraker base URL, e.g. http://printer.local:7125"},
-                   "start": {"type": "boolean", "default": False},
-                   "settings": {"type": "object", "description": "slice settings if slicing is needed"}},
-                  _print_part),
-    ]
-}
 
 
 def catalog() -> List[Dict[str, Any]]:

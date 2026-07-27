@@ -13,7 +13,7 @@ from typing import Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 
-from app.cad_kernel.core.feature_tree import Feature
+from app.cad_kernel.core.feature_tree import Feature, register_feature
 from app.cad_kernel.core.topology import Face, FaceMesh, Shell, Solid
 from app.cad_kernel.geom.meshing import merge_face_meshes
 
@@ -329,6 +329,7 @@ def boolean(
 # ---------------------------------------------------------------------------
 
 
+@register_feature
 @dataclass
 class BooleanFeature(Feature):
     operation: Literal["union", "subtract", "intersect"] = "union"

@@ -725,96 +725,133 @@ class LoftSDF(SDF):
         return Bounds(np.array([self.o0, umin, vmin]), np.array([self.o1, umax, vmax]))
 
 
+def _sdf_box(f):
+    return BoxSDF(f.size, f.center)
+
+
+def _sdf_sphere(f):
+    return SphereSDF(f.radius, f.center)
+
+
+def _sdf_cylinder(f):
+    return CylinderSDF(f.radius, f.height, f.center, f.axis)
+
+
+def _sdf_cone(f):
+    return ConeSDF(f.base_radius, f.height, f.center, f.axis)
+
+
+def _sdf_boolean(f):
+    return BooleanSDF(f.operation, [sdf_from_feature(c) for c in f.children])
+
+
+def _sdf_smooth_boolean(f):
+    return SmoothBooleanSDF(
+        f.operation,
+        f.radius,
+        [sdf_from_feature(c) for c in f.children],
+        chamfer=type(f).__name__ == "ChamferFeature",
+    )
+
+
+def _sdf_shell(f):
+    return ShellSDF(sdf_from_feature(f.children[0]), f.thickness)
+
+
+def _sdf_hole(f):
+    hole = CylinderSDF(f.radius, f.depth, f.center, f.axis)
+    return BooleanSDF("subtract", [sdf_from_feature(f.children[0]), hole])
+
+
+def _sdf_transform(f):
+    R = _euler_matrix(f.rotate.x, f.rotate.y, f.rotate.z)
+    t = np.array([f.translate.x, f.translate.y, f.translate.z])
+    return TransformSDF(sdf_from_feature(f.children[0]), t, R, f.scale)
+
+
+def _sdf_pattern(f):
+    child = sdf_from_feature(f.children[0])
+    return BooleanSDF("union", _pattern_transforms(child, f))
+
+
+def _sdf_extrude(f):
+    return ExtrudeSDF(f.profile, f.plane, f.offset, f.depth,
+                      plane_origin=getattr(f, "plane_origin", None))
+
+
+def _sdf_revolve(f):
+    return RevolveSDF(f.profile, f.axis, f.center, f.angle)
+
+
+def _sdf_mirror(f):
+    return MirrorSDF(sdf_from_feature(f.children[0]), f.plane, f.offset)
+
+
+def _sdf_sweep(f):
+    return SweepSDF(f.path, f.radius)
+
+
+def _sdf_loft(f):
+    return LoftSDF(f.profile_a, f.profile_b, f.plane, f.offset_a, f.offset_b)
+
+
+def _sdf_optimize(f):
+    cache = f.cache
+    if cache and cache.get("density") is not None:
+        origin, size = cache["origin"], cache["size"]
+        return GridSDF(
+            cache["density"],
+            [origin["x"], origin["y"], origin["z"]],
+            [size["x"], size["y"], size["z"]],
+            cache.get("threshold", 0.5),
+        )
+    # Not solved yet — fall back to the un-optimized input body.
+    if f.children:
+        return sdf_from_feature(f.children[0])
+    raise ValueError("OptimizeFeature has no cache and no input body")
+
+
+def _sdf_import(f):
+    if f.cache and f.cache.get("density_packed"):
+        return _cached_import_grid_sdf(f.cache)
+    raise ValueError("ImportFeature has no voxel cache")
+
+
+# Feature type name -> builder. Keyed by name rather than class so this table
+# needs no imports and cannot drift from the feature registry; adding a feature
+# means adding one line here.
+_SDF_BUILDERS = {
+    "BoxFeature": _sdf_box,
+    "SphereFeature": _sdf_sphere,
+    "CylinderFeature": _sdf_cylinder,
+    "ConeFeature": _sdf_cone,
+    "BooleanFeature": _sdf_boolean,
+    "FilletFeature": _sdf_smooth_boolean,
+    "ChamferFeature": _sdf_smooth_boolean,
+    "ShellFeature": _sdf_shell,
+    "HoleFeature": _sdf_hole,
+    "TransformFeature": _sdf_transform,
+    "PatternFeature": _sdf_pattern,
+    "ExtrudeFeature": _sdf_extrude,
+    "RevolveFeature": _sdf_revolve,
+    "MirrorFeature": _sdf_mirror,
+    "SweepFeature": _sdf_sweep,
+    "LoftFeature": _sdf_loft,
+    "SheetMetalFeature": SheetMetalSDF,
+    "OptimizeFeature": _sdf_optimize,
+    "ImportFeature": _sdf_import,
+}
+
+
 def sdf_from_feature(feature) -> SDF:
     """Convert a feature-tree feature into an SDF expression."""
-    from app.cad_kernel.ops.primitives import (
-        BoxFeature,
-        SphereFeature,
-        CylinderFeature,
-        ConeFeature,
-    )
-    from app.cad_kernel.ops.booleans import BooleanFeature
-    from app.cad_kernel.ops.modifiers import (
-        FilletFeature,
-        ChamferFeature,
-        ShellFeature,
-        HoleFeature,
-        PatternFeature,
-        TransformFeature,
-    )
-    from app.cad_kernel.ops.generative import OptimizeFeature
-    from app.cad_kernel.ops.imported import ImportFeature
-    from app.cad_kernel.ops.sketch import ExtrudeFeature
-    from app.cad_kernel.ops.advanced import RevolveFeature, MirrorFeature, SweepFeature, LoftFeature
-    from app.cad_kernel.ops.sheet_metal import SheetMetalFeature
-
-    if isinstance(feature, SheetMetalFeature):
-        return SheetMetalSDF(feature)
-    if isinstance(feature, RevolveFeature):
-        return RevolveSDF(feature.profile, feature.axis, feature.center, feature.angle)
-    if isinstance(feature, MirrorFeature):
-        return MirrorSDF(sdf_from_feature(feature.children[0]), feature.plane, feature.offset)
-    if isinstance(feature, SweepFeature):
-        return SweepSDF(feature.path, feature.radius)
-    if isinstance(feature, LoftFeature):
-        return LoftSDF(feature.profile_a, feature.profile_b, feature.plane, feature.offset_a, feature.offset_b)
-    if isinstance(feature, BoxFeature):
-        return BoxSDF(feature.size, feature.center)
-    if isinstance(feature, SphereFeature):
-        return SphereSDF(feature.radius, feature.center)
-    if isinstance(feature, CylinderFeature):
-        return CylinderSDF(feature.radius, feature.height, feature.center, feature.axis)
-    if isinstance(feature, ConeFeature):
-        return ConeSDF(feature.base_radius, feature.height, feature.center, feature.axis)
-    if isinstance(feature, BooleanFeature):
-        return BooleanSDF(feature.operation, [sdf_from_feature(c) for c in feature.children])
-    if isinstance(feature, (FilletFeature, ChamferFeature)):
-        return SmoothBooleanSDF(
-            feature.operation,
-            feature.radius,
-            [sdf_from_feature(c) for c in feature.children],
-            chamfer=isinstance(feature, ChamferFeature),
+    builder = _SDF_BUILDERS.get(type(feature).__name__)
+    if builder is None:
+        raise ValueError(
+            f"Feature {type(feature).__name__} cannot be converted to SDF — "
+            f"add it to _SDF_BUILDERS in evaluator/sdf.py"
         )
-    if isinstance(feature, ShellFeature):
-        return ShellSDF(sdf_from_feature(feature.children[0]), feature.thickness)
-    if isinstance(feature, HoleFeature):
-        child = sdf_from_feature(feature.children[0])
-        c = feature.center
-        hole = CylinderSDF(feature.radius, feature.depth, c, feature.axis)
-        return BooleanSDF("subtract", [child, hole])
-    if isinstance(feature, TransformFeature):
-        child = sdf_from_feature(feature.children[0])
-        R = _euler_matrix(feature.rotate.x, feature.rotate.y, feature.rotate.z)
-        t = np.array([feature.translate.x, feature.translate.y, feature.translate.z])
-        return TransformSDF(child, t, R, feature.scale)
-    if isinstance(feature, PatternFeature):
-        child = sdf_from_feature(feature.children[0])
-        copies = _pattern_transforms(child, feature)
-        return BooleanSDF("union", copies)
-    if isinstance(feature, ExtrudeFeature):
-        return ExtrudeSDF(feature.profile, feature.plane, feature.offset, feature.depth,
-                          plane_origin=getattr(feature, "plane_origin", None))
-    if isinstance(feature, OptimizeFeature):
-        cache = feature.cache
-        if cache and cache.get("density") is not None:
-            origin = cache["origin"]
-            size = cache["size"]
-            return GridSDF(
-                cache["density"],
-                [origin["x"], origin["y"], origin["z"]],
-                [size["x"], size["y"], size["z"]],
-                cache.get("threshold", 0.5),
-            )
-        # Not solved yet — fall back to the un-optimized input body.
-        if feature.children:
-            return sdf_from_feature(feature.children[0])
-        raise ValueError("OptimizeFeature has no cache and no input body")
-    if isinstance(feature, ImportFeature):
-        cache = feature.cache
-        if cache and cache.get("density_packed"):
-            return _cached_import_grid_sdf(cache)
-        raise ValueError("ImportFeature has no voxel cache")
-    raise ValueError(f"Feature {type(feature).__name__} cannot be converted to SDF")
+    return builder(feature)
 
 
 def _pattern_transforms(child: SDF, feature) -> List["SDF"]:

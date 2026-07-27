@@ -22,7 +22,12 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-from app.cad_kernel.core.feature_tree import Feature
+from app.cad_kernel.core.feature_tree import (
+    Feature,
+    find_node_by_type,
+    register_feature,
+    walk_nodes,
+)
 from app.cad_kernel.core.topology import Solid
 
 # Edges of the base flange a flange can be attached to. The letter is the axis
@@ -47,31 +52,9 @@ def bend_deduction(angle_deg: float, radius: float, thickness: float, k_factor: 
     return 2.0 * outside_setback - bend_allowance(angle_deg, radius, thickness, k_factor)
 
 
-def _child_nodes(node: Any) -> List[Dict[str, Any]]:
-    """Children of a serialized feature node.
-
-    Children live under ``params.children`` — a node has no top-level ``children``
-    key, so walking for one silently finds nothing below the root.
-    """
-    if not isinstance(node, dict):
-        return []
-    kids = node.get("params", {}).get("children") or []
-    return [k for k in kids if isinstance(k, dict)]
-
-
-def find_sheet_metal(node: Any, target_id: str | None = None) -> Dict[str, Any] | None:
-    """Depth-first search for a SheetMetalFeature node in a tree or subtree."""
-    if not isinstance(node, dict):
-        return None
-    if "root" in node and "type" not in node:  # a whole tree, not a node
-        return find_sheet_metal(node.get("root"), target_id)
-    if node.get("type") == "SheetMetalFeature" and (target_id is None or node.get("id") == target_id):
-        return node
-    for child in _child_nodes(node):
-        found = find_sheet_metal(child, target_id)
-        if found is not None:
-            return found
-    return None
+def find_sheet_metal(tree_or_node: Any, target_id: str | None = None) -> Dict[str, Any] | None:
+    """The sheet-metal node in a tree or subtree, optionally by id."""
+    return find_node_by_type(tree_or_node, "SheetMetalFeature", target_id)
 
 
 def unfold_tree(tree: Dict[str, Any]) -> Dict[str, Any]:
@@ -88,18 +71,9 @@ def unfold_tree(tree: Dict[str, Any]) -> Dict[str, Any]:
         return tree
 
     flat = copy.deepcopy(tree)
-
-    def walk(node: Any) -> None:
-        if not isinstance(node, dict):
-            return
+    for node in walk_nodes(flat):
         if node.get("type") == "SheetMetalFeature":
-            blank = SheetMetalFeature._from_dict(node).flattened()
-            node["params"] = blank._serialize_params()
-            return
-        for child in _child_nodes(node):
-            walk(child)
-
-    walk(flat.get("root") if "root" in flat else flat)
+            node["params"] = SheetMetalFeature._from_dict(node).flattened()._serialize_params()
     return flat
 
 
@@ -119,6 +93,7 @@ def _normalize_flange(f: Dict[str, Any], default_radius: float) -> Dict[str, Any
     return {"edge": edge, "length": length, "angle": angle, "radius": radius}
 
 
+@register_feature
 @dataclass
 class SheetMetalFeature(Feature):
     """A base flange plus edge flanges, all at one constant thickness."""

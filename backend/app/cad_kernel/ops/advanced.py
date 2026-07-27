@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal
 
-from app.cad_kernel.core.feature_tree import Feature
+from app.cad_kernel.core.feature_tree import Feature, register_feature
 from app.cad_kernel.core.topology import Solid
 from app.cad_kernel.core.types import Point3, Vector3
 
@@ -42,6 +42,7 @@ def _children_from(data: Dict[str, Any]) -> List[Feature]:
     return [Feature.from_dict(c) for c in data["params"].get("children", [])]
 
 
+@register_feature
 @dataclass
 class RevolveFeature(Feature):
     """A 2D profile revolved about an axis — the standard way to make turned
@@ -68,6 +69,7 @@ class RevolveFeature(Feature):
                    angle=float(p.get("angle", 360.0)))
 
 
+@register_feature
 @dataclass
 class MirrorFeature(Feature):
     """Reflect the child across a plane and union the two — symmetry in one op."""
@@ -90,6 +92,7 @@ class MirrorFeature(Feature):
                    children=_children_from(data))
 
 
+@register_feature
 @dataclass
 class SweepFeature(Feature):
     """A circular profile swept along a polyline path — pipes, tubing, wire,
@@ -112,6 +115,7 @@ class SweepFeature(Feature):
                    radius=float(p.get("radius", 0.005)))
 
 
+@register_feature
 @dataclass
 class LoftFeature(Feature):
     """Blend between two profiles at two heights along a plane's normal — the

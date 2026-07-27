@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from app.cad_kernel.core.feature_tree import FeatureTree
+from app.cad_kernel.core.feature_tree import FeatureTree, walk_nodes
 from app.cad_kernel.core.topology import Solid
 from app.cad_kernel.geom.meshing import mesh_volume
 from app.cad_kernel.kernel import Kernel
@@ -61,17 +61,9 @@ def _ensure_feature_ids(tree: Optional[dict]) -> None:
     server so both sides always speak about the same features.
     """
 
-    def walk(node: dict) -> None:
-        if not isinstance(node, dict):
-            return
+    for node in walk_nodes(tree or {}):
         if not node.get("id"):
             node["id"] = str(uuid.uuid4())
-        for child in (node.get("params") or {}).get("children") or []:
-            walk(child)
-
-    root = (tree or {}).get("root")
-    if root:
-        walk(root)
 
 
 def _default_tree_dict() -> dict:

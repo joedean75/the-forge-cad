@@ -12,10 +12,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from app.cad_kernel.core.feature_tree import Feature
+from app.cad_kernel.core.feature_tree import Feature, register_feature
 from app.cad_kernel.core.topology import Solid
 
 
+@register_feature
 @dataclass
 class ImportFeature(Feature):
     cache: Optional[Dict[str, Any]] = None  # {density, origin, size, threshold}

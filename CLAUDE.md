@@ -41,7 +41,13 @@ The older linear 7-step flow (`requirements → generative → topology → …`
 
 **Backend layering:** `routers/` (HTTP surface) → `services/` (orchestration/business logic) → `cad_kernel/` (pure geometry engine). Keep geometry math in `cad_kernel`; keep request handling thin.
 
-**The CAD kernel** (`backend/app/cad_kernel/`) is self-contained: a `FeatureTree` of primitives (`ops/primitives.py`) and booleans (`ops/booleans.py`) is evaluated as a signed distance field (`evaluator/sdf.py`), meshed via marching cubes (`geom/meshing.py`), and exported to STL/STEP (`io/`). `kernel.py` is the public facade.
+**The CAD kernel** (`backend/app/cad_kernel/`) is self-contained: a `FeatureTree` of primitives (`ops/primitives.py`) and booleans (`ops/booleans.py`) is evaluated as a signed distance field (`evaluator/sdf.py`), meshed via marching cubes (`geom/meshing.py`), and exported to STL/STEP/DXF (`io/`). `kernel.py` is the public facade.
+
+**Adding a feature type** takes two edits, both data: define the class in `ops/` under `@register_feature`, and add one line to `_SDF_BUILDERS` in `evaluator/sdf.py`. `tests/test_registries.py` fails immediately if you do only one. There is no import list or `isinstance` chain to keep in step any more.
+
+**Adding an operation** takes one edit: decorate the handler with `@operation(name, kind, description, params)` in `services/cad_operations.py`. The catalog, the REST surface, the MCP server and the UI all read from that registry.
+
+**Walking a serialized tree** goes through `core/feature_tree`: `node_children`, `walk_nodes`, `find_node_by_type`, `root_of`. Children live under `params.children` — every hand-rolled walk that reached for a top-level `children` key has been a bug.
 
 **Generative optimization is async + in-memory.** `POST /api/documents/{id}/optimize` spawns a FastAPI `BackgroundTask` and returns a job id; the frontend polls `/api/documents/{id}/optimize/{job_id}`. Jobs live in a bounded process-local dict in `routers/documents.py`. The actual work is `services/simp_optimizer.py` — a real SIMP compliance-minimization solve on a hexahedral voxel mesh (density ops use PyTorch/CUDA when available; the sparse linear solve uses scipy). The result folds back into the tree as an `OptimizeFeature` and stays editable.
 

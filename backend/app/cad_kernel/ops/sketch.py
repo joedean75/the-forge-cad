@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
-from app.cad_kernel.core.feature_tree import Feature
+from app.cad_kernel.core.feature_tree import Feature, register_feature
 from app.cad_kernel.core.topology import Solid
 
 
@@ -18,6 +18,7 @@ def _default_profile() -> Dict[str, Any]:
     return {"type": "rect", "width": 0.05, "height": 0.03, "cx": 0.0, "cy": 0.0}
 
 
+@register_feature
 @dataclass
 class ExtrudeFeature(Feature):
     profile: Dict[str, Any] = field(default_factory=_default_profile)

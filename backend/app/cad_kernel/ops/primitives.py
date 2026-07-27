@@ -8,7 +8,7 @@ from typing import Any, Dict
 
 import numpy as np
 
-from app.cad_kernel.core.feature_tree import Feature
+from app.cad_kernel.core.feature_tree import Feature, register_feature
 from app.cad_kernel.core.topology import Face, FaceMesh, Shell, Solid
 from app.cad_kernel.core.types import Point3, Vector3
 from app.cad_kernel.geom.surfaces import (
@@ -127,6 +127,7 @@ def _perp(axis: Vector3, index: int) -> Vector3:
 # ---------------------------------------------------------------------------
 
 
+@register_feature
 @dataclass
 class BoxFeature(Feature):
     size: Vector3 = Vector3(1.0, 1.0, 1.0)
@@ -152,6 +153,7 @@ class BoxFeature(Feature):
         )
 
 
+@register_feature
 @dataclass
 class SphereFeature(Feature):
     radius: float = 1.0
@@ -177,6 +179,7 @@ class SphereFeature(Feature):
         )
 
 
+@register_feature
 @dataclass
 class CylinderFeature(Feature):
     radius: float = 1.0
@@ -208,6 +211,7 @@ class CylinderFeature(Feature):
         )
 
 
+@register_feature
 @dataclass
 class ConeFeature(Feature):
     base_radius: float = 1.0

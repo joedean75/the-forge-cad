@@ -11,6 +11,8 @@ import itertools
 import time
 from typing import Any, Dict, List, Optional
 
+from app.cad_kernel.core.feature_tree import node_children, walk_nodes
+
 _counter = itertools.count(1)
 
 _BOOLEAN_TYPES = {"BooleanFeature", "FilletFeature", "ChamferFeature"}
@@ -20,8 +22,9 @@ def gen_id() -> str:
     return f"f{int(time.time() * 1000):x}{next(_counter)}"
 
 
-def children_of(node: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return node.get("params", {}).get("children") or []
+# Tree-shape helpers live in the kernel so every layer walks a tree the same
+# way; re-exported here because this module is where the service layer looks.
+children_of = node_children
 
 
 def is_boolean(node: Dict[str, Any]) -> bool:
@@ -29,16 +32,8 @@ def is_boolean(node: Dict[str, Any]) -> bool:
 
 
 def flatten(tree: Dict[str, Any]) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-
-    def walk(n: Dict[str, Any]) -> None:
-        out.append(n)
-        for c in children_of(n):
-            walk(c)
-
-    if tree.get("root"):
-        walk(tree["root"])
-    return out
+    """Every node, parents before children."""
+    return list(walk_nodes(tree))
 
 
 def find_node(tree: Dict[str, Any], node_id: str) -> Optional[Dict[str, Any]]:
@@ -165,19 +160,7 @@ def set_keep(tree: Dict[str, Any], node_id: str, keep: bool) -> Dict[str, Any]:
 
 def kept_features(tree: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Every node flagged must-keep, in tree order."""
-    out: List[Dict[str, Any]] = []
-
-    def walk(n: Dict[str, Any]) -> None:
-        if not isinstance(n, dict):
-            return
-        if n.get("keep"):
-            out.append(n)
-        for c in children_of(n):
-            walk(c)
-
-    if tree.get("root"):
-        walk(tree["root"])
-    return out
+    return [n for n in walk_nodes(tree) if n.get("keep")]
 
 
 def set_suppressed(tree: Dict[str, Any], node_id: str, suppressed: bool) -> Dict[str, Any]:

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal
 
-from app.cad_kernel.core.feature_tree import Feature
+from app.cad_kernel.core.feature_tree import Feature, register_feature
 from app.cad_kernel.core.topology import Solid
 from app.cad_kernel.core.types import Point3, Vector3
 
@@ -37,6 +37,7 @@ def _evaluate_via_sdf(feature: Feature) -> Solid:
     return evaluate_sdf(sdf_from_feature(feature))
 
 
+@register_feature
 @dataclass
 class FilletFeature(Feature):
     """Smooth (rounded) boolean blend of its children."""
@@ -67,6 +68,7 @@ class FilletFeature(Feature):
         )
 
 
+@register_feature
 @dataclass
 class ChamferFeature(Feature):
     """Chamfered boolean blend of its children."""
@@ -97,6 +99,7 @@ class ChamferFeature(Feature):
         )
 
 
+@register_feature
 @dataclass
 class ShellFeature(Feature):
     """Hollow the single child to a wall of ``thickness``."""
@@ -121,6 +124,7 @@ class ShellFeature(Feature):
         )
 
 
+@register_feature
 @dataclass
 class HoleFeature(Feature):
     """Subtract a cylindrical hole from the single child."""
@@ -157,6 +161,7 @@ class HoleFeature(Feature):
         )
 
 
+@register_feature
 @dataclass
 class TransformFeature(Feature):
     """Rigid transform + uniform scale of the single child."""
@@ -190,6 +195,7 @@ class TransformFeature(Feature):
         )
 
 
+@register_feature
 @dataclass
 class PatternFeature(Feature):
     """Linear or circular pattern (union of copies) of the single child."""
