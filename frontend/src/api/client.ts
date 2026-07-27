@@ -122,6 +122,25 @@ export const api = {
     }
     return res.json() as Promise<DesignDocument>
   },
+  /** Generate a part from an image (vision LLM when configured, else traced). */
+  createDocumentFromImage: async (
+    file: File,
+    prompt?: string,
+    opts?: { widthMm?: number; depthMm?: number },
+  ) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (prompt?.trim()) form.append('prompt', prompt.trim())
+    if (opts?.widthMm) form.append('width_mm', String(opts.widthMm))
+    if (opts?.depthMm) form.append('depth_mm', String(opts.depthMm))
+    const res = await fetch('/api/documents/from-image', { method: 'POST', body: form, headers: authHeaders() })
+    if (!res.ok) {
+      let detail = res.statusText
+      try { detail = (await res.json())?.detail ?? detail } catch { /* non-JSON */ }
+      throw new Error(detail)
+    }
+    return res.json() as Promise<DesignDocument>
+  },
   getDocument: (id: string) => fetchJson<DesignDocument>(`/documents/${id}`),
   updateDocument: (
     id: string,

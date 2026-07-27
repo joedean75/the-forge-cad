@@ -11,6 +11,9 @@ trimesh>=4.12.0
 numpy>=2.0.0,<2.6
 scipy>=1.10.0
 scikit-image>=0.26.0
+# Image decoding for image-to-CAD. Present transitively via imageio, but the
+# silhouette tracer imports it directly, so it is declared directly.
+pillow>=10.0.0
 torch>=2.0.0,<3.0.0
 pydantic>=2.13.0
 pytest>=8.0.0

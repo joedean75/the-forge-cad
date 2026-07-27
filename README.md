@@ -15,6 +15,7 @@ sampler on the hot path) and a real **3D SIMP topology optimizer**
 | Area | What you get |
 |---|---|
 | **Text-to-CAD** | A prompt bar that turns "a 100×50×30 mm bracket with two mounting holes" into an editable feature tree. LLM-first with validation + self-repair; a rule-based parser covers everything credential-free. |
+| **Image-to-CAD** | Hand it a sketch, logo, drawing or photo. A vision model builds the tree when one is configured; otherwise the silhouette is **traced** into an extruded profile — holes included, exact and instant, no credentials. Either way you get an editable feature tree, not an opaque mesh. |
 | **Forge Copilot** | An agentic loop that plans and executes multi-step edits ("shell it to 2 mm and fillet the top edges") through the same operation API agents use — every step visible and undoable. |
 | **Parametric modeling** | Feature tree (box/cylinder/sphere/cone, booleans, fillet/chamfer/shell/hole/pattern/transform, constrained sketches, **revolve/mirror/sweep/loft**) with a CAD-standard tool ribbon, driving parameters, configurations, dimensions, and version history. |
 | **Sheet metal** | Base flange + edge flanges with real bend geometry (inside radius, angle, up or down), and **flat-pattern unfold** — developed blank, K-factor bend allowances and bend lines. Exports DXF (outline on `CUT`, bends on `BEND`) and the cutting pipeline cuts the *blank*, holes included. |

@@ -1,5 +1,6 @@
 """Tests for the prompt-driven geometry parser and endpoint."""
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.services.text_to_cad_geometry import parse_geometry_prompt
@@ -94,29 +95,41 @@ def test_document_reevaluates_after_feature_tree_edit():
     assert updated["derived"]["mass"] > original_mass * 1.5
 
 
-def test_chassis_prompt():
-    tree = parse_geometry_prompt("a rally style rc chassis on a 185x185x185 3d printer build plate")
+def test_dimensions_drive_the_geometry_not_the_subject_words():
+    """The parser reads numbers, not nouns.
+
+    A canned "RC chassis" shape used to short-circuit this prompt and return a
+    fixed plate with wheel cutouts, ignoring the dimensions asked for. Whatever
+    the subject is called, the size in the prompt is what must come back.
+    """
+    tree = parse_geometry_prompt("a rally style rc chassis 185x120x8 mm")
     root = tree.root
-    assert root.to_dict()["type"] == "BooleanFeature"
-    assert root.operation == "subtract"
-    base = root.children[0]
-    assert base.to_dict()["type"] == "BoxFeature"
-    # Plate should fill ~90 % of the build footprint and be ~5 % of the build height.
-    assert abs(base.size.x - 0.1665) < 1e-6
-    assert abs(base.size.y - 0.1665) < 1e-6
-    assert abs(base.size.z - 0.00925) < 1e-6
-    # Should have wheel cuts plus mounting holes.
-    assert len(root.children) > 1
+    assert root.to_dict()["type"] == "BoxFeature"
+    assert root.size.x == pytest.approx(0.185)
+    assert root.size.y == pytest.approx(0.120)
+    assert root.size.z == pytest.approx(0.008)
 
 
-def test_chassis_prompt_endpoint():
+@pytest.mark.parametrize("prompt", [
+    "a circle plate 50x50x5 mm",
+    "an arch bracket 60x40x10 mm",
+    "a torch mount 30x20x5 mm",
+    "a force sensor plate 80x60x4 mm",
+])
+def test_words_containing_rc_are_not_hijacked(prompt):
+    """`"rc" in prompt` once matched circle, arch, torch, force… and every one
+    of those returned an RC chassis instead of the part described."""
+    tree = parse_geometry_prompt(prompt)
+    assert tree.root.to_dict()["type"] == "BoxFeature"
+
+
+def test_subject_prompt_still_builds_a_document():
     resp = client.post(
         "/api/documents",
         json={"prompt": "a rally style rc chassis on a 185x185x185 3d printer build plate", "resolution": 64},
     )
     assert resp.status_code == 200, resp.text
     doc = resp.json()
-    assert "chassis" in doc["name"].lower()
     assert doc["derived"]["mesh_url"].startswith("data:")
     assert doc["feature_tree"]["root"] is not None
 

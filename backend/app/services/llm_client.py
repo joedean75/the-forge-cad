@@ -177,7 +177,7 @@ _DESIGN_INTENT_SCHEMA = {
             "type": "object",
             "properties": {
                 "shape": {
-                    "enum": ["box", "cube", "cylinder", "sphere", "chassis", "pipe", "other"]
+                    "enum": ["box", "cube", "cylinder", "sphere", "pipe", "other"]
                 },
                 "dimensions": {
                     "type": "object",
@@ -225,7 +225,6 @@ Rules:
   - box/cube: dimensions x=width, y=depth, z=height.
   - cylinder: dimensions x=radius, y=height, z=ignored.
   - sphere: dimensions x=radius.
-  - chassis: dimensions x=build_width, y=build_depth, z=build_height (build volume).
 - Modifiers are free-text hints like ["two mounting holes", "rounded corners"].
 - For an "assembly", fill the "assembly" object.
   - kind may be truss, frame, tower, bridge, space_frame, portal, radial, gantry, crane, scissor, platform, arch, cantilever, or custom.

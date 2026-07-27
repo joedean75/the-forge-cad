@@ -7,7 +7,7 @@ simulate, DFM and CAM endpoints are added by their respective phases.
 import asyncio
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -135,6 +135,51 @@ async def import_document(
 
         logging.getLogger(__name__).exception("import failed")
         raise HTTPException(status_code=400, detail="Could not import this file")
+
+
+@router.post("/from-image", response_model=DesignDocument)
+async def create_document_from_image(
+    response: Response,
+    file: UploadFile = File(...),
+    name: str | None = Form(None),
+    prompt: str | None = Form(None),
+    width_mm: float = Form(100.0),
+    depth_mm: float = Form(4.0),
+    resolution: int = Form(96),
+    acc: accounts.Account = Depends(current_account),
+):
+    """Generate a part from an image.
+
+    A vision-capable LLM models it when one is configured; otherwise the
+    silhouette is traced into an extruded profile — exact, instant, and
+    credential-free. Either way the result is an ordinary editable feature tree.
+    """
+    from app.services import image_to_cad
+
+    data = await file.read()
+    try:
+        doc, source = image_to_cad.create_document_from_image(
+            data=data,
+            filename=file.filename or "image.png",
+            name=name,
+            prompt=prompt,
+            width_mm=width_mm,
+            depth_mm=depth_mm,
+            resolution=resolution,
+            owner_id=acc.id,
+        )
+    except image_to_cad.ImageError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("image-to-CAD failed")
+        raise HTTPException(status_code=400, detail="Could not build a part from that image")
+
+    # Which engine produced it is advisory, so it rides on a header rather than
+    # in the document — nothing downstream should branch on it.
+    response.headers["X-Forge-Source"] = source
+    return doc
 
 
 @router.get("/{doc_id}", response_model=DesignDocument)

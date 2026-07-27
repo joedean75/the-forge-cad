@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Sparkles, Plus, Loader2, Cpu, FolderOpen, Undo2, Redo2, UserCircle2, History, Save, Check, Bot } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Sparkles, Plus, Loader2, Cpu, FolderOpen, Undo2, Redo2, UserCircle2, History, Save, Check, Bot, ImagePlus } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { useAuthStore } from '../store/useAuthStore'
 import { api } from '../api/client'
@@ -144,9 +144,10 @@ function LlmSelector() {
 }
 
 export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOpenCopilot, copilotOpen, peers = [] }: { onOpenLibrary: () => void; onOpenAccount: () => void; onOpenHistory: () => void; onOpenCopilot: () => void; copilotOpen: boolean; peers?: { id: string; email: string }[] }) {
-  const { busy, createFromPrompt, newBlank, doc, undo, redo, past, future } = useDocumentStore()
+  const { busy, createFromPrompt, createFromImage, newBlank, doc, undo, redo, past, future } = useDocumentStore()
   const account = useAuthStore((s) => s.account)
   const [prompt, setPrompt] = useState('')
+  const imageInput = useRef<HTMLInputElement>(null)
   // Text-to-CAD is a single ~20s call; surface the real phases (interpret →
   // generate → evaluate) on a timer so the wait isn't a blind spinner. Driven
   // off `busy` in an effect so the timers are always cleaned up.
@@ -228,6 +229,30 @@ export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOp
               className="flex-1 bg-transparent text-xs text-cad-text-heading placeholder:text-cad-text/50 outline-none"
             />
           )}
+          {/* Generate from a picture instead of words. Any text already in the
+              box rides along as a hint, so "from this photo, 60 mm wide" works. */}
+          <button
+            onClick={() => imageInput.current?.click()}
+            disabled={busy}
+            title="Generate from an image — a sketch, logo, drawing or photo"
+            className="shrink-0 text-cad-text hover:text-cad-accent transition-colors disabled:opacity-40"
+          >
+            <ImagePlus size={14} />
+          </button>
+          <input
+            ref={imageInput}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''  // let the same file be picked again
+              if (!file || busy) return
+              createFromImage(file, prompt)
+              setPrompt('')
+              setGenerating(true)
+            }}
+          />
           <button
             onClick={submit}
             disabled={!prompt.trim() || busy}

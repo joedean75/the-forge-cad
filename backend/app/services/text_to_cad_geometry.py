@@ -242,83 +242,6 @@ def _parse_primitive(text: str, default_unit: str = "m") -> Optional[object]:
     return None
 
 
-def _extract_build_volume(text: str, default_unit: str = "m") -> Optional[Tuple[float, float, float]]:
-    """Look for an explicit build-plate/build-volume dimension triplet."""
-    lower = text.lower()
-    # "... on a 185x185x185 mm 3D printer build plate"
-    dim_group = r"(\d+\.?\d*\s*(?:mm|cm|m|in|inch)?\s*[x,]\s*\d+\.?\d*\s*(?:mm|cm|m|in|inch)?\s*[x,]\s*\d+\.?\d*\s*(?:mm|cm|m|in|inch)?)"
-    m = re.search(dim_group + r"\s*(?:build\s+plate|build\s+volume|3d\s+printer|printer)", lower, re.IGNORECASE)
-    if m:
-        return _parse_triplet(m.group(1), default_unit)
-    m = re.search(r"(?:build\s+plate|build\s+volume|3d\s+printer|printer)\s*(?:of\s+|at\s+|size\s+)?" + dim_group, lower, re.IGNORECASE)
-    if m:
-        return _parse_triplet(m.group(1), default_unit)
-    return None
-
-
-def _build_chassis(build_x: float, build_y: float, build_z: float) -> FeatureTree:
-    """Generate a flat RC-style chassis deck that fits inside the build volume."""
-    thickness = max(build_z * 0.05, 0.003)
-    base_x = build_x * 0.9
-    base_y = build_y * 0.9
-    base = BoxFeature(
-        size=Vector3(x=base_x, y=base_y, z=thickness),
-        center=Point3(x=0, y=0, z=0),
-        name="Chassis deck",
-    )
-
-    wheel_radius = min(build_x, build_y) * 0.12
-    cut_height = thickness * 3.0
-    half_x = base_x / 2.0
-    half_y = base_y / 2.0
-    wheel_positions = [
-        (half_x * 0.8, half_y * 0.8),
-        (-half_x * 0.8, half_y * 0.8),
-        (-half_x * 0.8, -half_y * 0.8),
-        (half_x * 0.8, -half_y * 0.8),
-    ]
-
-    cuts: List[Feature] = []
-    for i, (wx, wy) in enumerate(wheel_positions):
-        cuts.append(
-            CylinderFeature(
-                radius=wheel_radius,
-                height=cut_height,
-                center=Point3(x=wx, y=wy, z=0),
-                name=f"Wheel cut {i + 1}",
-            )
-        )
-
-    # Central + corner mounting holes.
-    mount_radius = max(thickness * 0.3, 0.0015)
-    for i, (mx, my) in enumerate([(0, 0)] + wheel_positions):
-        cuts.append(
-            CylinderFeature(
-                radius=mount_radius,
-                height=cut_height,
-                center=Point3(x=mx, y=my, z=0),
-                name=f"Mount hole {i + 1}",
-            )
-        )
-
-    root = BooleanFeature(operation="subtract", children=[base] + cuts, name="RC chassis")
-    return FeatureTree(root)
-
-
-def _parse_chassis(prompt: str) -> Optional[FeatureTree]:
-    """If the prompt describes an RC/rally chassis, build one sized to the build plate."""
-    lower = prompt.lower()
-    if "chassis" not in lower and "rc" not in lower and "rally" not in lower and "buggy" not in lower:
-        return None
-    default_unit = _default_unit_for_text(prompt)
-    dims = _extract_build_volume(prompt, default_unit)
-    if dims is None:
-        dims = _parse_triplet(prompt, default_unit)
-    if dims is None:
-        dims = (0.2, 0.2, 0.2)
-    return _build_chassis(*dims)
-
-
 def _default_boss(base: object) -> CylinderFeature:
     bx, by, _ = _half_size(base)
     radius = min(bx, by) * 0.18
@@ -451,11 +374,6 @@ def parse_geometry_prompt(prompt: str) -> FeatureTree:
     prompt = prompt.strip()
     if not prompt:
         return FeatureTree(BoxFeature(name="Default Box"))
-
-    # High-level shape shortcuts take precedence over generic clause parsing.
-    chassis_tree = _parse_chassis(prompt)
-    if chassis_tree is not None:
-        return chassis_tree
 
     default_unit = _default_unit_for_text(prompt)
 

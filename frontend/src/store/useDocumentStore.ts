@@ -79,6 +79,8 @@ interface DocumentState {
   /** Silent re-fetch after a collaborator's change — keeps selection/undo intact. */
   refreshDoc: () => Promise<void>
   createFromPrompt: (prompt: string) => Promise<void>
+  /** Generate a part from an image; the prompt is an optional hint alongside it. */
+  createFromImage: (file: File, prompt?: string) => Promise<void>
   newBlank: () => Promise<void>
   openDocument: (id: string) => Promise<void>
   rename: (name: string) => Promise<void>
@@ -397,6 +399,19 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       if (doc.derived.error) set({ error: doc.derived.error })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Failed to generate part' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  createFromImage: async (file, prompt) => {
+    set({ busy: true, error: null })
+    try {
+      const doc = withIds(await api.createDocumentFromImage(file, prompt))
+      set({ doc, selectedFeatureId: doc.feature_tree.root?.id ?? null, mode: 'model', sim: null, dfm: null, cam: null, past: [], future: [] })
+      if (doc.derived.error) set({ error: doc.derived.error })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Failed to build a part from that image' })
     } finally {
       set({ busy: false })
     }

@@ -318,22 +318,6 @@ def parse_prompt(prompt: str, current: DesignSpec) -> DesignSpec:
         sy = spec.design_space.size.y
         sz = spec.design_space.size.z
 
-    # Chassis/rally-car shorthand: target low mass and corner mounts.
-    is_chassis = "chassis" in lower or ((("rc" in lower or "rally" in lower) and "car" in lower))
-    if is_chassis and dims:
-        objective = "minimize_mass"
-        hx, hy = sx / 2.0, sy / 2.0
-        preserves = []
-        for idx, (x, y) in enumerate([(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]):
-            preserves.append(PreserveRegion(
-                id=f"chassis-mount-{idx}",
-                name=f"Mount {idx + 1}",
-                type="sphere",
-                center=Vector3(x=x, y=y, z=-sz / 2.0),
-                radius=min(sx, sy) * 0.05,
-            ))
-        spec.preserve_regions = preserves
-
     spec.material_id = material_id
     spec.objective = Objective(target=objective, weight=1.0)
 
