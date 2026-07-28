@@ -7,6 +7,10 @@ interface AssemblyState {
   busy: boolean
   error: string | null
   selectedComponentId: string | null
+  /** A component's part was opened for editing, so this copy may be out of date. */
+  stale: boolean
+  markStale: () => void
+  refresh: () => Promise<void>
   open: (id: string) => Promise<void>
   createAndOpen: (name?: string) => Promise<string | null>
   close: () => void
@@ -22,15 +26,32 @@ export const useAssemblyStore = create<AssemblyState>((set, get) => ({
   busy: false,
   error: null,
   selectedComponentId: null,
+  stale: false,
 
   open: async (id) => {
     set({ busy: true, error: null })
     try {
-      set({ assembly: await api.getAssemblyDoc(id), selectedComponentId: null })
+      set({ assembly: await api.getAssemblyDoc(id), selectedComponentId: null, stale: false })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Failed to open assembly' })
     } finally {
       set({ busy: false })
+    }
+  },
+
+  markStale: () => set({ stale: true }),
+
+  refresh: async () => {
+    const { assembly, stale } = get()
+    if (!assembly || !stale) return
+    // Components carry their part's geometry, so an edited part leaves this copy
+    // showing the old shape. Refetch, but only when a part was actually opened
+    // for editing — the payload is the sum of every component's mesh.
+    try {
+      const selected = get().selectedComponentId
+      set({ assembly: await api.getAssemblyDoc(assembly.id), selectedComponentId: selected, stale: false })
+    } catch {
+      set({ stale: false })  // a failed refresh must not retry forever
     }
   },
 

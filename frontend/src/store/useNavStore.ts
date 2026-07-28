@@ -14,19 +14,44 @@ function screenFromHash(): Screen | null {
   return (VALID as string[]).includes(h) ? (h as Screen) : null
 }
 
+/** Where to go back to, when a screen was opened from another one. */
+export interface ReturnTo {
+  screen: Screen
+  /** What to call it in the back control — e.g. the assembly's name. */
+  label: string
+}
+
 interface NavState {
   screen: Screen
+  /** Set when the current screen was entered from elsewhere (assembly → editor). */
+  returnTo: ReturnTo | null
   go: (screen: Screen) => void
+  /** Navigate, remembering where to come back to. */
+  goFrom: (screen: Screen, returnTo: ReturnTo) => void
+  /** Follow the remembered return, if there is one. */
+  goBack: () => void
   _sync: (screen: Screen) => void
 }
 
-export const useNavStore = create<NavState>((set) => ({
+export const useNavStore = create<NavState>((set, get) => ({
   screen: screenFromHash() ?? 'signin',
+  returnTo: null,
   go: (screen) => {
     if (window.location.hash.replace(/^#\/?/, '') !== screen) {
       window.location.hash = `#${screen}`
     }
-    set({ screen })
+    // A plain navigation is a fresh start, so any pending return is stale.
+    set({ screen, returnTo: null })
+  },
+  goFrom: (screen, returnTo) => {
+    if (window.location.hash.replace(/^#\/?/, '') !== screen) {
+      window.location.hash = `#${screen}`
+    }
+    set({ screen, returnTo })
+  },
+  goBack: () => {
+    const back = get().returnTo
+    if (back) get().go(back.screen)
   },
   _sync: (screen) => set({ screen }),
 }))

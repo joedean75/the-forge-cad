@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { Sparkles, Plus, Loader2, Cpu, FolderOpen, Undo2, Redo2, UserCircle2, History, Save, Check, Bot, ImagePlus } from 'lucide-react'
+import { Sparkles, Plus, Loader2, Cpu, FolderOpen, Undo2, Redo2, UserCircle2, History, Save, Check, Bot, ImagePlus, ArrowLeft } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { useAuthStore } from '../store/useAuthStore'
+import { useNavStore } from '../store/useNavStore'
 import { api } from '../api/client'
 import type { LlmConfig } from '../../../shared/types'
 
@@ -146,6 +147,8 @@ function LlmSelector() {
 export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOpenCopilot, copilotOpen, peers = [] }: { onOpenLibrary: () => void; onOpenAccount: () => void; onOpenHistory: () => void; onOpenCopilot: () => void; copilotOpen: boolean; peers?: { id: string; email: string }[] }) {
   const { busy, createFromPrompt, createFromImage, newBlank, doc, undo, redo, past, future } = useDocumentStore()
   const account = useAuthStore((s) => s.account)
+  const returnTo = useNavStore((s) => s.returnTo)
+  const goBack = useNavStore((s) => s.goBack)
   const [prompt, setPrompt] = useState('')
   const imageInput = useRef<HTMLInputElement>(null)
   // Text-to-CAD is a single ~20s call; surface the real phases (interpret →
@@ -183,14 +186,27 @@ export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOp
           </h1>
           <p className="eyebrow text-cad-text mt-1 leading-none">Design Studio</p>
         </div>
-        <button
-          onClick={onOpenLibrary}
-          title="Open parts library"
-          className="flex items-center gap-1.5 h-9 px-2.5 ml-1 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void transition-colors"
-        >
-          <FolderOpen size={14} />
-          <span className="text-[11px] font-medium">Files</span>
-        </button>
+        {returnTo ? (
+          // Opened from an assembly: offer the way back rather than dropping the
+          // user in the library, which would lose the assembly they were composing.
+          <button
+            onClick={goBack}
+            title={`Back to ${returnTo.label}`}
+            className="flex items-center gap-1.5 h-9 px-2.5 ml-1 rounded-sm border border-cad-accent/50 bg-cad-accent/10 text-cad-accent-hot hover:bg-cad-accent/20 transition-colors max-w-[220px]"
+          >
+            <ArrowLeft size={14} className="shrink-0" />
+            <span className="text-[11px] font-medium truncate">{returnTo.label}</span>
+          </button>
+        ) : (
+          <button
+            onClick={onOpenLibrary}
+            title="Open parts library"
+            className="flex items-center gap-1.5 h-9 px-2.5 ml-1 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void transition-colors"
+          >
+            <FolderOpen size={14} />
+            <span className="text-[11px] font-medium">Files</span>
+          </button>
+        )}
         <div className="flex items-center gap-0.5 ml-1">
           <button
             onClick={undo}

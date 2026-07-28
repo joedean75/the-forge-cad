@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import {
-  ArrowLeft, Plus, Trash2, Boxes, Package, X, Loader2, AlertTriangle, ScanEye, UserCircle2,
+  ArrowLeft, Plus, Trash2, Boxes, Package, X, Loader2, AlertTriangle, ScanEye, UserCircle2, PencilRuler,
 } from 'lucide-react'
 import { api } from '../api/client'
 import { useAssemblyStore } from '../store/useAssemblyStore'
+import { useDocumentStore } from '../store/useDocumentStore'
 import { useAuthStore } from '../store/useAuthStore'
 import { useNavStore } from '../store/useNavStore'
 import { AccountDrawer } from '../components/AccountDrawer'
@@ -59,7 +60,12 @@ function PlacementInspector({ component, onChange }: { component: AssemblyCompon
 }
 
 /** Part picker: choose one of the account's part documents to insert. */
-function PartPicker({ onPick, onClose }: { onPick: (id: string) => void; onClose: () => void }) {
+function PartPicker({ onPick, onCreate, creating, onClose }: {
+  onPick: (id: string) => void
+  onCreate: () => void
+  creating: boolean
+  onClose: () => void
+}) {
   const [items, setItems] = useState<DocumentSummary[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -75,7 +81,21 @@ function PartPicker({ onPick, onClose }: { onPick: (id: string) => void; onClose
             <span aria-hidden className="w-0.5 h-3.5 bg-cad-accent rounded-full" />
             <h2 className="font-display text-sm font-semibold text-cad-text-heading">Insert a part</h2>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-sm text-cad-text hover:text-cad-text-heading hover:bg-cad-raised"><X size={16} /></button>
+          <div className="flex items-center gap-2">
+            {/* Nothing to insert yet is the common case on a new assembly, so
+                modelling a part is offered right here rather than sending the
+                user back to the library to start over. */}
+            <button
+              onClick={onCreate}
+              disabled={creating}
+              title="Model a new part and place it in this assembly"
+              className="flex items-center gap-1.5 h-7 px-2.5 rounded-sm bg-cad-accent text-cad-bg text-[11px] font-semibold hover:bg-cad-accent-hot transition-colors disabled:opacity-50"
+            >
+              {creating ? <Loader2 size={12} className="animate-spin" /> : <PencilRuler size={12} />}
+              New part
+            </button>
+            <button onClick={onClose} className="p-1.5 rounded-sm text-cad-text hover:text-cad-text-heading hover:bg-cad-raised"><X size={16} /></button>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto p-4">
           {loading ? (
@@ -84,7 +104,7 @@ function PartPicker({ onPick, onClose }: { onPick: (id: string) => void; onClose
             <div className="flex flex-col items-center justify-center h-40 gap-2 text-center">
               <Package size={30} className="text-cad-border" />
               <p className="text-sm text-cad-text">No parts to insert</p>
-              <p className="text-[11px] text-cad-text/60">Create a part first, then add it here.</p>
+              <p className="text-[11px] text-cad-text/60">Model one with <span className="text-cad-accent-hot">New part</span> — it lands in this assembly.</p>
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
@@ -108,13 +128,50 @@ function PartPicker({ onPick, onClose }: { onPick: (id: string) => void; onClose
 }
 
 export function AssemblyScreen() {
-  const { assembly, busy, error, selectedComponentId, insertPart, removeComponent, setTransform, rename, select } = useAssemblyStore()
+  const { assembly, busy, error, selectedComponentId, insertPart, removeComponent, setTransform, rename, select, markStale, refresh } = useAssemblyStore()
+  const { openDocument, newBlank } = useDocumentStore()
   const account = useAuthStore((s) => s.account)
   const go = useNavStore((s) => s.go)
+  const goFrom = useNavStore((s) => s.goFrom)
   const [picking, setPicking] = useState(false)
   const [isolate, setIsolate] = useState(false)
   const [accountOpen, setAccountOpen] = useState(false)
   const [editingName, setEditingName] = useState(false)
+  const [creatingPart, setCreatingPart] = useState(false)
+
+  // Coming back from the part editor: pull the assembly again so a component
+  // shows the geometry as just edited rather than the copy we left with.
+  useEffect(() => { refresh() }, [refresh])
+
+  // Modelling happens in the part editor, so the assembly hands off to it and
+  // remembers the way back — a component's geometry is a part document, not
+  // something you edit in place here.
+  const toEditor = () => {
+    if (!assembly) return
+    markStale()  // the part's geometry may change while we're away
+    goFrom('editor', { screen: 'assembly', label: assembly.name })
+  }
+
+  const editPart = async (partId: string) => {
+    await openDocument(partId)
+    toEditor()
+  }
+
+  /** Model a brand-new part and place it in this assembly in one step. */
+  const createPart = async () => {
+    setCreatingPart(true)
+    try {
+      await newBlank()
+      const created = useDocumentStore.getState().doc
+      if (created) {
+        await insertPart(created.id)
+        setPicking(false)
+        toEditor()
+      }
+    } finally {
+      setCreatingPart(false)
+    }
+  }
 
   if (!assembly) {
     return (
@@ -201,6 +258,14 @@ export function AssemblyScreen() {
                       <span className="tabular text-[9px] text-cad-text/40 ml-auto">#{i + 1}</span>
                     </button>
                     <button
+                      onClick={() => editPart(c.part_id)}
+                      disabled={c.missing}
+                      title={c.missing ? 'This part no longer exists' : `Edit ${c.name} in the part editor`}
+                      className="opacity-0 group-hover:opacity-100 text-cad-text hover:text-cad-accent transition ml-1 disabled:opacity-0"
+                    >
+                      <PencilRuler size={12} />
+                    </button>
+                    <button
                       onClick={() => removeComponent(c.id)}
                       title="Remove from assembly"
                       className="opacity-0 group-hover:opacity-100 text-cad-text hover:text-cad-danger transition ml-1"
@@ -268,6 +333,8 @@ export function AssemblyScreen() {
         <PartPicker
           onClose={() => setPicking(false)}
           onPick={async (id) => { setPicking(false); await insertPart(id) }}
+          onCreate={createPart}
+          creating={creatingPart}
         />
       )}
       <AccountDrawer open={accountOpen} onClose={() => setAccountOpen(false)} />
