@@ -52,9 +52,25 @@ def mesh_edges(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
 
 
 def edge_lengths(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    """Lengths of the mesh's unique undirected edges."""
     edges = mesh_edges(vertices, faces)
     pts = vertices[edges]
     return np.linalg.norm(pts[:, 1] - pts[:, 0], axis=1)
+
+
+def min_edge_length(vertices: np.ndarray, faces: np.ndarray) -> float:
+    """Shortest edge in the mesh.
+
+    Deliberately skips `mesh_edges`: de-duplicating costs a lexicographic sort of
+    3N edge pairs, and a minimum is unchanged by duplicates. On a
+    quarter-million-triangle body that sort was the single most expensive step in
+    a DFM report.
+    """
+    if faces.size == 0:
+        return 0.0
+    tri = vertices[faces]                      # (n, 3, 3)
+    deltas = tri - np.roll(tri, -1, axis=1)    # each vertex to the next, wrapping
+    return float(np.sqrt(np.einsum("ijk,ijk->ij", deltas, deltas)).min())
 
 
 def bounding_box(vertices: np.ndarray) -> Tuple[Point3, Point3]:

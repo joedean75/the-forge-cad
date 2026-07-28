@@ -18,7 +18,7 @@ from app.cad_kernel.core.types import Point3, Vector3
 from app.cad_kernel.evaluator.sdf import evaluate_sdf, sdf_from_feature
 from app.cad_kernel.geom.meshing import (
     bounding_box,
-    edge_lengths,
+    min_edge_length,
     face_normals,
     mesh_area,
     mesh_volume,
@@ -130,60 +130,75 @@ def solid_to_step_string(solid: Solid, name: str = "part") -> str:
     return write_step(solid, name)
 
 
-def _analysis_for_axis(verts: np.ndarray, faces: np.ndarray, build_dir: np.ndarray) -> dict:
-    normals = face_normals(verts, faces)
-    areas = np.linalg.norm(np.cross(verts[faces[:, 1]] - verts[faces[:, 0]], verts[faces[:, 2]] - verts[faces[:, 0]]), axis=1) * 0.5
-    dots = normals @ (build_dir / (np.linalg.norm(build_dir) + 1e-12))
+_EMPTY_ANALYSIS = {
+    "overhang_area": 0.0,
+    "max_overhang_angle": 0.0,
+    "support_volume": 0.0,
+    "total_area": 0.0,
+    "total_volume": 0.0,
+    "min_edge": 0.0,
+}
 
-    # Overhang: faces pointing downward more than 45 deg
-    threshold = -np.cos(np.radians(45.0))
-    mask = dots < threshold
-    overhang_area = float(areas[mask].sum())
-    max_angle = 0.0
-    if np.any(mask):
-        max_angle = float(np.degrees(np.arccos(np.clip(-dots[mask].min(), -1.0, 1.0))))
 
-    return {
-        "overhang_area": overhang_area,
-        "max_overhang_angle": max_angle,
-    }
+class MeshAnalysis:
+    """Per-mesh manufacturing metrics, split by what depends on the build axis.
+
+    Total area, volume and minimum feature size are properties of the mesh; only
+    overhang depends on which way up it is printed. Separating them means an
+    orientation search costs one face-normal pass per candidate instead of a full
+    re-analysis — the auto-axis search used to redo *everything* three times and
+    then once more for the winner.
+    """
+
+    def __init__(self, solid: Solid):
+        mesh = solid_to_mesh(solid)
+        self.verts = mesh.vertices
+        self.faces = mesh.faces
+        self.empty = self.faces.size == 0
+        if self.empty:
+            return
+        # Computed once and reused across every candidate orientation.
+        self.normals = face_normals(self.verts, self.faces)
+        edges1 = self.verts[self.faces[:, 1]] - self.verts[self.faces[:, 0]]
+        edges2 = self.verts[self.faces[:, 2]] - self.verts[self.faces[:, 0]]
+        self.areas = np.linalg.norm(np.cross(edges1, edges2), axis=1) * 0.5
+        self.total_area = float(self.areas.sum())
+        self.total_volume = abs(mesh_volume(self.verts, self.faces))
+        self.min_edge = min_edge_length(self.verts, self.faces)
+
+    def overhang(self, build_dir: np.ndarray) -> tuple[float, float]:
+        """``(overhang_area, max_overhang_angle)`` for one build direction."""
+        if self.empty:
+            return 0.0, 0.0
+        dots = self.normals @ (build_dir / (np.linalg.norm(build_dir) + 1e-12))
+        # Faces pointing downward more than 45 deg need support.
+        mask = dots < -np.cos(np.radians(45.0))
+        if not np.any(mask):
+            return 0.0, 0.0
+        area = float(self.areas[mask].sum())
+        angle = float(np.degrees(np.arccos(np.clip(-dots[mask].min(), -1.0, 1.0))))
+        return area, angle
+
+    def stats_for(self, build_dir: np.ndarray) -> dict:
+        if self.empty:
+            return dict(_EMPTY_ANALYSIS)
+        overhang_area, max_angle = self.overhang(build_dir)
+        return {
+            "overhang_area": overhang_area,
+            "max_overhang_angle": max_angle,
+            "support_volume": overhang_area * 5e-3,
+            "total_area": self.total_area,
+            "total_volume": self.total_volume,
+            "min_edge": self.min_edge,
+        }
 
 
 def kernel_manufacturing_analysis(solid: Solid, build_axis: Optional[np.ndarray] = None) -> dict:
-    """Compute manufacturing metrics from a kernel tessellation."""
-    mesh = solid_to_mesh(solid)
-    verts = mesh.vertices
-    faces = mesh.faces
+    """Compute manufacturing metrics from a kernel tessellation.
 
-    if faces.size == 0:
-        return {
-            "overhang_area": 0.0,
-            "max_overhang_angle": 0.0,
-            "support_volume": 0.0,
-            "total_area": 0.0,
-            "total_volume": 0.0,
-            "min_edge": 0.0,
-        }
-
+    Callers analysing several orientations should build a :class:`MeshAnalysis`
+    once and call ``stats_for`` per axis instead of calling this repeatedly.
+    """
     if build_axis is None:
         build_axis = np.array([0.0, 0.0, 1.0])
-
-    axis_stats = _analysis_for_axis(verts, faces, build_axis)
-    overhang_area = axis_stats["overhang_area"]
-    max_angle = axis_stats["max_overhang_angle"]
-
-    total_area = float(mesh_area(verts, faces))
-    total_volume = abs(mesh_volume(verts, faces))
-    support_volume = overhang_area * 5e-3
-
-    lengths = edge_lengths(verts, faces)
-    min_edge = float(lengths.min()) if lengths.size else 0.0
-
-    return {
-        "overhang_area": overhang_area,
-        "max_overhang_angle": max_angle,
-        "support_volume": support_volume,
-        "total_area": total_area,
-        "total_volume": total_volume,
-        "min_edge": min_edge,
-    }
+    return MeshAnalysis(solid).stats_for(build_axis)

@@ -28,6 +28,7 @@ from app.models.schemas import (
 )
 from app.services import document_service as docs
 from app.services.cad_service import (
+    MeshAnalysis,
     kernel_manufacturing_analysis,
     solid_to_step_string,
 )
@@ -116,21 +117,21 @@ def _approximate_simulation(solid, spec: DesignSpec, mat: Material) -> Simulatio
     )
 
 
-def _auto_build_axis(solid) -> tuple[str, np.ndarray]:
-    """Pick +X/+Y/+Z to minimize overhang area."""
-    axes = {
-        "+X": np.array([1.0, 0.0, 0.0]),
-        "+Y": np.array([0.0, 1.0, 0.0]),
-        "+Z": np.array([0.0, 0.0, 1.0]),
-    }
-    best_name = "+Z"
-    best_area = float("inf")
-    for name, axis in axes.items():
-        stats = kernel_manufacturing_analysis(solid, build_axis=axis)
-        if stats["overhang_area"] < best_area:
-            best_area = stats["overhang_area"]
-            best_name = name
-    return best_name, axes[best_name]
+_BUILD_AXES = {
+    "+X": np.array([1.0, 0.0, 0.0]),
+    "+Y": np.array([0.0, 1.0, 0.0]),
+    "+Z": np.array([0.0, 0.0, 1.0]),
+}
+
+
+def _auto_build_axis(analysis) -> tuple[str, np.ndarray]:
+    """Pick +X/+Y/+Z to minimize overhang area.
+
+    Takes a prepared MeshAnalysis so the three candidates share one tessellation
+    and one face-normal pass; only the overhang test runs per axis.
+    """
+    best_name = min(_BUILD_AXES, key=lambda n: analysis.overhang(_BUILD_AXES[n])[0])
+    return best_name, _BUILD_AXES[best_name]
 
 
 def simulate_document(doc_id: str, resolution: int = 128) -> SimulationResult:
@@ -151,14 +152,18 @@ def dfm_document(doc_id: str, build_axis: str = "auto", resolution: int = 128) -
 
     solid = docs.get_solid(doc_id, resolution=resolution)
 
-    axes = {"x": "+X", "y": "+Y", "z": "+Z"}
-    if build_axis.lower() in axes:
-        axis_name = axes[build_axis.lower()]
-        axis_vec = {"x": np.array([1.0, 0.0, 0.0]), "y": np.array([0.0, 1.0, 0.0]), "z": np.array([0.0, 0.0, 1.0])}[build_axis.lower()]
-    else:
-        axis_name, axis_vec = _auto_build_axis(solid)
+    # One tessellation and one set of face normals for the whole report, however
+    # many orientations are tried.
+    analysis = MeshAnalysis(solid)
 
-    stats = kernel_manufacturing_analysis(solid, build_axis=axis_vec)
+    named = {"x": "+X", "y": "+Y", "z": "+Z"}
+    if build_axis.lower() in named:
+        axis_name = named[build_axis.lower()]
+        axis_vec = _BUILD_AXES[axis_name]
+    else:
+        axis_name, axis_vec = _auto_build_axis(analysis)
+
+    stats = analysis.stats_for(axis_vec)
     overhang_area = stats["overhang_area"]
     overhang_angle = stats["max_overhang_angle"]
     total_area = stats["total_area"]

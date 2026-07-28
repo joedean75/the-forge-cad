@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.routers import llm, documents, machine, operations, sketch, auth, assemblies, collab
@@ -92,6 +93,14 @@ async def _security_headers(request: Request, call_next):
         "base-uri 'self'",
     )
     return response
+
+
+# Responses are dominated by geometry: a document carries its mesh as a base64
+# STL data URI, so `GET /api/documents/{id}` runs to ~11 MB at resolution 128 and
+# is re-sent on every edit. That text compresses ~5x. Level 1 rather than the
+# default 9 on purpose — this is a single-worker CPU-bound server, and level 1
+# gets 5.2x for 87 ms where level 9 spends 3x the CPU for another 20%.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=1)
 
 
 # CORS origins are configurable; default to the local dev frontend. In production
