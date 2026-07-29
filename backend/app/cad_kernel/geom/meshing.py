@@ -6,6 +6,7 @@ individual faces and for evaluated solids.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Tuple
 
 import numpy as np
@@ -98,6 +99,25 @@ def merge_face_meshes(meshes) -> FaceMesh:
 def solid_to_mesh(solid: Solid) -> FaceMesh:
     """Return a single FaceMesh for the whole solid."""
     return merge_face_meshes([f.mesh for f in solid.shell.faces])
+
+
+def mesh_hash(mesh: FaceMesh, decimals: int = 9) -> str:
+    """Content hash of a mesh — the output-side counterpart to hashing a tree.
+
+    Hashing the tree only proves the *input* was unchanged. This proves the
+    geometry actually produced is unchanged, which is what a determinism check
+    and a reproducible training artifact need. Coordinates are rounded first so
+    that last-bit float noise does not read as a different mesh; `decimals=9` is
+    a nanometre at this kernel's metre scale, far below any meaningful feature.
+    """
+    if mesh.vertices is None or mesh.vertices.size == 0:
+        return hashlib.sha256(b"empty").hexdigest()[:16]
+    verts = np.round(np.asarray(mesh.vertices, dtype=float), decimals) + 0.0  # +0.0 folds -0.0
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    h = hashlib.sha256()
+    h.update(verts.tobytes())
+    h.update(faces.tobytes())
+    return h.hexdigest()[:16]
 
 
 def solid_triangle_soup(solid: Solid) -> np.ndarray:

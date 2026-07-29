@@ -8,12 +8,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.routers import llm, documents, machine, operations, sketch, auth, assemblies, collab
 from app.services import accounts, persistence
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _load_persisted_data():
@@ -136,6 +139,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(Exception)
+async def _unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
+    """Any unhandled exception becomes structured JSON, never a bare 500.
+
+    Starlette's default for an uncaught exception is the plain-text body
+    ``Internal Server Error``. A client — and especially an agent parsing
+    responses — then has nothing to branch on, and the MCP layer forwarded it
+    verbatim as ``Error 500: Internal Server Error``. The cause still goes to the
+    log with a traceback; only the wire format changes.
+    """
+    _LOGGER.exception("unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": {"code": "INTERNAL",
+                            "message": f"{type(exc).__name__}: {exc}"}},
+    )
+
 
 app.include_router(llm.router)
 app.include_router(documents.router)

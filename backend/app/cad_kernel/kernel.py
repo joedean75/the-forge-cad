@@ -56,6 +56,20 @@ class Kernel:
         return evaluate_sdf(sdf_from_feature(feature), resolution=resolution)
 
     @staticmethod
+    def sampler_for(feature: Feature) -> str:
+        """Which field sampler ``evaluate_feature`` will use: "native" or "numpy".
+
+        The two samplers share the grid and the marching-cubes step but evaluate
+        the field differently, so a mesh is only comparable across machines when
+        this matches. Callers record it alongside the geometry.
+        """
+        from app.cad_kernel.evaluator import sdf_native
+
+        if sdf_native.AVAILABLE and sdf_native.compile_feature(feature) is not None:
+            return "native"
+        return "numpy"
+
+    @staticmethod
     def evaluate_tree(tree: FeatureTree, resolution: int = 128) -> Solid:
         return Kernel.evaluate_feature(tree.root, resolution=resolution)
 

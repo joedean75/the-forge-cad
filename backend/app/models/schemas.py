@@ -179,6 +179,14 @@ class DerivedCache(BaseModel):
     dfm: Optional[DfmReport] = None
     cam: Optional[CamResult] = None
     error: Optional[str] = None
+    # Evaluation conditions. Geometry is only comparable across runs when these
+    # match: `resolution` is a total voxel budget and `sampler` selects between
+    # the Rust and numpy field evaluators, either of which moves the isosurface
+    # slightly. Recorded so a mesh, a drawing or a logged trajectory always
+    # states what produced it.
+    resolution: Optional[int] = None
+    sampler: Optional[Literal["native", "numpy"]] = None
+    mesh_hash: Optional[str] = None
 
 
 class OptimizationSetup(BaseModel):

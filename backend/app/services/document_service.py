@@ -20,7 +20,7 @@ from typing import Dict, List, Optional
 
 from app.cad_kernel.core.feature_tree import FeatureTree, walk_nodes
 from app.cad_kernel.core.topology import Solid
-from app.cad_kernel.geom.meshing import mesh_volume
+from app.cad_kernel.geom.meshing import mesh_hash, mesh_volume
 from app.cad_kernel.kernel import Kernel
 from app.models.schemas import (
     BBox,
@@ -59,11 +59,16 @@ def _ensure_feature_ids(tree: Optional[dict]) -> None:
     the client invents display-only ids and every id-addressed edit
     (set_feature_params etc.) 404s against the server. Ids are assigned at the
     server so both sides always speak about the same features.
-    """
 
+    Ids come from ``feature_ops.IdAllocator`` rather than uuid4 so that the same
+    tree always yields the same ids — an LLM tree that regenerates identically
+    must not produce a different document each time.
+    """
+    from app.services.feature_ops import IdAllocator
+
+    ids = IdAllocator(tree or {})
     for node in walk_nodes(tree or {}):
-        if not node.get("id"):
-            node["id"] = str(uuid.uuid4())
+        ids.ensure(node)
 
 
 def _default_tree_dict() -> dict:
@@ -72,7 +77,7 @@ def _default_tree_dict() -> dict:
     from app.cad_kernel.ops.primitives import BoxFeature
 
     root = BoxFeature(
-        id=str(uuid.uuid4()),
+        id="f1",  # deterministic: every blank document starts from the same tree
         name="Base Box",
         size=KVector3(0.1, 0.1, 0.1),
         center=Point3(),
@@ -133,6 +138,7 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
                 p.value = rd.get("value")
             active = parameters.resolve_tree(active, scope)  # bake driving params
         tree = FeatureTree.from_dict(active)
+        sampler = Kernel.sampler_for(tree.root)
         solid = Kernel.evaluate_tree(tree, resolution=resolution)
         mesh = Kernel.tessellate(solid)
 
@@ -155,6 +161,9 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
             bbox=bbox,
             mass=round(volume * density, 4),
             volume=round(volume, 6),
+            resolution=resolution,
+            sampler=sampler,
+            mesh_hash=mesh_hash(mesh),
         )
         _SOLID_CACHE[doc.id] = solid
     except Exception as exc:

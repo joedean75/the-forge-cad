@@ -7,16 +7,32 @@ This is the substrate the MCP server wraps so any agent can drive Forge.
 """
 
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.models.schemas import DesignDocument
 from app.security import current_account, meter_operation
 from app.services import accounts, cad_operations, copilot, document_service
+from app.services import op_errors
 
 router = APIRouter(tags=["operations"])
+
+# Error code -> HTTP status. Kept next to the route rather than inside the error
+# classes' users so the whole HTTP contract is readable in one place.
+_STATUS_BY_CODE = {
+    cls.code: cls.http_status
+    for cls in (
+        op_errors.UnknownOperation, op_errors.MissingArgument, op_errors.BadArgument,
+        op_errors.NoSuchDocument, op_errors.NoSuchFeature, op_errors.PreconditionFailed,
+        op_errors.EvaluationFailed, op_errors.InternalError,
+    )
+}
+
+
+def _http_status(error: Optional[Dict[str, Any]]) -> int:
+    return _STATUS_BY_CODE.get((error or {}).get("code"), 422)
 
 
 def prune_jobs(store: Dict[str, Any], cap: int = 200) -> None:
@@ -30,10 +46,30 @@ class OperationRequest(BaseModel):
     args: Optional[Dict[str, Any]] = None
 
 
+class OperationError(BaseModel):
+    """A failure the caller can branch on without parsing prose."""
+
+    code: str
+    message: str
+    arg: Optional[str] = None
+
+
 class OperationResponse(BaseModel):
     ok: bool
     op: str
-    result: Dict[str, Any]
+    result: Dict[str, Any] = {}
+    error: Optional[OperationError] = None
+    # What the operation changed: volume/mass/bbox before and after, plus the ids
+    # of features added and removed. Saves a `list_features` round-trip to learn
+    # the id of the thing you just created.
+    delta: Optional[Dict[str, Any]] = None
+    # The compact document observation — features with their current params, size
+    # and mass. Small enough to put in a prompt, unlike the full document.
+    state: Optional[Dict[str, Any]] = None
+    # Non-fatal conditions, chiefly EVAL_FAILED: the edit applied but the body
+    # does not currently evaluate (e.g. it references a parameter not yet
+    # defined). Visible without being reported as a failed call.
+    warnings: List[Dict[str, Any]] = []
     document: Optional[DesignDocument] = None
 
 
@@ -90,30 +126,65 @@ def platform_manifest():
     # along on every edit; the history drawer fetches /versions explicitly.
     response_model_exclude={"document": {"version_history"}},
 )
-def run_operation(doc_id: str, body: OperationRequest, acc: accounts.Account = Depends(current_account)):
+def run_operation(
+    doc_id: str,
+    body: OperationRequest,
+    acc: accounts.Account = Depends(current_account),
+    envelope: bool = Query(
+        False,
+        description="Return 200 with ok=false instead of raising on operation failure. "
+                    "For agent/rollout harnesses that treat a failure as an observation.",
+    ),
+):
+    """Run one catalog operation against a document.
+
+    Failures come back as a typed ``{code, message, arg}`` — `MISSING_ARG` for a
+    malformed call, `NO_SUCH_FEATURE` for a bad id, `PRECONDITION` when the
+    document is in the wrong shape for the operation. Previously all of these
+    arrived as one of two prose strings, and a missing argument was reported as
+    ``404 Not found``.
+
+    A successful response also carries ``delta`` (what the operation changed) and
+    ``state`` (the compact document observation), plus ``warnings`` — notably
+    `EVAL_FAILED`, when an edit applied but the body does not currently evaluate.
+
+    By default a failure raises, so browser clients keep throwing on error. Pass
+    ``?envelope=1`` to get the same information as a 200 body instead.
+    """
     op = cad_operations.OPERATIONS.get(body.op)
     if op is None:
-        raise HTTPException(status_code=400, detail=f"Unknown operation: {body.op}")
+        raise HTTPException(status_code=400, detail={
+            "code": "UNKNOWN_OP", "message": f"unknown operation: {body.op}", "arg": "op"})
     # Enforce tenant isolation before doing any work (404, never 403, to avoid
     # leaking the existence of other tenants' documents).
     doc = document_service.get_document(doc_id)
     if doc is None or not document_service.can_access(doc, acc.id):
-        raise HTTPException(status_code=404, detail="Document not found")
+        raise HTTPException(status_code=404, detail={
+            "code": "NO_SUCH_DOCUMENT", "message": "Document not found"})
     # Mutating ops require editor access and are metered against the plan quota;
     # read-only queries only require view access (free).
     if op.kind == "mutate":
         if not document_service.can_edit(doc, acc.id):
-            raise HTTPException(status_code=403, detail="this action requires editor access")
+            raise HTTPException(status_code=403, detail={
+                "code": "FORBIDDEN", "message": "this action requires editor access"})
         meter_operation(acc)
-    try:
-        result = cad_operations.dispatch(body.op, doc_id, body.args)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Not found: {exc}")
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+
+    env = cad_operations.execute(body.op, doc_id, body.args)
+
+    if not env["ok"] and not envelope:
+        raise HTTPException(status_code=_http_status(env["error"]), detail=env["error"])
 
     document = document_service.get_document(doc_id) if op.kind == "mutate" else None
-    return OperationResponse(ok=True, op=body.op, result=result, document=document)
+    return OperationResponse(
+        ok=env["ok"],
+        op=env["op"],
+        result=env.get("result") or {},
+        error=env.get("error"),
+        delta=env.get("delta"),
+        state=env.get("state"),
+        warnings=env.get("warnings") or [],
+        document=document,
+    )
 
 
 class CopilotRequest(BaseModel):

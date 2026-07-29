@@ -8,11 +8,26 @@ is self-describing for LLM function-calling.
 
 from __future__ import annotations
 
+import copy
+import logging
 import math
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List
 
 from app.services import document_service, feature_ops
+from app.services.op_errors import (
+    BadArgument,
+    EvaluationFailed,
+    InternalError,
+    NoSuchDocument,
+    NoSuchFeature,
+    OperationError,
+    PreconditionFailed,
+    UnknownOperation,
+    require,
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 
 
@@ -69,7 +84,7 @@ def _make_primitive(shape: str, params: Dict[str, Any] | None) -> Dict[str, Any]
         return {"type": "ConeFeature", "name": "Cone",
                 "params": {"base_radius": p.get("base_radius", 0.03), "height": p.get("height", 0.06),
                            "center": center, "axis": axis}}
-    raise ValueError(f"unknown shape: {shape}")
+    raise BadArgument(f"unknown shape: {shape}", arg="shape")
 
 
 def _make_modifier(kind: str, params: Dict[str, Any] | None) -> Dict[str, Any]:
@@ -90,7 +105,7 @@ def _make_modifier(kind: str, params: Dict[str, Any] | None) -> Dict[str, Any]:
                                            "scale": p.get("scale", 1.0)}),
     }
     if kind not in table:
-        raise ValueError(f"unknown modifier: {kind}")
+        raise BadArgument(f"unknown modifier: {kind}", arg="modifier")
     typ, mp = table[kind]
     return {"type": typ, "name": kind.capitalize(), "params": mp}
 
@@ -98,7 +113,7 @@ def _make_modifier(kind: str, params: Dict[str, Any] | None) -> Dict[str, Any]:
 def _get(doc_id: str):
     doc = document_service.get_document(doc_id)
     if doc is None:
-        raise KeyError(doc_id)
+        raise NoSuchDocument(f"no document {doc_id!r}")
     return doc
 
 
@@ -116,9 +131,10 @@ def _list_features(doc_id, args):
            {"feature_id": {"type": "string"}})
 def _get_feature(doc_id, args):
     doc = _get(doc_id)
-    node = feature_ops.find_node(doc.feature_tree, args["feature_id"])
+    fid = require(args, "feature_id")
+    node = feature_ops.find_node(doc.feature_tree, fid)
     if node is None:
-        raise KeyError(args["feature_id"])
+        raise NoSuchFeature(f"no feature {fid!r}", arg="feature_id")
     return {"feature": node}
 
 
@@ -140,7 +156,7 @@ def _bounding_box(doc_id, args):
 @operation("measure", "query", "Distance in mm between two points (metres).",
            {"a": _VEC, "b": _VEC})
 def _measure(doc_id, args):
-    a, b = args["a"], args["b"]
+    a, b = require(args, "a"), require(args, "b")
     d = math.dist([a["x"], a["y"], a["z"]], [b["x"], b["y"], b["z"]])
     return {"distance_mm": round(d * 1000, 4)}
 
@@ -151,7 +167,7 @@ def _measure(doc_id, args):
            "params": {"type": "object"}})
 def _add_primitive(doc_id, args):
     doc = _get(doc_id)
-    prim = _make_primitive(args["shape"], args.get("params"))
+    prim = _make_primitive(require(args, "shape"), args.get("params"))
     tree = feature_ops.add_primitive(doc.feature_tree, prim, args.get("operation", "union"))
     document_service.update_document(doc_id, feature_tree=tree)
     return {"message": f"added {args['shape']} ({args.get('operation', 'union')})", "feature_id": prim["id"]}
@@ -269,7 +285,7 @@ def _add_flange(doc_id, args):
 
     node = find_sheet_metal(tree, target)
     if node is None:
-        raise ValueError("no sheet-metal feature found; create one with add_sheet_metal first")
+        raise PreconditionFailed("no sheet-metal feature found; create one with add_sheet_metal first")
 
     flange = {
         "edge": args.get("edge", "x+"),
@@ -290,7 +306,7 @@ def _sheet_metal_feature(doc, feature_id=None):
 
     node = find_sheet_metal(doc.feature_tree, feature_id)
     if node is None:
-        raise ValueError("this document has no sheet-metal feature")
+        raise PreconditionFailed("this document has no sheet-metal feature")
     return SheetMetalFeature._from_dict(node)
 
 
@@ -360,7 +376,7 @@ def _add_sketch(doc_id, args):
     from app.services import sketch_solver
 
     doc = _get(doc_id)
-    spec = args["sketch"]
+    spec = require(args, "sketch")
     solved = sketch_solver.solve_sketch(spec)
     polygon = sketch_solver.sketch_to_polygon(spec, solved)
     params = {
@@ -386,11 +402,11 @@ def _update_sketch(doc_id, args):
     from app.services import sketch_solver
 
     doc = _get(doc_id)
-    fid = args["feature_id"]
+    fid = require(args, "feature_id")
     node = feature_ops.find_node(doc.feature_tree, fid)
     if node is None or node.get("type") != "ExtrudeFeature":
-        raise KeyError(fid)
-    spec = args["sketch"]
+        raise NoSuchFeature(f"no ExtrudeFeature {fid!r}", arg="feature_id")
+    spec = require(args, "sketch")
     solved = sketch_solver.solve_sketch(spec)
     polygon = sketch_solver.sketch_to_polygon(spec, solved)
     params = {"profile": {"type": "polygon", "points": polygon}, "sketch": spec}
@@ -410,7 +426,7 @@ def _update_sketch(doc_id, args):
            "params": {"type": "object"}})
 def _add_modifier(doc_id, args):
     doc = _get(doc_id)
-    mod = _make_modifier(args["modifier"], args.get("params"))
+    mod = _make_modifier(require(args, "modifier"), args.get("params"))
     tree = feature_ops.add_modifier(doc.feature_tree, mod, target_id=args.get("target"))
     document_service.update_document(doc_id, feature_tree=tree)
     return {"message": f"added {args['modifier']}", "feature_id": mod["id"]}
@@ -420,7 +436,7 @@ def _add_modifier(doc_id, args):
            {"feature_id": {"type": "string"}, "params": {"type": "object"}})
 def _set_feature_params(doc_id, args):
     doc = _get(doc_id)
-    tree = feature_ops.set_params(doc.feature_tree, args["feature_id"], args["params"])
+    tree = feature_ops.set_params(doc.feature_tree, require(args, "feature_id"), require(args, "params"))
     document_service.update_document(doc_id, feature_tree=tree)
     return {"message": f"updated feature {args['feature_id']}"}
 
@@ -429,7 +445,7 @@ def _set_feature_params(doc_id, args):
            {"feature_id": {"type": "string"}})
 def _delete_feature(doc_id, args):
     doc = _get(doc_id)
-    tree = feature_ops.remove_node(doc.feature_tree, args["feature_id"])
+    tree = feature_ops.remove_node(doc.feature_tree, require(args, "feature_id"))
     document_service.update_document(doc_id, feature_tree=tree)
     return {"message": f"deleted feature {args['feature_id']}"}
 
@@ -439,10 +455,10 @@ def _delete_feature(doc_id, args):
 def _add_dimension(doc_id, args):
     from app.models.schemas import AddDimensionRequest
 
-    req = AddDimensionRequest(a=args["a"], b=args["b"], label=args.get("label"), source=args.get("source", "user"))
+    req = AddDimensionRequest(a=require(args, "a"), b=require(args, "b"), label=args.get("label"), source=args.get("source", "user"))
     dim = document_service.add_dimension(doc_id, req)
     if dim is None:
-        raise KeyError(doc_id)
+        raise NoSuchDocument(f"no document {doc_id!r}")
     return {"dimension": dim.model_dump()}
 
 
@@ -450,7 +466,7 @@ def _add_dimension(doc_id, args):
            {"feature_id": {"type": "string"}, "suppressed": {"type": "boolean"}})
 def _set_feature_suppressed(doc_id, args):
     doc = _get(doc_id)
-    tree = feature_ops.set_suppressed(doc.feature_tree, args["feature_id"], bool(args.get("suppressed", True)))
+    tree = feature_ops.set_suppressed(doc.feature_tree, require(args, "feature_id"), bool(args.get("suppressed", True)))
     document_service.update_document(doc_id, feature_tree=tree)
     state = "suppressed" if args.get("suppressed", True) else "unsuppressed"
     return {"message": f"{state} feature {args['feature_id']}"}
@@ -463,7 +479,7 @@ def _set_feature_suppressed(doc_id, args):
 def _set_feature_keep(doc_id, args):
     doc = _get(doc_id)
     keep = bool(args.get("keep", True))
-    tree = feature_ops.set_keep(doc.feature_tree, args["feature_id"], keep)
+    tree = feature_ops.set_keep(doc.feature_tree, require(args, "feature_id"), keep)
     # Flagging a keep changes no geometry, so this must not invalidate the solid;
     # persist the tree without forcing a re-evaluation.
     document_service.update_document(doc_id, feature_tree=tree)
@@ -485,7 +501,7 @@ def _list_kept_features(doc_id, args):
            {"feature_id": {"type": "string"}, "direction": {"enum": ["up", "down"]}})
 def _reorder_feature(doc_id, args):
     doc = _get(doc_id)
-    tree = feature_ops.reorder(doc.feature_tree, args["feature_id"], args.get("direction", "up"))
+    tree = feature_ops.reorder(doc.feature_tree, require(args, "feature_id"), args.get("direction", "up"))
     document_service.update_document(doc_id, feature_tree=tree)
     return {"message": f"moved {args['feature_id']} {args.get('direction', 'up')}"}
 
@@ -493,7 +509,7 @@ def _reorder_feature(doc_id, args):
 @operation("ai_edit", "mutate", "Apply a natural-language edit to the whole part.",
            {"instruction": {"type": "string"}})
 def _ai_edit(doc_id, args):
-    document_service.ai_edit_document(doc_id, args["instruction"])
+    document_service.ai_edit_document(doc_id, require(args, "instruction"))
     return {"message": "applied AI edit"}
 
 
@@ -508,9 +524,9 @@ def _list_materials(doc_id, args):
 @operation("set_material", "mutate", "Assign an engineering material to the part (drives mass, sim, DFM, quotes).",
            {"material_id": {"type": "string", "description": "e.g. al-6061, steel-304, ti-6al4v, pla"}})
 def _set_material(doc_id, args):
-    doc = document_service.set_material(doc_id, args["material_id"])
+    doc = document_service.set_material(doc_id, require(args, "material_id"))
     if doc is None:
-        raise KeyError(doc_id)
+        raise NoSuchDocument(f"no document {doc_id!r}")
     from app.services import materials
 
     m = materials.get_material(doc.material_id)
@@ -524,7 +540,7 @@ def _set_material(doc_id, args):
 def _set_parameters(doc_id, args):
     doc = document_service.set_parameters(doc_id, args.get("parameters") or [])
     if doc is None:
-        raise KeyError(doc_id)
+        raise NoSuchDocument(f"no document {doc_id!r}")
     return {"message": f"set {len(doc.parameters)} parameter(s)",
             "parameters": [p.model_dump() for p in doc.parameters],
             "error": doc.derived.error}
@@ -578,8 +594,8 @@ def _generate_drawing(doc_id, args):
 def _compute_fit(doc_id, args):
     from app.services import tolerances
 
-    nominal = float(args["nominal_mm"])
-    code = str(args["fit"])
+    nominal = float(require(args, "nominal_mm"))
+    code = str(require(args, "fit"))
     if "/" in code:
         return tolerances.fit(nominal, code)
     return tolerances.limits_mm(nominal, code)
@@ -594,7 +610,7 @@ def _set_tolerances(doc_id, args):
     doc = document_service.set_tolerances(
         doc_id, args.get("general_tolerance"), args.get("tolerances") or [], args.get("gdt") or [])
     if doc is None:
-        raise KeyError(doc_id)
+        raise NoSuchDocument(f"no document {doc_id!r}")
     return {"message": f"set {len(doc.tolerances)} tolerance callout(s), {len(doc.gdt)} GD&T frame(s)",
             "general_tolerance": doc.general_tolerance}
 
@@ -604,7 +620,7 @@ def _set_tolerances(doc_id, args):
 def _release_revision(doc_id, args):
     rev = document_service.release_revision(doc_id, notes=args.get("notes", ""), label=args.get("label", ""))
     if rev is None:
-        raise KeyError(doc_id)
+        raise NoSuchDocument(f"no document {doc_id!r}")
     return {"message": f"released revision {rev.letter}", "letter": rev.letter,
             "state": rev.state, "released_at": rev.released_at}
 
@@ -612,9 +628,9 @@ def _release_revision(doc_id, args):
 @operation("set_lifecycle_state", "mutate", "Set the document lifecycle state: draft | in_review | released | obsolete.",
            {"state": {"type": "string"}})
 def _set_lifecycle_state(doc_id, args):
-    doc = document_service.set_lifecycle_state(doc_id, args["state"])
+    doc = document_service.set_lifecycle_state(doc_id, require(args, "state"))
     if doc is None:
-        raise KeyError(doc_id)
+        raise NoSuchDocument(f"no document {doc_id!r}")
     return {"message": f"state = {doc.lifecycle_state}", "lifecycle_state": doc.lifecycle_state}
 
 
@@ -634,7 +650,7 @@ def _list_revisions(doc_id, args):
 def _set_configurations(doc_id, args):
     doc = document_service.set_configurations(doc_id, args.get("configurations") or [], args.get("active"))
     if doc is None:
-        raise KeyError(doc_id)
+        raise NoSuchDocument(f"no document {doc_id!r}")
     return {"message": f"set {len(doc.configurations)} configuration(s)",
             "configurations": [c.model_dump() for c in doc.configurations],
             "active": doc.active_configuration}
@@ -645,7 +661,7 @@ def _set_configurations(doc_id, args):
 def _activate_configuration(doc_id, args):
     doc = document_service.activate_configuration(doc_id, args.get("name"))
     if doc is None:
-        raise KeyError(doc_id)
+        raise NoSuchDocument(f"no document {doc_id!r}")
     return {"message": f"activated {doc.active_configuration or 'base'}",
             "active": doc.active_configuration,
             "bbox": _bbox_summary(doc)}
@@ -707,7 +723,7 @@ def _print_part(doc_id, args):
     from app.services.machine.url_guard import UrlNotAllowed, validate_url
 
     try:
-        url = validate_url(args["printer_url"])
+        url = validate_url(require(args, "printer_url"))
     except UrlNotAllowed as exc:
         raise ValueError(str(exc))
 
@@ -736,7 +752,121 @@ def catalog() -> List[Dict[str, Any]]:
 
 
 def dispatch(op_name: str, doc_id: str, args: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Run one operation, raising a typed OperationError on failure.
+
+    The raising form. Prefer :func:`execute` for anything that needs to *observe*
+    a failure rather than propagate it — an agent loop, a training rollout, the
+    HTTP layer.
+    """
     op = OPERATIONS.get(op_name)
     if op is None:
-        raise ValueError(f"unknown operation: {op_name}")
+        raise UnknownOperation(f"unknown operation: {op_name!r}", arg="op")
     return op.handler(doc_id, args or {})
+
+
+def _as_operation_error(exc: BaseException) -> OperationError:
+    """Classify an exception escaping a handler.
+
+    Handlers raise typed errors directly now, but the layers beneath them
+    (feature_ops, the kernel, numpy) still raise plain built-ins, and an
+    unclassified exception must never reach the caller as an opaque 500.
+    """
+    if isinstance(exc, OperationError):
+        return exc
+    if isinstance(exc, KeyError):
+        # feature_ops raises KeyError("feature <id> not found") from its mutators.
+        return NoSuchFeature(str(exc).strip("'\""))
+    if isinstance(exc, (ValueError, TypeError)):
+        return BadArgument(str(exc))
+    return InternalError(f"{type(exc).__name__}: {exc}")
+
+
+def execute(
+    op_name: str,
+    doc_id: str,
+    args: Dict[str, Any] | None = None,
+    *,
+    include_state: bool = True,
+    rollback_on_eval_error: bool = False,
+) -> Dict[str, Any]:
+    """Run one operation and return a full result envelope. Never raises.
+
+    This is the contract an agent is trained against, so it answers the three
+    questions the old response could not: did it work, why not, and what changed.
+    ``ok`` is computed rather than hardcoded — it was previously a constant
+    ``True`` that no failure could ever clear.
+
+    A tree that does not currently evaluate is reported as a **warning**, not a
+    failure. That is deliberate: binding a feature to a parameter expression
+    before defining the parameter leaves the document briefly unevaluatable and
+    is a supported, normal workflow — the whole reason ``derived.error`` exists
+    is so "a malformed edit never wedges the document". The operation did what it
+    was asked; the geometry is simply not resolvable yet. The condition is still
+    fully visible, in ``warnings`` and in ``state.error``, so a reward function
+    can penalise it without the API pretending the call failed.
+
+    ``rollback_on_eval_error`` opts into the stricter contract an RL environment
+    may prefer: any edit that leaves the body unevaluatable is undone, so the
+    document is always in a valid state and there are no absorbing failure
+    states. Off by default because it would break the parametric workflow above.
+    """
+    from app.services import observation
+
+    op = OPERATIONS.get(op_name)
+    if op is None:
+        known = ", ".join(sorted(OPERATIONS))
+        return {
+            "ok": False, "op": op_name, "result": {},
+            "error": UnknownOperation(f"unknown operation {op_name!r}; known: {known}",
+                                      arg="op").to_dict(),
+        }
+
+    doc = document_service.get_document(doc_id)
+    if doc is None:
+        return {"ok": False, "op": op_name, "result": {},
+                "error": NoSuchDocument(f"no document {doc_id!r}").to_dict()}
+
+    mutates = op.kind == "mutate"
+    before = observation.snapshot(doc)
+    # Only a mutating op can need rolling back, and only then is the copy worth it.
+    tree_before = copy.deepcopy(doc.feature_tree) if (mutates and rollback_on_eval_error) else None
+
+    try:
+        result = op.handler(doc_id, args or {})
+    except Exception as exc:  # noqa: BLE001 — classified, never swallowed
+        err = _as_operation_error(exc)
+        if isinstance(err, InternalError):
+            _LOGGER.exception("operation %s failed unexpectedly", op_name)
+        after_doc = document_service.get_document(doc_id)
+        return {
+            "ok": False, "op": op_name, "result": {}, "error": err.to_dict(), "warnings": [],
+            "state": observation.summarize(after_doc) if (include_state and after_doc) else None,
+        }
+
+    after_doc = document_service.get_document(doc_id)
+    envelope: Dict[str, Any] = {
+        "ok": True,
+        "op": op_name,
+        "result": result if isinstance(result, dict) else {"value": result},
+        "error": None,
+        "warnings": [],
+    }
+
+    if mutates and after_doc is not None and after_doc.derived.error:
+        eval_error = after_doc.derived.error
+        if rollback_on_eval_error:
+            document_service.update_document(doc_id, feature_tree=tree_before)
+            after_doc = document_service.get_document(doc_id)
+            envelope["ok"] = False
+            envelope["result"] = {}
+            envelope["error"] = EvaluationFailed(
+                f"{eval_error} (the edit was rolled back)").to_dict()
+        else:
+            envelope["warnings"].append({"code": EvaluationFailed.code, "message": eval_error})
+
+    if after_doc is not None:
+        envelope["delta"] = observation.delta(before, observation.snapshot(after_doc))
+        if include_state:
+            envelope["state"] = observation.summarize(after_doc)
+
+    return envelope
