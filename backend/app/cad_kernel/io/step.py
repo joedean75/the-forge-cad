@@ -17,6 +17,10 @@ from app.cad_kernel.core.topology import FaceMesh, Solid
 from app.cad_kernel.geom.meshing import face_normals, solid_to_mesh
 
 
+# The kernel works in metres; STEP consumers expect millimetres.
+_M_TO_MM = 1000.0
+
+
 def _fmt_float(value: float) -> str:
     return f"{float(value):.6e}"
 
@@ -81,15 +85,41 @@ class _StepBuilder:
     def manifold(self, shell_id: int) -> int:
         return self.add(f"MANIFOLD_SOLID_BREP('NONE',#{shell_id})")
 
-    def shape_representation(self, manifold_id: int, axis_id: int) -> int:
-        return self.add(f"SHAPE_REPRESENTATION('NONE',(#{manifold_id}),#{axis_id})")
+    def unit_context(self) -> int:
+        """A geometric representation context declaring millimetres.
+
+        Without this the file states no unit at all, and an importer falls back
+        to its own default — so an 80 mm plate written as raw metre values
+        arrived as 0.08 mm. Coordinates are scaled to millimetres to match
+        (`_M_TO_MM` in `_build`), which is the convention for mechanical STEP.
+        """
+        length = self.add("(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.))")
+        angle = self.add("(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.))")
+        solid_angle = self.add("(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT())")
+        uncertainty = self.add(
+            f"UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-05),#{length},"
+            f"'distance_accuracy_value','confusion accuracy')")
+        return self.add(
+            f"(GEOMETRIC_REPRESENTATION_CONTEXT(3)"
+            f"GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#{uncertainty}))"
+            f"GLOBAL_UNIT_ASSIGNED_CONTEXT((#{length},#{angle},#{solid_angle}))"
+            f"REPRESENTATION_CONTEXT('Context','3D'))")
+
+    def shape_representation(self, manifold_id: int, axis_id: int, context_id: int) -> int:
+        # The last argument is the representation *context*, not a placement. It
+        # previously received the global AXIS2_PLACEMENT_3D — the wrong entity
+        # type in that slot, and it left the file with no unit context at all.
+        return self.add(f"ADVANCED_BREP_SHAPE_REPRESENTATION"
+                        f"('NONE',(#{manifold_id},#{axis_id}),#{context_id})")
 
 
 def _build(mesh: Union[FaceMesh, Solid]) -> "_StepBuilder":
     """Construct every STEP entity for the mesh, returning the populated builder."""
     if isinstance(mesh, Solid):
         mesh = solid_to_mesh(mesh)
-    verts = mesh.vertices
+    # The kernel works in metres; the file declares millimetres (see
+    # `_StepBuilder.unit_context`), so coordinates are converted to match.
+    verts = np.asarray(mesh.vertices, dtype=float) * _M_TO_MM
     faces = mesh.faces
     normals = face_normals(verts, faces)
 
@@ -100,6 +130,7 @@ def _build(mesh: Union[FaceMesh, Solid]) -> "_StepBuilder":
     z_id = b.direction(0.0, 0.0, 1.0)
     x_id = b.direction(1.0, 0.0, 0.0)
     global_axis = b.axis2(origin_id, z_id, x_id)
+    context_id = b.unit_context()
 
     face_ids: List[int] = []
     for tri, normal in zip(faces, normals):
@@ -134,7 +165,7 @@ def _build(mesh: Union[FaceMesh, Solid]) -> "_StepBuilder":
 
     shell_id = b.closed_shell(face_ids)
     manifold_id = b.manifold(shell_id)
-    shape_id = b.shape_representation(manifold_id, global_axis)
+    shape_id = b.shape_representation(manifold_id, global_axis, context_id)
 
     # Product structure boilerplate (must reference the shape representation)
     app_ctx = b.add("APPLICATION_CONTEXT('automotive design')")

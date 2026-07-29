@@ -26,6 +26,25 @@ _MAX_SAMPLE_VERTS = 3000  # subsample dense surfaces for a bounded check
 MM = 1000.0
 
 
+def _surface_samples(mesh) -> np.ndarray:
+    """Points on a part's surface: every vertex, plus every triangle's centroid.
+
+    Vertices alone are not enough. An exactly-built box has eight of them, and
+    two 40 mm boxes overlapping by 30 mm have no vertex strictly inside the
+    other — every corner lands on a face — so the pair reads as clear. The
+    approximated mesh used to hide this by having thousands of vertices
+    scattered over each face. Centroids put a sample in the middle of every
+    facet, which is what makes the check independent of how finely the body
+    happens to be tessellated.
+    """
+    verts = np.asarray(mesh.vertices, dtype=float)
+    faces = np.asarray(mesh.faces, dtype=int)
+    if len(faces) == 0:
+        return verts
+    centroids = verts[faces].mean(axis=1)
+    return np.vstack([verts, centroids])
+
+
 class _Placed:
     """A component's SDF + world-space surface samples + placement frame."""
 
@@ -36,7 +55,7 @@ class _Placed:
 
         from app.cad_kernel.kernel import Kernel
         mesh = Kernel.tessellate(document_service.get_solid(comp.part_id))
-        verts = np.asarray(mesh.vertices, dtype=float)
+        verts = _surface_samples(mesh)
         if len(verts) > _MAX_SAMPLE_VERTS:
             idx = np.linspace(0, len(verts) - 1, _MAX_SAMPLE_VERTS).astype(int)
             verts = verts[idx]

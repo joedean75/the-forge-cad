@@ -811,6 +811,14 @@ def _sdf_optimize(f):
     raise ValueError("OptimizeFeature has no cache and no input body")
 
 
+def _sdf_needs_exact_kernel(f):
+    raise ValueError(
+        f"{type(f).__name__} acts on named faces/edges, which the distance-field "
+        f"kernel does not have. It needs the exact B-rep kernel "
+        f"(pip install cadquery-ocp)."
+    )
+
+
 def _sdf_import(f):
     if f.cache and f.cache.get("density_packed"):
         return _cached_import_grid_sdf(f.cache)
@@ -840,6 +848,13 @@ _SDF_BUILDERS = {
     "SheetMetalFeature": SheetMetalSDF,
     "OptimizeFeature": _sdf_optimize,
     "ImportFeature": _sdf_import,
+    # Topology-addressing features have no field form at all — they act on named
+    # faces and edges, which a sampled field does not have. Registered so the
+    # registry stays complete and the failure names the cause, rather than
+    # arriving as a bare KeyError from deep inside evaluation.
+    "EdgeFilletFeature": _sdf_needs_exact_kernel,
+    "EdgeChamferFeature": _sdf_needs_exact_kernel,
+    "FaceShellFeature": _sdf_needs_exact_kernel,
 }
 
 

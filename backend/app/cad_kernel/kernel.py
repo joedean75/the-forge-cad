@@ -43,12 +43,36 @@ class Kernel:
 
     @staticmethod
     def evaluate_feature(feature: Feature, resolution: int = 128) -> Solid:
-        """Evaluate a feature tree into a solid mesh via SDF.
+        """Evaluate a feature tree into a solid mesh.
 
-        Uses the native Rust sampler for box/sphere/cylinder+boolean trees (the
-        common, hot case); falls back to the numpy SDF for everything else.
+        Three paths, tried in order of fidelity:
+
+        1. **Exact B-rep** (OpenCascade) when every feature in the tree has an
+           analytic form. The mesh is a tessellation *of exact geometry*, so a
+           dimension is right regardless of `resolution` — which now only
+           controls how smoothly curves are drawn.
+        2. The **native Rust SDF sampler** for box/sphere/cylinder+boolean trees.
+        3. The **numpy SDF**, which handles everything else — smooth blends,
+           shells, sheet metal, imported and optimised voxel bodies.
+
+        A tree containing anything the exact kernel cannot represent falls back
+        wholesale rather than mixing the two, because half a body built exactly
+        and half approximated is worse than either on its own.
         """
+        from app.cad_kernel.evaluator import brep
         from app.cad_kernel.evaluator.sdf_native import evaluate_feature_native
+
+        shape = brep.brep_from_feature(feature)
+        if shape is not None:
+            vertices, faces = brep.tessellate(shape, resolution=resolution)
+            if len(faces):
+                return Kernel.from_mesh(vertices, faces)
+
+        if brep.requires_exact(feature):
+            # There is no SDF form of an edge fillet or a face shell, so falling
+            # through would swap the real reason ("radius too large for that
+            # edge") for a generic one. Rebuild strictly and let it say why.
+            brep.build_strict(feature)
 
         native = evaluate_feature_native(feature, resolution=resolution)
         if native is not None:
@@ -57,17 +81,26 @@ class Kernel:
 
     @staticmethod
     def sampler_for(feature: Feature) -> str:
-        """Which field sampler ``evaluate_feature`` will use: "native" or "numpy".
+        """Which evaluator ``evaluate_feature`` will use.
 
-        The two samplers share the grid and the marching-cubes step but evaluate
-        the field differently, so a mesh is only comparable across machines when
-        this matches. Callers record it alongside the geometry.
+        ``"brep"`` is exact geometry from OpenCascade; ``"native"`` and
+        ``"numpy"`` are the two signed-distance-field samplers. Geometry is only
+        comparable when this matches, so callers record it alongside the mesh.
         """
-        from app.cad_kernel.evaluator import sdf_native
+        from app.cad_kernel.evaluator import brep, sdf_native
 
+        if brep.AVAILABLE and brep.supports(feature):
+            return "brep"
         if sdf_native.AVAILABLE and sdf_native.compile_feature(feature) is not None:
             return "native"
         return "numpy"
+
+    @staticmethod
+    def brep_for(feature: Feature):
+        """The exact shape for a tree, or None. The handle to addressable topology."""
+        from app.cad_kernel.evaluator import brep
+
+        return brep.brep_from_feature(feature)
 
     @staticmethod
     def evaluate_tree(tree: FeatureTree, resolution: int = 128) -> Solid:

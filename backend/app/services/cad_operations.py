@@ -22,6 +22,7 @@ from app.services.op_errors import (
     BadArgument,
     EvaluationFailed,
     InternalError,
+    MissingArgument,
     NoSuchDocument,
     NoSuchFeature,
     OperationError,
@@ -607,6 +608,166 @@ def _mass_properties(doc_id, args):
     from app.services import mass_properties
 
     return mass_properties.mass_properties(doc_id)
+
+
+def _exact_shape(doc_id):
+    """The document's exact B-rep body, or a precondition failure explaining why not.
+
+    The gate in front of every topology-addressing operation. Both refusals are
+    worth telling apart: the deployment has no exact kernel, or this particular
+    body cannot be built exactly.
+    """
+    from app.cad_kernel.core.feature_tree import FeatureTree
+    from app.cad_kernel.evaluator import brep
+
+    if not brep.AVAILABLE:
+        raise PreconditionFailed(
+            "this deployment has no exact kernel installed (pip install cadquery-ocp), "
+            "so faces and edges are not addressable")
+
+    doc = _get(doc_id)
+    active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
+    if doc.parameters:
+        from app.services import parameters
+
+        scope, _ = parameters.resolve_values(doc.parameters)
+        active = parameters.resolve_tree(active, scope)
+
+    shape = brep.brep_from_feature(FeatureTree.from_dict(active).root)
+    if shape is None:
+        raise PreconditionFailed(
+            "this body has no exact form, so it has no addressable faces or edges. "
+            "Smooth-boolean fillet/chamfer, shell, sheet metal, imported and "
+            "optimized bodies are evaluated as a distance field instead.")
+    return shape
+
+
+@operation("list_faces", "query", "List the body's faces with stable ids, so they can be selected. "
+           "Each face reports its kind (plane/cylinder/cone/sphere), area, centre and, "
+           "for cylinders, radius — enough to tell which is which without seeing it.",
+           {})
+def _list_faces(doc_id, args):
+    from app.cad_kernel.core import naming
+
+    table = naming.face_table(_exact_shape(doc_id))
+    return {"faces": [{"id": f["id"], "kind": f["kind"], "area_mm2": f["area_mm2"],
+                       "center_mm": f["center_mm"],
+                       **({"radius_mm": f["radius_mm"]} if f.get("radius_mm") else {}),
+                       **({"normal": f["normal"]} if f.get("normal") else {})}
+                      for f in table],
+            "count": len(table)}
+
+
+@operation("list_edges", "query", "List the body's edges with stable ids, so they can be filleted or "
+           "chamfered. Each edge reports its kind (line/circle), length, midpoint and, "
+           "for circles, radius.",
+           {"kind": {"enum": ["all", "line", "circle"], "default": "all",
+           "description": "filter to straight edges or circular ones"},
+           "min_length_mm": {"type": "number",
+           "description": "ignore edges shorter than this — useful for skipping slivers"}})
+def _list_edges(doc_id, args):
+    from app.cad_kernel.core import naming
+
+    table = naming.edge_table(_exact_shape(doc_id))
+    wanted = str(args.get("kind", "all"))
+    floor = float(args.get("min_length_mm") or 0.0)
+    if wanted != "all":
+        table = [e for e in table if e["kind"] == wanted]
+    table = [e for e in table if e["length_mm"] >= floor]
+    return {"edges": [{"id": e["id"], "kind": e["kind"], "length_mm": e["length_mm"],
+                       "midpoint_mm": e["midpoint_mm"],
+                       **({"radius_mm": e["radius_mm"]} if e.get("radius_mm") else {})}
+                      for e in table],
+            "count": len(table)}
+
+
+def _selected(doc_id, ids, kind: str) -> List[Dict[str, Any]]:
+    """Turn the ids a caller selected into durable references.
+
+    An id alone is a hash of the entity's current measurements, so storing just
+    that would break the moment an upstream dimension moved it. The whole
+    descriptor is stored instead, letting `naming.resolve` fall back to nearest
+    match and carry the fillet with the edge it was put on.
+    """
+    from app.cad_kernel.core import naming
+
+    shape = _exact_shape(doc_id)
+    table = naming.face_table(shape) if kind == "face" else naming.edge_table(shape)
+    by_id = {d["id"]: d for d in table}
+
+    wanted = [ids] if isinstance(ids, str) else list(ids or [])
+    if not wanted:
+        raise MissingArgument(f"select at least one {kind} (see list_{kind}s)",
+                              arg=f"{kind}s")
+
+    missing = [i for i in wanted if i not in by_id]
+    if missing:
+        raise BadArgument(
+            f"no such {kind}(s): {', '.join(missing)}. Call list_{kind}s for the "
+            f"{len(table)} available on this body.", arg=f"{kind}s")
+    return [by_id[i] for i in wanted]
+
+
+@operation("fillet_edges", "mutate", "Round named edges of the body to a radius — a real fillet on selected "
+           "edges, not a blend between bodies. Pick edge ids with list_edges. "
+           "Requires the exact kernel.",
+           {"edges": {"type": "array", "required": True,
+           "description": "edge ids from list_edges"},
+           "radius": {"type": "number", "required": True, "description": "metres"}})
+def _fillet_edges(doc_id, args):
+    doc = _get(doc_id)
+    radius = float(require(args, "radius"))
+    if radius <= 0:
+        raise BadArgument("radius must be positive", arg="radius")
+    references = _selected(doc_id, require(args, "edges"), "edge")
+
+    node = {"type": "EdgeFilletFeature", "name": "Fillet",
+            "params": {"radius": radius, "edges": references}}
+    tree = feature_ops.add_modifier(doc.feature_tree, node, target_id=args.get("target"))
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": f"filleted {len(references)} edge(s) at {radius * 1000:g} mm",
+            "feature_id": node["id"], "edges": [r["id"] for r in references]}
+
+
+@operation("chamfer_edges", "mutate", "Cut named edges back at 45° by a distance — a real chamfer on selected "
+           "edges. Pick edge ids with list_edges. Requires the exact kernel.",
+           {"edges": {"type": "array", "required": True,
+           "description": "edge ids from list_edges"},
+           "distance": {"type": "number", "required": True, "description": "metres"}})
+def _chamfer_edges(doc_id, args):
+    doc = _get(doc_id)
+    distance = float(require(args, "distance"))
+    if distance <= 0:
+        raise BadArgument("distance must be positive", arg="distance")
+    references = _selected(doc_id, require(args, "edges"), "edge")
+
+    node = {"type": "EdgeChamferFeature", "name": "Chamfer",
+            "params": {"distance": distance, "edges": references}}
+    tree = feature_ops.add_modifier(doc.feature_tree, node, target_id=args.get("target"))
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": f"chamfered {len(references)} edge(s) at {distance * 1000:g} mm",
+            "feature_id": node["id"], "edges": [r["id"] for r in references]}
+
+
+@operation("shell_faces", "mutate", "Hollow the body to a wall thickness, removing the named faces so it is "
+           "open there. Pick face ids with list_faces. This is a real shell — the "
+           "`shell` modifier hollows everything with no opening. Requires the exact kernel.",
+           {"faces": {"type": "array", "required": True,
+           "description": "face ids from list_faces — the openings"},
+           "thickness": {"type": "number", "required": True, "description": "wall thickness, metres"}})
+def _shell_faces(doc_id, args):
+    doc = _get(doc_id)
+    thickness = float(require(args, "thickness"))
+    if thickness <= 0:
+        raise BadArgument("thickness must be positive", arg="thickness")
+    references = _selected(doc_id, require(args, "faces"), "face")
+
+    node = {"type": "FaceShellFeature", "name": "Shell",
+            "params": {"thickness": thickness, "faces": references}}
+    tree = feature_ops.add_modifier(doc.feature_tree, node, target_id=args.get("target"))
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": f"shelled to {thickness * 1000:g} mm through {len(references)} face(s)",
+            "feature_id": node["id"], "faces": [r["id"] for r in references]}
 
 
 @operation("check_geometry", "query", "Validate the body as a solid: non-empty, watertight, consistent winding, "

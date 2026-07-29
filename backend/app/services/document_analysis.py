@@ -209,10 +209,50 @@ def dfm_document(doc_id: str, build_axis: str = "auto", resolution: int = 128) -
     )
 
 
+def exact_step_document(doc_id: str) -> Optional[str]:
+    """STEP with analytic surfaces, when the tree is exactly representable.
+
+    Returns ``None`` when any feature has no exact form (a smooth-boolean
+    "fillet", a shell, an imported voxel body) or when OCC is not installed, so
+    the caller falls back to the faceted writer rather than exporting something
+    that differs from the body the rest of the system computed.
+    """
+    from app.cad_kernel.core.feature_tree import FeatureTree
+    from app.cad_kernel.evaluator import brep
+    from app.cad_kernel.io.step_brep import write_step_brep
+    from app.services import feature_ops
+
+    if not brep.AVAILABLE:
+        return None
+    doc = docs.get_document(doc_id)
+    if doc is None:
+        return None
+    try:
+        # The same resolution pipeline the SDF path uses, minus the sampling:
+        # suppression, datums and driving parameters all still apply.
+        active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
+        if doc.parameters:
+            from app.services import parameters
+
+            scope, _ = parameters.resolve_values(doc.parameters)
+            active = parameters.resolve_tree(active, scope)
+        shape = brep.brep_from_feature(FeatureTree.from_dict(active).root)
+        if shape is None:
+            return None
+        return write_step_brep(shape, name=(doc.name or "part")[:40])
+    except Exception:  # noqa: BLE001 — exactness is an optimisation, never a hard failure
+        _LOGGER.info("exact STEP export unavailable for %s; using the faceted writer",
+                     doc_id, exc_info=True)
+        return None
+
+
 def export_step_document(doc_id: str, resolution: int = 128) -> str:
     doc = docs.get_document(doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    exact = exact_step_document(doc_id)
+    if exact is not None:
+        return exact
     solid = docs.get_solid(doc_id, resolution=resolution)
     return solid_to_step_string(solid, name=f"doc_{doc_id}")
 
@@ -284,6 +324,13 @@ def stream_step_document(doc_id: str, resolution: int = 128):
     doc = docs.get_document(doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    # An exact export has no triangles to budget: analytic surfaces are a handful
+    # of entities however curved the part is, which is the whole point.
+    exact = exact_step_document(doc_id)
+    if exact is not None:
+        return iter([exact]), 0
+
     solid = docs.get_solid(doc_id, resolution=resolution)
 
     triangles = triangle_count(solid)

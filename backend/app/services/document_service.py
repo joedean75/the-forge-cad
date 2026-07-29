@@ -159,8 +159,12 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
             solid_hash=tree_hash,
             mesh_url=solid_to_stl_data_uri(solid),
             bbox=bbox,
-            mass=round(volume * density, 4),
-            volume=round(volume, 6),
+            # Rounded well below anything meaningful, not to a "tidy" number of
+            # decimals: these are SI (m^3 and kg), so round(v, 6) quantised
+            # volume to 1 mm^3 and mass to 0.1 g. On an exact body a 75978.8 mm^3
+            # plate reported as 76000.
+            mass=round(volume * density, 12),
+            volume=round(volume, 15),
             resolution=resolution,
             sampler=sampler,
             mesh_hash=mesh_hash(mesh),

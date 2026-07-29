@@ -77,16 +77,37 @@ def test_a_different_tree_meshes_differently():
     assert mesh_hash(a) != mesh_hash(b)
 
 
-def test_resolution_changes_the_mesh_so_it_must_be_recorded():
+def _curved_tree(radius: float = 0.03) -> FeatureTree:
+    return FeatureTree.from_dict({"version": "brep-v1", "root": {
+        "type": "SphereFeature", "id": "f1", "name": "S",
+        "params": {"radius": radius, "center": {"x": 0, "y": 0, "z": 0}},
+    }})
+
+
+def test_resolution_changes_a_curved_mesh_so_it_must_be_recorded():
     """Why DerivedCache carries `resolution`: it is part of the geometry's identity."""
-    tree = _box_tree(0.05)
+    tree = _curved_tree()
     coarse = Kernel.tessellate(Kernel.evaluate_tree(tree, resolution=32))
     fine = Kernel.tessellate(Kernel.evaluate_tree(tree, resolution=64))
     assert mesh_hash(coarse) != mesh_hash(fine)
 
 
-def test_sampler_is_reported_and_is_one_of_the_two_known_paths():
-    assert Kernel.sampler_for(_box_tree(0.05).root) in ("native", "numpy")
+def test_a_flat_exact_body_is_the_same_mesh_at_any_resolution():
+    """Exact geometry has no resolution — six planes are six planes.
+
+    Only true on the B-rep path; a sampled field re-quantises a box every time
+    the grid changes, which is the whole reason `resolution` had to be recorded.
+    """
+    if Kernel.sampler_for(_box_tree(0.05).root) != "brep":
+        pytest.skip("exact kernel not installed")
+    tree = _box_tree(0.05)
+    coarse = Kernel.tessellate(Kernel.evaluate_tree(tree, resolution=32))
+    fine = Kernel.tessellate(Kernel.evaluate_tree(tree, resolution=256))
+    assert mesh_hash(coarse) == mesh_hash(fine)
+
+
+def test_sampler_is_reported_and_names_one_of_the_known_paths():
+    assert Kernel.sampler_for(_box_tree(0.05).root) in ("brep", "native", "numpy")
 
 
 # ------------------------------------------------------------- replay parity --
@@ -134,5 +155,5 @@ def test_evaluation_records_the_conditions_that_produced_the_geometry():
     doc = docs.create_document(name="stamped", resolution=32)
     docs.evaluate_document(doc, resolution=32)
     assert doc.derived.resolution == 32
-    assert doc.derived.sampler in ("native", "numpy")
+    assert doc.derived.sampler in ("brep", "native", "numpy")
     assert doc.derived.mesh_hash

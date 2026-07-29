@@ -8,7 +8,7 @@ scaled by the document's assigned material density.
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 
@@ -103,17 +103,53 @@ def mass_properties(doc_id: str) -> Dict:
     inertia_cog = inertia_o - shift
     _ = d2  # (kept for clarity of the parallel-axis relation)
 
+    # Where the body has an exact form, take volume, area and centre of mass from
+    # the geometry rather than from its triangulation. The mesh figures are only
+    # as good as the tessellation — a bored plate came out ~0.001% heavy — and on
+    # a part being quoted or balanced that is a number someone will rely on.
+    exact = _exact_properties(doc)
+    if exact is not None:
+        volume, surface_area = exact["volume"], exact["area"]
+        centroid = np.asarray(exact["center_of_mass"], dtype=float)
+        mass = volume * density
+
     mat = materials.get_material(doc.material_id)
     return {
         "material": {"id": mat.id, "name": mat.name, "density": mat.density},
-        "volume_cm3": round(volume * 1e6, 3),
-        "mass_kg": round(mass, 5),
-        "surface_area_cm2": round(surface_area * 1e4, 2),
-        "center_of_mass_mm": [round(float(v) * 1000, 3) for v in centroid],
+        "volume_cm3": round(volume * 1e6, 6),
+        "mass_kg": round(mass, 9),
+        "surface_area_cm2": round(surface_area * 1e4, 5),
+        "center_of_mass_mm": [round(float(v) * 1000, 5) for v in centroid],
         # Inertia tensor about the COG, kg·mm² (SI * 1e6).
         "inertia_kg_mm2": [[round(float(inertia_cog[i, j] * 1e6), 3) for j in range(3)] for i in range(3)],
         "bbox_mm": _bbox_mm(verts),
+        # Whether these came from exact geometry or from a triangulation of it.
+        "exact": exact is not None,
     }
+
+
+def _exact_properties(doc) -> Optional[Dict]:
+    """Volume, area and centre of mass straight from the B-rep, or None."""
+    from app.cad_kernel.core.feature_tree import FeatureTree
+    from app.cad_kernel.evaluator import brep
+    from app.services import feature_ops
+
+    if not brep.AVAILABLE:
+        return None
+    try:
+        active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
+        if doc.parameters:
+            from app.services import parameters
+
+            scope, _ = parameters.resolve_values(doc.parameters)
+            active = parameters.resolve_tree(active, scope)
+        shape = brep.brep_from_feature(FeatureTree.from_dict(active).root)
+        if shape is None:
+            return None
+        return {"volume": brep.volume(shape), "area": brep.surface_area(shape),
+                "center_of_mass": brep.center_of_mass(shape)}
+    except Exception:  # noqa: BLE001 — exactness is a bonus, never a hard failure
+        return None
 
 
 def _bbox_mm(verts: np.ndarray) -> Dict:

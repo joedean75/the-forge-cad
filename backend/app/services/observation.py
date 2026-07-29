@@ -127,11 +127,13 @@ def delta(before: dict, after: dict) -> dict:
             "count_before": len(before_ids),
             "count_after": len(after_ids),
         },
-        # A geometry-changing op that moved nothing measurable is worth flagging:
-        # it is the signature of an edit that silently did not apply.
+        # Strictly about geometry — deliberately *not* including whether features
+        # were added or removed. An operation that adds a feature and moves
+        # nothing measurable is the signature of an edit that silently did not
+        # apply, and folding the tree change in here would mask exactly that.
+        # (It caught a whole-body `add_modifier(fillet)` doing nothing at all.)
         "changed_geometry": bool(
-            added or removed
-            or _round(vol_after - vol_before) not in (0.0, None)
+            _round(vol_after - vol_before) not in (0.0, None)
             or before.get("bbox_mm") != after.get("bbox_mm")
         ),
     }

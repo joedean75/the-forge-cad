@@ -19,6 +19,12 @@ pydantic>=2.13.0
 pytest>=8.0.0
 httpx>=0.28.0
 mcp>=1.0
+# OpenCascade bindings — the exact B-rep kernel that runs alongside the SDF one
+# (app/cad_kernel/evaluator/brep.py). Optional at runtime: every entry point
+# checks `brep.AVAILABLE` and falls back to the SDF kernel, so the app still
+# works without it — but STEP export is then faceted triangles rather than
+# analytic surfaces, and no face or edge is addressable. ~143 MB wheel.
+cadquery-ocp>=7.7,<7.9
 sqlalchemy>=2.0
 pyjwt>=2.8.0
 python-dotenv>=1.0.0

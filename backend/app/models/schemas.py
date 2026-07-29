@@ -185,7 +185,9 @@ class DerivedCache(BaseModel):
     # slightly. Recorded so a mesh, a drawing or a logged trajectory always
     # states what produced it.
     resolution: Optional[int] = None
-    sampler: Optional[Literal["native", "numpy"]] = None
+    # "brep" is exact OpenCascade geometry; "native"/"numpy" are the two
+    # signed-distance-field samplers.
+    sampler: Optional[Literal["brep", "native", "numpy"]] = None
     mesh_hash: Optional[str] = None
 
 

@@ -3,6 +3,11 @@
 A faceted STEP carries ~20 entity lines (~1.3 kB) per triangle, so a part meshed
 at high resolution runs to hundreds of megabytes. Building that as one string
 was enough to OOM a small instance, so the size is budgeted up front.
+
+The budget only governs the *faceted* writer. A body with an exact B-rep form
+exports as analytic surfaces — a handful of entities however curved it is — and
+has no triangles to count, so these tests deliberately use a shelled body, which
+`abs(d) - t/2` puts outside what OCC can represent.
 """
 
 from fastapi.testclient import TestClient
@@ -17,6 +22,17 @@ from app.services import document_analysis
 
 
 client = TestClient(app)
+
+
+def _faceted_doc(resolution=32):
+    """A document with no exact form, so the faceted writer is the one under test."""
+    doc = client.post("/api/documents", json={"resolution": resolution}).json()
+    client.post(f"/api/documents/{doc['id']}/op",
+                json={"op": "add_primitive", "args": {"shape": "box"}})
+    client.post(f"/api/documents/{doc['id']}/op",
+                json={"op": "add_modifier",
+                      "args": {"modifier": "shell", "params": {"thickness": 0.004}}})
+    return doc
 
 
 def _solid(resolution=32):
@@ -42,7 +58,7 @@ def test_stream_is_chunked_rather_than_one_blob():
 
 def test_export_is_refused_above_the_triangle_budget(monkeypatch):
     monkeypatch.setenv("FORGE_STEP_MAX_TRIANGLES", "10")
-    doc = client.post("/api/documents", json={"prompt": "box 40x40x40 mm", "resolution": 32}).json()
+    doc = _faceted_doc()
 
     resp = client.get(f"/api/documents/{doc['id']}/step")
     assert resp.status_code == 413
@@ -52,7 +68,7 @@ def test_export_is_refused_above_the_triangle_budget(monkeypatch):
 
 def test_export_succeeds_within_budget(monkeypatch):
     monkeypatch.setenv("FORGE_STEP_MAX_TRIANGLES", "1000000")
-    doc = client.post("/api/documents", json={"prompt": "box 40x40x40 mm", "resolution": 32}).json()
+    doc = _faceted_doc()
 
     resp = client.get(f"/api/documents/{doc['id']}/step")
     assert resp.status_code == 200
@@ -64,7 +80,7 @@ def test_export_succeeds_within_budget(monkeypatch):
 def test_budget_is_checked_before_building_entities(monkeypatch):
     """The guard must cost a meshing pass, not a full string build."""
     monkeypatch.setenv("FORGE_STEP_MAX_TRIANGLES", "10")
-    doc = client.post("/api/documents", json={"prompt": "box 40x40x40 mm", "resolution": 32}).json()
+    doc = _faceted_doc()
 
     called = False
     original = document_analysis.stream_step_document
