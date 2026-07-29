@@ -25,8 +25,13 @@ What it does not build, and why:
   `flat_pattern` computable.
 * ``OptimizeFeature`` / ``ImportFeature`` — cached voxel grids with no analytic
   form to recover.
-* ``SweepFeature`` / ``LoftFeature`` / ``RevolveFeature`` — buildable in OCC, not
-  yet mapped here.
+* ``LoftFeature`` — `LoftSDF` linearly blends the two profiles' *distance
+  values*, which its own docstring calls an approximation rather than a ruled
+  surface. OCC's `ThruSections` builds a true loft, which is a genuinely
+  different shape — so mapping it here would silently change what an existing
+  document means depending on whether OCC happens to be installed. A true loft
+  belongs as its own feature, the way `EdgeFilletFeature` sits beside
+  `FilletFeature`, not as a swap behind the same name.
 
 Units are metres throughout, matching the rest of the kernel. OCC's default
 tolerances are pitched at millimetres, but `Precision::Confusion` is 1e-7, which
@@ -87,8 +92,7 @@ class BrepUnsupported(Exception):
 # reason for each is written down next to it (see the module docstring).
 UNSUPPORTED = {
     "FilletFeature", "ChamferFeature", "ShellFeature", "SheetMetalFeature",
-    "OptimizeFeature", "ImportFeature", "SweepFeature", "LoftFeature",
-    "RevolveFeature",
+    "OptimizeFeature", "ImportFeature", "LoftFeature",
 }
 
 
@@ -425,7 +429,140 @@ def _face_shell(f):
     return builder.Shape()
 
 
+# Revolve axis name -> (world index along the axis, the two in-plane indices),
+# matching `_REV_AXES` in the SDF evaluator.
+_REVOLVE_AXES = {"x": (0, 1, 2), "y": (1, 0, 2), "z": (2, 0, 1)}
+
+
+def _revolve(f):
+    """A profile in (radius, height) turned about an axis, matching RevolveSDF.
+
+    The profile is authored in the half-plane r >= 0 and swept symmetrically
+    about the radial axis — a 90° revolve runs -45°..+45°, not 0°..90° — so the
+    profile is pre-rotated by half the angle before OCC sweeps it forward.
+    """
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeRevol
+
+    axis_i, radial_i, third_i = _REVOLVE_AXES.get(getattr(f, "axis", "z"),
+                                                  _REVOLVE_AXES["z"])
+    profile = f.profile or {}
+    min_radius = _profile_min_u(profile)
+    if min_radius < 0:
+        raise BrepUnsupported("a revolve profile cannot cross its own axis")
+
+    centre = [f.center.x, f.center.y, f.center.z]
+
+    def to_world(u: float, v: float) -> "gp_Pnt":
+        coords = list(centre)
+        coords[radial_i] += u
+        coords[axis_i] += v
+        return gp_Pnt(*coords)
+
+    wire = _profile_wire_2d(profile, to_world)
+    face = BRepBuilderAPI_MakeFace(wire)
+    if not face.IsDone():
+        raise BrepUnsupported("revolve profile does not bound a face")
+
+    direction = [0.0, 0.0, 0.0]
+    direction[axis_i] = 1.0
+    pivot = gp_Ax1(gp_Pnt(*centre), gp_Dir(*direction))
+
+    angle = float(getattr(f, "angle", 360.0))
+    shape = face.Face()
+    if angle < 359.999:
+        start = gp_Trsf()
+        start.SetRotation(pivot, math.radians(-angle / 2.0))
+        shape = _transformed(shape, start)
+        return BRepPrimAPI_MakeRevol(shape, pivot, math.radians(angle)).Shape()
+    return BRepPrimAPI_MakeRevol(shape, pivot).Shape()
+
+
+def _sweep(f):
+    """A round tube along a polyline, matching SweepSDF.
+
+    SweepSDF is a union of *capsules* — each segment is a cylinder with a
+    hemisphere at both ends — which is why this builds cylinders and spheres and
+    fuses them rather than reaching for `BRepOffsetAPI_MakePipe`. A pipe has flat
+    ends and mitred joints, so it would be a different body at every corner.
+    """
+    path = [list(map(float, p)) for p in (getattr(f, "path", None) or [])]
+    if len(path) < 2:
+        raise BrepUnsupported("a sweep needs at least two path points")
+    radius = float(f.radius)
+    if radius <= 0:
+        raise BrepUnsupported("a sweep needs a positive radius")
+
+    parts = []
+    for start, end in zip(path, path[1:]):
+        delta = [end[i] - start[i] for i in range(3)]
+        length = math.sqrt(sum(d * d for d in delta))
+        if length < 1e-12:
+            continue
+        parts.append(BRepPrimAPI_MakeCylinder(
+            gp_Ax2(gp_Pnt(*start), gp_Dir(*delta)), radius, length).Shape())
+    for point in path:
+        parts.append(BRepPrimAPI_MakeSphere(gp_Pnt(*point), radius).Shape())
+    if not parts:
+        raise BrepUnsupported("sweep path has no length")
+
+    result = parts[0]
+    for other in parts[1:]:
+        builder = BRepAlgoAPI_Fuse(result, other)
+        if not builder.IsDone():
+            raise BrepUnsupported("OCC sweep fuse failed")
+        result = builder.Shape()
+    return result
+
+
+def _profile_min_u(profile: dict) -> float:
+    """Smallest first-axis coordinate of a profile — for a revolve, its radius."""
+    kind = (profile or {}).get("type", "rect")
+    cx = float(profile.get("cx", 0.0))
+    if kind == "circle":
+        return cx - float(profile.get("radius", 0.02))
+    if kind == "polygon":
+        points = profile.get("points") or [[0.0, 0.0]]
+        return min(float(p[0]) for p in points)
+    return cx - float(profile.get("width", 0.04)) / 2.0
+
+
+def _profile_wire_2d(profile: dict, to_world):
+    """A closed wire for a rect/circle/polygon profile, placed by `to_world(u, v)`."""
+    kind = (profile or {}).get("type", "rect")
+    cx = float(profile.get("cx", 0.0))
+    cy = float(profile.get("cy", 0.0))
+
+    if kind == "circle":
+        radius = float(profile.get("radius", 0.02))
+        # Approximated as a polygon: a circle in a revolve plane needs an axis
+        # frame this helper deliberately does not know about, and 64 segments is
+        # under a micron of chord error at these sizes.
+        points = [(cx + radius * math.cos(2 * math.pi * i / 64),
+                   cy + radius * math.sin(2 * math.pi * i / 64)) for i in range(64)]
+    elif kind == "polygon":
+        points = [(float(p[0]), float(p[1])) for p in (profile.get("points") or [])]
+        if len(points) < 3:
+            raise BrepUnsupported("polygon profile needs at least three points")
+        if points[0] == points[-1]:
+            points = points[:-1]
+    else:
+        half_w = float(profile.get("width", 0.04)) / 2.0
+        half_h = float(profile.get("height", 0.03)) / 2.0
+        points = [(cx - half_w, cy - half_h), (cx + half_w, cy - half_h),
+                  (cx + half_w, cy + half_h), (cx - half_w, cy + half_h)]
+
+    polygon = BRepBuilderAPI_MakePolygon()
+    for u, v in points:
+        polygon.Add(to_world(u, v))
+    polygon.Close()
+    if not polygon.IsDone():
+        raise BrepUnsupported("could not close the profile wire")
+    return polygon.Wire()
+
+
 _BUILDERS = {
+    "RevolveFeature": _revolve,
+    "SweepFeature": _sweep,
     "EdgeFilletFeature": _edge_fillet,
     "EdgeChamferFeature": _edge_chamfer,
     "FaceShellFeature": _face_shell,

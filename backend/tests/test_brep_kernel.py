@@ -102,6 +102,22 @@ def _exact_volume(tree: FeatureTree) -> float:
                                 "points": [[-.03, -.02], [.03, -.02], [.03, .02],
                                            [0, .035], [-.03, .02]]},
                        plane="xy", offset=0.0, depth=.015), id="extrude-polygon"),
+    pytest.param(_node("RevolveFeature",
+                       profile={"type": "rect", "width": .01, "height": .03, "cx": .02, "cy": 0},
+                       axis="z", center=V(0, 0, 0), angle=360), id="revolve-full"),
+    pytest.param(_node("RevolveFeature",
+                       profile={"type": "rect", "width": .01, "height": .03, "cx": .02, "cy": 0},
+                       axis="z", center=V(0, 0, 0), angle=90), id="revolve-90deg"),
+    pytest.param(_node("RevolveFeature",
+                       profile={"type": "rect", "width": .012, "height": .02, "cx": .025, "cy": 0},
+                       axis="x", center=V(0, 0, 0), angle=360), id="revolve-about-x"),
+    pytest.param(_node("RevolveFeature",
+                       profile={"type": "circle", "radius": .006, "cx": .02, "cy": 0},
+                       axis="z", center=V(0, 0, 0), angle=360), id="revolve-torus"),
+    pytest.param(_node("SweepFeature", path=[[0, 0, 0], [0, 0, .06]], radius=.006),
+                 id="sweep-straight"),
+    pytest.param(_node("SweepFeature", path=[[-.03, 0, 0], [.03, 0, 0], [.03, 0, .04]],
+                       radius=.005), id="sweep-bend"),
 ])
 def test_the_exact_body_agrees_with_the_sampled_one(root):
     """Within marching-cubes discretisation error — the SDF is the approximation."""
@@ -134,9 +150,43 @@ def test_a_thin_feature_is_still_exact_at_metre_scale():
 
 @pytest.mark.parametrize("kind", ["FilletFeature", "ChamferFeature", "ShellFeature",
                                   "SheetMetalFeature", "OptimizeFeature", "ImportFeature",
-                                  "SweepFeature", "LoftFeature", "RevolveFeature"])
+                                  "LoftFeature"])
 def test_features_with_no_exact_form_are_declined_not_approximated(kind):
     assert kind in brep.UNSUPPORTED
+
+
+def test_a_loft_is_declined_because_an_exact_one_is_a_different_shape():
+    """LoftSDF blends distance *values*; OCC builds a true ruled surface.
+
+    Mapping it would silently change what an existing document means depending
+    on whether OCC happens to be installed — so a true loft belongs as its own
+    feature, the way EdgeFilletFeature sits beside FilletFeature.
+    """
+    tree = _tree(_node("LoftFeature",
+                       profile_a={"type": "rect", "width": .04, "height": .04, "cx": 0, "cy": 0},
+                       profile_b={"type": "circle", "radius": .015, "cx": 0, "cy": 0},
+                       plane="xy", offset_a=0.0, offset_b=.05))
+    assert brep.brep_from_feature(tree.root) is None
+
+
+def test_a_partial_revolve_is_swept_symmetrically_like_the_field_version():
+    """RevolveSDF wedges -angle/2..+angle/2 about the radial axis, not 0..angle."""
+    quarter = _tree(_node("RevolveFeature",
+                          profile={"type": "rect", "width": .01, "height": .03,
+                                   "cx": .02, "cy": 0},
+                          axis="z", center=V(0, 0, 0), angle=90))
+    full = _tree(_node("RevolveFeature",
+                       profile={"type": "rect", "width": .01, "height": .03,
+                                "cx": .02, "cy": 0},
+                       axis="z", center=V(0, 0, 0), angle=360))
+    assert _exact_volume(quarter) == pytest.approx(_exact_volume(full) / 4.0, rel=1e-9)
+
+
+def test_a_revolve_profile_crossing_its_own_axis_is_refused():
+    tree = _tree(_node("RevolveFeature",
+                       profile={"type": "rect", "width": .06, "height": .02, "cx": 0, "cy": 0},
+                       axis="z", center=V(0, 0, 0), angle=360))
+    assert brep.brep_from_feature(tree.root) is None
 
 
 def test_a_smooth_boolean_fillet_has_no_exact_form():
