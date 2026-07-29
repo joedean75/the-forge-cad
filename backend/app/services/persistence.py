@@ -26,6 +26,7 @@ _DOCUMENT = "document"
 _ASSEMBLY_DOC = "assembly_doc"  # parts-composition assembly
 _ORDER = "order"  # manufacturing orders / RFQs
 _META = "meta"  # one-time migration markers etc.
+_TRAJECTORY = "trajectory"  # recorded agent interaction sequences (training data)
 
 _MIGRATION_MARKER = "json_files_migrated"
 _MESH_STRIP_MARKER = "document_meshes_stripped_v1"
@@ -189,23 +190,49 @@ def list_orders() -> List[str]:
     return _list(_ORDER)
 
 
-def list_orders_for_document(document_id: str) -> List[dict]:
-    """Orders for one document, filtered in SQL rather than loading every row."""
+def list_trajectories() -> List[str]:
+    return _list(_TRAJECTORY)
+
+
+def save_trajectory(trajectory_id: str, trajectory: dict) -> None:
+    _save(_TRAJECTORY, trajectory_id, trajectory, owner_id=trajectory.get("owner_id"))
+
+
+def load_trajectory(trajectory_id: str) -> Optional[dict]:
+    return _load(_TRAJECTORY, trajectory_id)
+
+
+def delete_trajectory(trajectory_id: str) -> bool:
+    return _delete(_TRAJECTORY, trajectory_id)
+
+
+def list_trajectories_for_document(document_id: str) -> List[dict]:
+    """Trajectories that built one document, filtered in SQL."""
+    return _rows_by_json_field(_TRAJECTORY, "doc_id", document_id)
+
+
+def _rows_by_json_field(kind: str, field: str, value: str) -> List[dict]:
+    """Rows of one kind whose top-level JSON `field` equals `value`.
+
+    Filtered in SQL rather than by loading every row and testing in Python — a
+    document row carries its whole feature tree and version history.
+    """
     from sqlalchemy import text
 
     if engine.dialect.name == "sqlite":
-        sql = text(
-            "SELECT data FROM records WHERE kind = :kind"
-            " AND json_extract(data, '$.document_id') = :doc"
-        )
+        sql = text(f"SELECT data FROM records WHERE kind = :kind"
+                   f" AND json_extract(data, '$.{field}') = :value")
     else:  # postgres
-        sql = text(
-            "SELECT data FROM records WHERE kind = :kind"
-            " AND data::json ->> 'document_id' = :doc"
-        )
+        sql = text(f"SELECT data FROM records WHERE kind = :kind"
+                   f" AND data::json ->> '{field}' = :value")
     with SessionLocal() as s:
-        rows = s.execute(sql, {"kind": _ORDER, "doc": document_id}).scalars().all()
+        rows = s.execute(sql, {"kind": kind, "value": value}).scalars().all()
     return [json.loads(r) for r in rows]
+
+
+def list_orders_for_document(document_id: str) -> List[dict]:
+    """Orders for one document, filtered in SQL rather than loading every row."""
+    return _rows_by_json_field(_ORDER, "document_id", document_id)
 
 
 # ---------------------------------------------------------------------------

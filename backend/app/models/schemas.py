@@ -278,6 +278,14 @@ class DesignDocument(BaseModel):
     optimization: Optional[OptimizationSetup] = None
     derived: DerivedCache = Field(default_factory=DerivedCache)
     provenance: Literal["text_to_cad", "manual", "generative", "mixed", "imported"] = "manual"
+    # The natural-language request this document came from. Previously the prompt
+    # was used to derive a name, logged at INFO, and then dropped — so the one
+    # piece of text that says what the part is *for* was unrecoverable, and no
+    # generated document could ever be paired with its own instruction.
+    source_prompt: Optional[str] = None
+    # The recorded operation sequence that produced this document, when there is
+    # one (a copilot run, a replayed trajectory).
+    trajectory_id: Optional[str] = None
     created_at: str
     updated_at: str
     version_history: List[DocumentVersion] = []

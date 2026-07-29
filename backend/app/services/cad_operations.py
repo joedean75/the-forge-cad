@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import logging
 import math
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List
 
@@ -820,6 +821,7 @@ def execute(
     *,
     include_state: bool = True,
     rollback_on_eval_error: bool = False,
+    rationale: str = "",
 ) -> Dict[str, Any]:
     """Run one operation and return a full result envelope. Never raises.
 
@@ -842,26 +844,36 @@ def execute(
     document is always in a valid state and there are no absorbing failure
     states. Off by default because it would break the parametric workflow above.
     """
-    from app.services import observation
+    from app.services import observation, trajectories
+
+    started = time.perf_counter()
 
     op = OPERATIONS.get(op_name)
     if op is None:
         known = ", ".join(sorted(OPERATIONS))
-        return {
-            "ok": False, "op": op_name, "result": {},
+        env = {
+            "ok": False, "op": op_name, "result": {}, "warnings": [],
             "error": UnknownOperation(f"unknown operation {op_name!r}; known: {known}",
                                       arg="op").to_dict(),
         }
+        trajectories.record_step(op_name, doc_id, args, env, rationale=rationale)
+        return env
 
     doc = document_service.get_document(doc_id)
     if doc is None:
-        return {"ok": False, "op": op_name, "result": {},
-                "error": NoSuchDocument(f"no document {doc_id!r}").to_dict()}
+        env = {"ok": False, "op": op_name, "result": {}, "warnings": [],
+               "error": NoSuchDocument(f"no document {doc_id!r}").to_dict()}
+        trajectories.record_step(op_name, doc_id, args, env, rationale=rationale)
+        return env
 
     mutates = op.kind == "mutate"
     before = observation.snapshot(doc)
+    obs_before = observation.summarize(doc)
     # Only a mutating op can need rolling back, and only then is the copy worth it.
     tree_before = copy.deepcopy(doc.feature_tree) if (mutates and rollback_on_eval_error) else None
+
+    def _elapsed_ms() -> float:
+        return round((time.perf_counter() - started) * 1000, 2)
 
     try:
         result = op.handler(doc_id, args or {})
@@ -870,10 +882,15 @@ def execute(
         if isinstance(err, InternalError):
             _LOGGER.exception("operation %s failed unexpectedly", op_name)
         after_doc = document_service.get_document(doc_id)
-        return {
+        env = {
             "ok": False, "op": op_name, "result": {}, "error": err.to_dict(), "warnings": [],
             "state": observation.summarize(after_doc) if (include_state and after_doc) else None,
         }
+        # A failed call is training data too — arguably the most valuable kind,
+        # since it is what teaches recovery.
+        trajectories.record_step(op_name, doc_id, args, env, obs_before=obs_before,
+                                 latency_ms=_elapsed_ms(), rationale=rationale)
+        return env
 
     after_doc = document_service.get_document(doc_id)
     envelope: Dict[str, Any] = {
@@ -901,4 +918,6 @@ def execute(
         if include_state:
             envelope["state"] = observation.summarize(after_doc)
 
+    trajectories.record_step(op_name, doc_id, args, envelope, obs_before=obs_before,
+                             latency_ms=_elapsed_ms(), rationale=rationale)
     return envelope

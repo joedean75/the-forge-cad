@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.routers import llm, documents, machine, operations, sketch, auth, assemblies, collab
+from app.routers import llm, documents, machine, operations, sketch, auth, assemblies, collab, trajectories
 from app.services import accounts, persistence
 
 _LOGGER = logging.getLogger(__name__)
@@ -166,6 +166,7 @@ app.include_router(machine.router)
 app.include_router(operations.router)
 app.include_router(sketch.router)
 app.include_router(auth.router)
+app.include_router(trajectories.router)
 
 
 @app.get("/api/health")

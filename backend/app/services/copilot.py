@@ -28,51 +28,15 @@ MAX_STEPS_CAP = 16
 Planner = Callable[[str, List[dict], dict], dict]
 
 
-_SKIP_PARAM_KEYS = {"children", "profile", "sketch"}
-
-
-def _trim_params(params: dict) -> dict:
-    """Feature params minus heavy/structural keys — enough for the agent to edit."""
-    return {k: v for k, v in (params or {}).items() if k not in _SKIP_PARAM_KEYS}
-
-
 def _doc_summary(doc) -> dict:
     """Compact, LLM-friendly snapshot of the current body.
 
-    Each feature carries its *current* params so the agent edits the real
-    structure (e.g. a box's ``size: {x,y,z}``) instead of guessing.
+    Lives in ``services.observation`` now: the same summary is what every
+    operation returns as ``state``, so the planner and the API cannot drift.
     """
-    feats: List[dict] = []
+    from app.services import observation
 
-    def walk(node: dict) -> None:
-        feats.append({
-            "id": node.get("id"),
-            "type": node.get("type"),
-            "name": node.get("name"),
-            "params": _trim_params(node.get("params", {})),
-        })
-        for child in node.get("params", {}).get("children", []) or []:
-            walk(child)
-
-    root = (doc.feature_tree or {}).get("root")
-    if root:
-        walk(root)
-
-    d = doc.derived
-    bbox_mm = None
-    if d.bbox is not None:
-        bbox_mm = {
-            "x": round((d.bbox.max.x - d.bbox.min.x) * 1000, 2),
-            "y": round((d.bbox.max.y - d.bbox.min.y) * 1000, 2),
-            "z": round((d.bbox.max.z - d.bbox.min.z) * 1000, 2),
-        }
-    return {
-        "name": doc.name,
-        "features": feats,
-        "bbox_size_mm": bbox_mm,
-        "mass_kg": round(d.mass, 4) if d.mass else 0.0,
-        "error": d.error,
-    }
+    return observation.summarize(doc)
 
 
 def _catalog_text() -> str:
@@ -153,10 +117,20 @@ def run(
     the loop as a background job can expose live progress.
     Returns ``{steps, document, summary}``.
     """
+    from app.services import trajectories
+
     planner = planner or _plan_next
     max_steps = max(1, min(int(max_steps), MAX_STEPS_CAP))
     transcript: List[dict] = []
     final_summary: Optional[str] = None
+
+    # A copilot run is the archetypal training example: a natural-language goal
+    # and the operation sequence that satisfied it. It was previously discarded
+    # when the process ended. `execute` records each step into this trajectory.
+    doc0 = document_service.get_document(doc_id)
+    trajectory_id = trajectories.start(
+        doc_id, goal=goal, kind="copilot", actor="copilot",
+        owner_id=getattr(doc0, "owner_id", None))
 
     def note(entry: dict) -> None:
         transcript.append(entry)
@@ -197,19 +171,26 @@ def run(
                 note({"kind": "error", "error": f"stopped: {exc}"})
                 break
 
-        try:
-            result = cad_operations.dispatch(op, doc_id, args)
-            note({"kind": "op", "op": op, "args": args, "ok": True,
-                               "rationale": rationale, "result": _trim_result(result)})
-        except Exception as exc:
-            note({"kind": "op", "op": op, "args": args, "ok": False,
-                               "error": str(exc), "rationale": rationale})
+        env = cad_operations.execute(op, doc_id, args, rationale=rationale or "")
+        entry = {"kind": "op", "op": op, "args": args, "ok": env["ok"],
+                 "rationale": rationale, "result": _trim_result(env.get("result") or {})}
+        if env.get("error"):
+            # The planner is told to react to failures, so give it the typed code
+            # and message rather than a stringified exception.
+            entry["error"] = f"{env['error']['code']}: {env['error']['message']}"
+        if env.get("warnings"):
+            entry["warnings"] = env["warnings"]
+        if env.get("delta"):
+            entry["delta"] = env["delta"]
+        note(entry)
 
     doc = document_service.get_document(doc_id)
     if final_summary is None:
         n_ok = sum(1 for s in transcript if s.get("kind") == "op" and s.get("ok"))
         final_summary = f"Ran {n_ok} operation(s) toward: {goal}"
-    return {"steps": transcript, "document": doc, "summary": final_summary}
+    trajectories.finish(trajectory_id, outcome="done", summary=final_summary)
+    return {"steps": transcript, "document": doc, "summary": final_summary,
+            "trajectory_id": trajectory_id}
 
 
 _HEAVY_KEYS = {"document", "mesh_url", "feature_tree", "profile", "sketch"}

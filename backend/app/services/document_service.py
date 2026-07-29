@@ -260,6 +260,7 @@ def create_document(
         created_at=now,
         updated_at=now,
         dimensions=dimensions,
+        source_prompt=(prompt or "").strip() or None,
     )
     DOCUMENTS[doc_id] = doc
     evaluate_document(doc, resolution=resolution)
