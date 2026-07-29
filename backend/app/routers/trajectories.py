@@ -73,6 +73,39 @@ def export_jsonl(
         "Content-Disposition": 'attachment; filename="forge_trajectories.jsonl"'})
 
 
+@router.post("/decompile")
+def decompile(
+    acc: accounts.Account = Depends(current_account),
+    doc_id: Optional[str] = Query(None, description="one document; omit to convert every visible one"),
+    resolution: int = Query(48, ge=16, le=256,
+                            description="meshing resolution used to verify the replay"),
+):
+    """Recover the operation sequence that builds a document, and record it.
+
+    This is how an existing corpus becomes training data: text-to-CAD writes a
+    whole feature tree in one shot, so those documents exercise the action space
+    not at all. A sequence is only kept if replaying it reproduces the original
+    geometry exactly — anything that does not is reported, never exported.
+    """
+    from app.services import decompiler
+
+    if doc_id:
+        doc = document_service.get_document(doc_id)
+        if doc is None or not document_service.can_access(doc, acc.id):
+            raise HTTPException(status_code=404, detail={
+                "code": "NO_SUCH_DOCUMENT", "message": "Document not found"})
+        return decompiler.decompile_document(doc_id, resolution=resolution)
+
+    results = []
+    for summary in document_service.list_documents(owner_id=acc.id):
+        outcome = decompiler.decompile_document(summary.id, resolution=resolution)
+        results.append({"doc_id": summary.id, "name": summary.name, "ok": outcome["ok"],
+                        "reason": outcome.get("reason"), "n_steps": outcome.get("n_steps", 0),
+                        "trajectory_id": outcome.get("trajectory_id")})
+    return {"total": len(results), "recovered": sum(1 for r in results if r["ok"]),
+            "results": results}
+
+
 @router.get("/{trajectory_id}")
 def get_trajectory(trajectory_id: str, acc: accounts.Account = Depends(current_account)):
     record = trajectories.get(trajectory_id)
