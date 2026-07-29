@@ -28,8 +28,20 @@ _GAP = 24.0          # gap between views, mm
 Polyline = List[Tuple[float, float]]
 
 
-def _occupancy(doc) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Sample the body into a boolean occupancy grid; return (occ, lo_mm, cell_mm)."""
+def _field(doc) -> Tuple[np.ndarray, np.ndarray, float]:
+    """Sample the body's signed distance field; return (values, lo_mm, cell_mm).
+
+    Values rather than a boolean occupancy mask. A mask forces the outline onto
+    cell boundaries, so a dimension is only correct to within a cell — and when a
+    sample point lands exactly on the surface, ``sdf <= 0`` counts it as inside
+    and the silhouette grows by half a cell. (A 35 mm plate-and-boss came out
+    35.33 mm that way.) Contouring the field itself interpolates the crossing and
+    removes both errors.
+
+    The sampled box is padded by a couple of cells so the body never sits flush
+    against the grid edge: an interpolated contour needs an outside sample to
+    cross towards, which is also why the evaluator expands its own bounds.
+    """
     active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
     if doc.parameters:
         from app.services import parameters
@@ -39,39 +51,43 @@ def _occupancy(doc) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     b = sdf.bounds()
     lo = np.asarray(b.min, dtype=float)
     hi = np.asarray(b.max, dtype=float)
-    size = np.maximum(hi - lo, 1e-6)
-    cell = float(size.max()) / _GRID
-    dims = np.maximum((size / cell).astype(int) + 1, 2)
-    xs = lo[0] + (np.arange(dims[0]) + 0.5) * cell
-    ys = lo[1] + (np.arange(dims[1]) + 0.5) * cell
-    zs = lo[2] + (np.arange(dims[2]) + 0.5) * cell
-    gx, gy, gz = np.meshgrid(xs, ys, zs, indexing="ij")
+    cell = float(np.maximum(hi - lo, 1e-6).max()) / _GRID
+    lo = lo - 2.0 * cell
+    hi = hi + 2.0 * cell
+    dims = np.maximum(((hi - lo) / cell).astype(int) + 1, 2)
+    axes = [lo[i] + np.arange(dims[i]) * cell for i in range(3)]
+    gx, gy, gz = np.meshgrid(*axes, indexing="ij")
     pts = np.column_stack([gx.ravel(), gy.ravel(), gz.ravel()])
-    occ = (sdf(pts) <= 0.0).reshape(dims)
-    return occ, lo * MM, cell * MM
+    values = sdf(pts).reshape(dims)
+    return values, lo * MM, cell * MM
 
 
-def _contours(mask: np.ndarray, o0: float, o1: float, cell: float) -> List[Polyline]:
-    """Marching-squares outlines of a 2D boolean mask, in paper mm."""
-    if not mask.any():
+def _contours(field: np.ndarray, o0: float, o1: float, cell: float) -> List[Polyline]:
+    """Marching-squares outlines of a 2D signed field, in paper mm."""
+    if field.min() > 0.0:
         return []
-    padded = np.pad(mask.astype(float), 1)  # close outlines at the border
     out: List[Polyline] = []
-    for c in measure.find_contours(padded, 0.5):
-        c = measure.approximate_polygon(c, tolerance=0.6)
+    for c in measure.find_contours(field, 0.0):
+        # Simplify in index units. Straight edges collapse losslessly however
+        # tight this is; on a curve it bounds the error, so keep it well under a
+        # cell now that the contour itself is accurate.
+        c = measure.approximate_polygon(c, tolerance=0.15)
         if len(c) < 3:
             continue
-        out.append([(o0 + (i - 1) * cell, o1 + (j - 1) * cell) for i, j in c])
+        out.append([(o0 + i * cell, o1 + j * cell) for i, j in c])
     return out
 
 
 # View = (label, axis projected away, horizontal grid-axis, vertical grid-axis,
 #         world-mm origins for those axes).
-def _view_outline(occ, lo, cell, drop: int, ha: int, va: int) -> List[Polyline]:
-    mask = occ.any(axis=drop)
-    if ha > va:  # keep (horizontal, vertical) ordering of the projected mask
-        mask = mask.T
-    return _contours(mask, lo[ha], lo[va], cell)
+def _view_outline(field, lo, cell, drop: int, ha: int, va: int) -> List[Polyline]:
+    # The silhouette of a projection is the closest approach along the view ray:
+    # negative wherever any point on that ray is inside the body. It is the
+    # signed-field counterpart of OR-ing an occupancy mask, and it interpolates.
+    projected = field.min(axis=drop)
+    if ha > va:  # keep (horizontal, vertical) ordering of the projected field
+        projected = projected.T
+    return _contours(projected, lo[ha], lo[va], cell)
 
 
 def _bounds(polys: List[Polyline]) -> Tuple[float, float, float, float]:
@@ -84,24 +100,34 @@ def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _model_size_mm(doc) -> Tuple[float, float, float]:
+    """The body's overall size from the evaluated bbox — the authoritative figure."""
+    b = doc.derived.bbox
+    if b is None:
+        return (0.0, 0.0, 0.0)
+    return (round((b.max.x - b.min.x) * MM, 3),
+            round((b.max.y - b.min.y) * MM, 3),
+            round((b.max.z - b.min.z) * MM, 3))
+
+
 def generate_drawing(doc_id: str, section: bool = True) -> Dict:
     """Build a dimensioned multi-view SVG drawing. Returns svg + metadata."""
     doc = document_service.get_document(doc_id)
     if doc is None:
         raise KeyError(doc_id)
     document_service.ensure_derived(doc)
-    occ, lo, cell = _occupancy(doc)
+    field, lo, cell = _field(doc)
+    model_mm = _model_size_mm(doc)
 
     # Third-angle standard views. Grid axes: 0=X, 1=Y, 2=Z.
-    front = _view_outline(occ, lo, cell, drop=1, ha=0, va=2)   # look -Y → X right, Z up
-    top = _view_outline(occ, lo, cell, drop=2, ha=0, va=1)     # look -Z → X right, Y up
-    right = _view_outline(occ, lo, cell, drop=0, ha=1, va=2)   # look -X → Y right, Z up
+    front = _view_outline(field, lo, cell, drop=1, ha=0, va=2)  # look -Y → X right, Z up
+    top = _view_outline(field, lo, cell, drop=2, ha=0, va=1)    # look -Z → X right, Y up
+    right = _view_outline(field, lo, cell, drop=0, ha=1, va=2)  # look -X → Y right, Z up
 
     section_polys: List[Polyline] = []
     if section:
-        mid = occ.shape[1] // 2
-        smask = occ[:, mid, :]
-        section_polys = _contours(smask, lo[0], lo[2], cell)
+        mid = field.shape[1] // 2
+        section_polys = _contours(field[:, mid, :], lo[0], lo[2], cell)
 
     fb = _bounds(front); tb = _bounds(top); rb = _bounds(right)
     fw, fh = fb[2] - fb[0], fb[3] - fb[1]
@@ -162,10 +188,13 @@ def generate_drawing(doc_id: str, section: bool = True) -> Dict:
             continue
         svg.append(path(place(polys, ox, oy, bx0, by1), "outline"))
         svg.append(f'<text class="lbl" x="{ox:.1f}" y="{oy + h + 5:.1f}">{label}</text>')
-        # Overall width/height dimensions on the front view.
+        # Overall width/height dimensions on the front view. The dimension *line*
+        # spans the drawn view, but the number printed against it comes from the
+        # evaluated body — on a manufacturing drawing the figure has to be the
+        # part's real dimension, not one measured off a traced silhouette.
         if label == "FRONT":
-            svg.append(_dim_h(ox, oy + h + 9, w))
-            svg.append(_dim_v(ox - 6, oy, h))
+            svg.append(_dim_h(ox, oy + h + 9, w, label=model_mm[0]))
+            svg.append(_dim_v(ox - 6, oy, h, label=model_mm[2]))
 
     if section_polys:
         svg.append(path(place(section_polys, x_sec, y_sec, sb[0], sb[3]), "sec"))
@@ -199,7 +228,14 @@ def generate_drawing(doc_id: str, section: bool = True) -> Dict:
     return {
         "svg": "\n".join(svg),
         "views": {"front": len(front), "top": len(top), "right": len(right), "section": len(section_polys)},
-        "bbox_mm": {"width": round(float(fw), 2), "depth": round(float(th), 2), "height": round(float(fh), 2)},
+        # From the evaluated body, not measured off the traced views, so these
+        # agree with bounding_box/mass_properties rather than drifting by the
+        # contouring error.
+        "bbox_mm": {"width": model_mm[0], "depth": model_mm[1], "height": model_mm[2]},
+        # What the views actually traced. Equal to bbox_mm to within the
+        # contour tolerance; a divergence means the silhouette is off.
+        "traced_mm": {"width": round(float(fw), 3), "depth": round(float(th), 3),
+                      "height": round(float(fh), 3)},
         "material": mat.name,
     }
 
@@ -238,12 +274,14 @@ def _tolerance_block(doc, x: float, y: float) -> str:
     return f'<g>{rows}</g>'
 
 
-def _dim_h(x: float, y: float, length: float) -> str:
+def _dim_h(x: float, y: float, length: float, label: Optional[float] = None) -> str:
+    text = f"{label if label is not None else length:.1f}"
     return (f'<g><line class="dim" x1="{x:.1f}" y1="{y:.1f}" x2="{x+length:.1f}" y2="{y:.1f}"/>'
-            f'<text class="dimt" x="{x+length/2:.1f}" y="{y-1:.1f}" text-anchor="middle">{length:.1f}</text></g>')
+            f'<text class="dimt" x="{x+length/2:.1f}" y="{y-1:.1f}" text-anchor="middle">{text}</text></g>')
 
 
-def _dim_v(x: float, y: float, length: float) -> str:
+def _dim_v(x: float, y: float, length: float, label: Optional[float] = None) -> str:
+    text = f"{label if label is not None else length:.1f}"
     return (f'<g><line class="dim" x1="{x:.1f}" y1="{y:.1f}" x2="{x:.1f}" y2="{y+length:.1f}"/>'
             f'<text class="dimt" x="{x-1:.1f}" y="{y+length/2:.1f}" text-anchor="middle" '
-            f'transform="rotate(-90 {x-1:.1f} {y+length/2:.1f})">{length:.1f}</text></g>')
+            f'transform="rotate(-90 {x-1:.1f} {y+length/2:.1f})">{text}</text></g>')

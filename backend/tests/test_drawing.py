@@ -79,3 +79,63 @@ def test_tolerances_and_gdt_render_on_drawing():
     assert "ISO 2768-m" in svg
     assert "Bore" in svg and "H7/g6" in svg
     assert "Top face" in svg  # GD&T frame rendered
+
+
+# ------------------------------------------------- dimensional truthfulness --
+
+def _sizes(doc_id):
+    """(model bbox, traced silhouette) in mm for one document."""
+    out = client.get(f"/api/documents/{doc_id}/drawing").json()
+    return out["bbox_mm"], out["traced_mm"]
+
+
+def test_the_traced_views_match_the_body_they_depict():
+    """A dimension read off the print has to be the dimension of the part.
+
+    The views used to be a boolean occupancy mask contoured at 0.5, which pinned
+    the outline to cell boundaries; where a sample landed exactly on the surface
+    `sdf <= 0` counted it inside and the silhouette gained half a cell. A 35 mm
+    plate-and-boss came out 35.33 mm. Contouring the signed field interpolates
+    the crossing instead.
+    """
+    doc_id = _bracket()
+    model, traced = _sizes(doc_id)
+    for axis in ("width", "depth", "height"):
+        assert abs(traced[axis] - model[axis]) < 0.05, f"{axis}: {traced} vs {model}"
+
+
+def test_a_body_whose_top_face_lands_on_a_sample_plane_is_not_oversized():
+    """The exact case that produced the half-cell error: a boss flush with the grid top."""
+    doc_id = client.post("/api/documents", json={"resolution": 48}).json()["id"]
+    # The first union replaces the blank document's placeholder base; the second
+    # unions onto it. Editing the placeholder instead would let it be replaced.
+    client.post(f"/api/documents/{doc_id}/op", json={
+        "op": "add_primitive", "args": {"shape": "box", "params": {
+            "size": {"x": .08, "y": .05, "z": .01}, "center": {"x": 0, "y": 0, "z": 0}}}})
+    client.post(f"/api/documents/{doc_id}/op", json={
+        "op": "add_primitive", "args": {"shape": "cylinder", "params": {
+            "radius": .012, "height": .03, "center": {"x": .02, "y": 0, "z": .015}}}})
+
+    # Plate spans z -5..+5, boss top at +30 → 35 mm overall, with the boss top
+    # landing exactly on a sample plane.
+    model, traced = _sizes(doc_id)
+    assert abs(model["height"] - 35.0) < 0.01
+    assert abs(traced["height"] - 35.0) < 0.05
+
+
+def test_the_printed_dimension_is_the_models_own_figure():
+    doc_id = _bracket()
+    out = client.get(f"/api/documents/{doc_id}/drawing").json()
+    # 80 mm wide plate: the text against the dimension line, not a traced length.
+    assert f'>{out["bbox_mm"]["width"]:.1f}<' in out["svg"]
+
+
+def test_drawing_dimensions_agree_with_the_bounding_box_operation():
+    """Two answers to 'how big is it' must not disagree."""
+    doc_id = _bracket()
+    bbox = client.post(f"/api/documents/{doc_id}/op",
+                       json={"op": "bounding_box", "args": {}}).json()["result"]["size_mm"]
+    model, _ = _sizes(doc_id)
+    assert abs(model["width"] - bbox["x"]) < 0.01
+    assert abs(model["depth"] - bbox["y"]) < 0.01
+    assert abs(model["height"] - bbox["z"]) < 0.01
