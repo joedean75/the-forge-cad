@@ -561,6 +561,33 @@ def _mass_properties(doc_id, args):
     return mass_properties.mass_properties(doc_id)
 
 
+@operation("check_geometry", "query", "Validate the body as a solid: non-empty, watertight, consistent winding, "
+           "single connected body. Use this to verify an edit produced real geometry before "
+           "going on to manufacturing steps.",
+           {"resolution": {"type": "number", "default": 128,
+           "description": "meshing resolution for the check"}})
+def _check_geometry(doc_id, args):
+    from app.services import geometry_check
+
+    return geometry_check.check_document(doc_id, resolution=int(args.get("resolution", 128)))
+
+
+@operation("dfm", "query", "Design-for-manufacture report for additive (LPBF): overhang angle, minimum "
+           "feature size, support volume, printability score and an indicative quote.",
+           {"build_axis": {"enum": ["auto", "x", "y", "z"], "default": "auto"},
+           "resolution": {"type": "number", "default": 128}})
+def _dfm(doc_id, args):
+    """DFM was reachable only over REST, so an agent driving the op catalog could
+    build a part but never check whether it could be made."""
+    from app.services import document_analysis
+
+    _get(doc_id)  # typed NoSuchDocument rather than the router's HTTPException
+    report = document_analysis.dfm_document(
+        doc_id, build_axis=str(args.get("build_axis", "auto")),
+        resolution=int(args.get("resolution", 128)))
+    return report.model_dump()
+
+
 @operation("profile_cut", "query", "2D laser/plasma/waterjet cut of the part outline from sheet, kerf-compensated. "
            "Fetch G-code at GET /api/documents/{id}/profile-cut.gcode.",
            {"kerf_mm": {"type": "number", "default": 0.2}, "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
@@ -684,13 +711,18 @@ def _bbox_summary(doc) -> dict:
             "z": round((b.max.z - b.min.z) * 1000, 2)}
 
 
-@operation("slice_part", "query", "Slice the body for FDM 3D printing (SDF slicer). Returns layer/time/filament "
+@operation("slice_part", "mutate", "Slice the body for FDM 3D printing (SDF slicer). Returns layer/time/filament "
            "stats; the G-code is stored on the document for download or printing.",
            {"settings": {"type": "object",
            "description": "optional overrides: layer_height (mm), wall_count, "
            "infill (0..1), temp_nozzle, temp_bed, speed_print …"}})
 def _slice_part(doc_id, args):
-    """FDM-slice the body; stats come back, the G-code lands on the document."""
+    """FDM-slice the body; stats come back, the G-code lands on the document.
+
+    Registered "mutate" because it writes ``derived.cam``. As a "query" it
+    bypassed the editor-access check and the quota meter, and returned
+    ``document=None`` — so a caller never saw the G-code it had just produced.
+    """
     import base64
 
     from app.models.schemas import CamResult
