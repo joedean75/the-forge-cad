@@ -62,6 +62,15 @@ _MODIFIERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "TransformFeature": ("transform", ("translate", "rotate", "scale")),
 }
 
+# Features that act on named topology. Their stored references carry the whole
+# descriptor, but the operation takes ids — and since the body is rebuilt
+# identically on replay, the ids it produces are the same ones.
+_TOPOLOGY_OPS = {
+    "EdgeFilletFeature": ("fillet_edges", "edges", "radius"),
+    "EdgeChamferFeature": ("chamfer_edges", "edges", "distance"),
+    "FaceShellFeature": ("shell_faces", "faces", "thickness"),
+}
+
 # Bodies whose geometry lives in a cached voxel grid, not in parameters.
 _OPAQUE = {"ImportFeature", "OptimizeFeature"}
 
@@ -120,6 +129,14 @@ def _emit_body(node: dict, steps: List[dict]) -> int:
         _emit_body(children[0], steps)
         params = node.get("params") or {}
         return _push(steps, "add_mirror", _pick(params, ("plane", "offset")))
+
+    if node_type in _TOPOLOGY_OPS:
+        children = node_children(node)
+        if not children:
+            raise Unsupported(f"{node_type} with no children")
+        _emit_body(children[0], steps)
+        op_name, args = _topology_args(node)
+        return _push(steps, op_name, args)
 
     if node_type in _MODIFIERS:
         children = node_children(node)
@@ -182,6 +199,17 @@ def _emit_leaf(node: dict, operation: str, steps: List[dict]) -> int:
         return _push(steps, op_name, args)
 
     raise Unsupported(f"no operation builds {node_type}")
+
+
+def _topology_args(node: dict):
+    """A fillet/chamfer/shell as the operation that would create it."""
+    op_name, selection_key, size_key = _TOPOLOGY_OPS[node["type"]]
+    params = node.get("params") or {}
+    references = params.get(selection_key) or []
+    ids = [r.get("id") for r in references if isinstance(r, dict) and r.get("id")]
+    if not ids:
+        raise Unsupported(f"{node['type']} has no resolvable selection to replay")
+    return op_name, {selection_key: ids, size_key: params.get(size_key)}
 
 
 def _modifier_args(node: dict) -> dict:

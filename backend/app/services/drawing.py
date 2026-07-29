@@ -146,7 +146,17 @@ def _field(doc) -> Tuple[np.ndarray, np.ndarray, float]:
         from app.services import parameters
         scope, _ = parameters.resolve_values(doc.parameters)
         active = parameters.resolve_tree(active, scope)
-    sdf = sdf_from_feature(FeatureTree.from_dict(active).root)
+
+    root = FeatureTree.from_dict(active).root
+    try:
+        sdf = sdf_from_feature(root)
+    except ValueError:
+        # A body that only the exact kernel can build — a real edge fillet, a
+        # shell through a named face — has no field form at all. Projection and
+        # sectioning here are field operations, so one is derived from the
+        # evaluated mesh instead. Printed dimensions still come from
+        # `derived.bbox`, so the figures stay exact either way.
+        sdf = _field_from_mesh(doc)
     b = sdf.bounds()
     lo = np.asarray(b.min, dtype=float)
     hi = np.asarray(b.max, dtype=float)
@@ -157,6 +167,34 @@ def _field(doc) -> Tuple[np.ndarray, np.ndarray, float]:
     gx, gy, gz = np.meshgrid(*axes, indexing="ij")
     values = sdf(np.column_stack([gx.ravel(), gy.ravel(), gz.ravel()])).reshape(dims)
     return values, lo * MM, cell * MM
+
+
+def _field_from_mesh(doc):
+    """A distance field for a body that has no analytic one, via its mesh.
+
+    Voxelised at roughly twice the drawing grid so the traced outline is not the
+    thing limiting accuracy, then run through the same `GridSDF` (occupancy →
+    EDT → trilinear) that carries imported and optimizer-generated bodies. This
+    is the one place a drawing is quantised rather than exact; it applies only to
+    edge-filleted, chamfered and face-shelled parts, and only to the *outline* —
+    the dimension figures come from the evaluated bounding box regardless.
+    """
+    import trimesh
+
+    from app.cad_kernel.evaluator.sdf import GridSDF
+    from app.cad_kernel.kernel import Kernel
+
+    mesh = Kernel.tessellate(document_service.get_solid(doc.id))
+    body = trimesh.Trimesh(vertices=np.asarray(mesh.vertices, dtype=float),
+                           faces=np.asarray(mesh.faces, dtype=np.int64), process=False)
+    extents = np.maximum(body.extents, 1e-6)
+    pitch = float(extents.max()) / (2 * _GRID)
+
+    voxels = body.voxelized(pitch=pitch).fill()
+    density = np.asarray(voxels.matrix, dtype=float)
+    origin = np.asarray(voxels.bounds, dtype=float).mean(axis=0)
+    size = np.asarray(density.shape, dtype=float) * pitch
+    return GridSDF(density, origin, size, threshold=0.5)
 
 
 def _contours(field2d: np.ndarray, o0: float, o1: float, cell: float) -> List[Polyline]:

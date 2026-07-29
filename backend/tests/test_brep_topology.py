@@ -248,3 +248,52 @@ def test_the_new_operations_are_published_with_required_arguments():
         assert set(catalog[name]["schema"]["required"]) == required
     assert catalog["list_faces"]["kind"] == "query"
     assert catalog["fillet_edges"]["kind"] == "mutate"
+
+
+def test_a_filleted_part_decompiles_back_into_its_operation_sequence():
+    """Edge selections have to survive the round-trip too, or every part with a
+    real fillet drops out of the training corpus."""
+    from app.services import decompiler
+
+    doc_id = _plate()
+    ops.execute("fillet_edges", doc_id, {"edges": _vertical_edges(doc_id), "radius": .005})
+
+    steps = decompiler.decompile(docs.get_document(doc_id).feature_tree)
+    assert [s["op"] for s in steps] == ["add_primitive", "fillet_edges"]
+    assert len(steps[1]["args"]["edges"]) == 4
+
+    outcome = decompiler.decompile_document(doc_id, resolution=48, record=False)
+    assert outcome["ok"], outcome.get("reason")
+
+
+def test_a_body_only_the_exact_kernel_can_build_can_still_be_drawn():
+    """Drawings project a distance field, and an edge fillet has none.
+
+    Without a bridge, the parts the exact kernel exists to enable are exactly the
+    ones that cannot be documented — which would make the feature useless.
+    """
+    from app.services import drawing
+
+    doc_id = _plate()
+    ops.execute("fillet_edges", doc_id, {"edges": _vertical_edges(doc_id), "radius": .005})
+
+    out = drawing.generate_drawing(doc_id, spec={"views": ["front", "top"], "sections": []})
+    assert out["views"]["front"] >= 1
+    assert out["views"]["top"] >= 1
+    # The printed figures still come from the evaluated body, so they stay exact
+    # even though the traced outline went through a voxel grid.
+    assert out["bbox_mm"]["width"] == pytest.approx(80.0, abs=1e-3)
+    assert out["bbox_mm"]["height"] == pytest.approx(20.0, abs=1e-3)
+
+
+def test_a_shelled_body_can_be_sectioned():
+    from app.services import drawing
+
+    doc = docs.create_document(name="Box", resolution=48, owner_id=None)
+    ops.dispatch("add_primitive", doc.id, {"shape": "box", "params": {"size": V(.06, .04, .03)}})
+    ops.execute("shell_faces", doc.id, {"faces": _top_face(doc.id), "thickness": .002})
+
+    out = drawing.generate_drawing(doc.id, spec={"views": ["front"],
+                                                 "sections": [{"plane": "xz", "label": "A-A"}]})
+    # Cutting through a hollow box gives two walls, not one solid block.
+    assert out["sections"][0]["contours"] >= 1

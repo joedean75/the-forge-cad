@@ -95,6 +95,7 @@ Note this path emits a **whole tree in one shot** — it never touches the opera
 
 Three things there are easy to undo by accident:
 
+- **A body only the exact kernel can build has no field to project.** `_field` falls back to voxelising its mesh through `GridSDF` — the one place a drawing is quantised. It affects only the traced outline of edge-filleted/chamfered/shelled parts; the printed figures come from `derived.bbox` either way.
 - **Outlines contour the signed field, never a boolean occupancy mask.** A mask pins the outline to cell boundaries, and where a sample lands exactly on the surface `sdf <= 0` counts it inside and the silhouette gains half a cell — a 35 mm plate-and-boss drew as 35.33 mm.
 - **Printed dimension figures come from `derived.bbox`**, not from measuring the traced silhouette, so a drawing and `bounding_box` cannot disagree about the part's size. Dimension endpoints are given in model mm on the view's own two axes, so the figure stays true at any scale.
 - **Hidden lines come from `_occluded`**: along each ray, the largest field value between where it enters and leaves the body. Solid all the way through and that stays negative; pass through a void and it goes positive. The `min_gap` floor is load-bearing — without it a ray grazing the surface reads its own boundary sample as a cavity and the view fills with spurious dashes.
