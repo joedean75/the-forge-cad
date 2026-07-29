@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A browser-based replica of the Forge (The Forge) generative-design workflow. The UI is a presentation-layer mockup, but the backend runs a **real 3D SIMP topology optimizer** and a **from-scratch SDF-based CAD kernel** — those are the parts with real substance, not stubs.
 
+The operation catalog is also intended as the **action space for an LLM agent**, and increasingly as something a model can be fine-tuned against: typed and validated arguments, results that say what changed, verifiers that can score a part, and recorded trajectories. Changes to that surface should keep it machine-checkable — see the note in Architecture.
+
+**What the kernel cannot do, by construction.** There is no B-rep: no OpenCascade, no Build123d, no CadQuery. Marching cubes returns a `Solid` with one `Face` and `surface=None`, so all face topology is destroyed at meshing, and face/edge ids are minted fresh (`uuid4`) on every evaluation. Consequences worth knowing before promising anything: **no edge or face is addressable** — `services/datum.py` resolves symbolic `{feature_id, "top"|"bottom"|…}` references against live geometry instead; **`FilletFeature`/`ChamferFeature` are misnamed** — they are smooth booleans between children, so "fillet the top edge" is not expressible at any API quality; **`ShellFeature` hollows everything** (`abs(d) - t/2`) with no face removal, so there is no open shell; and **STEP export is faceted triangles** in AP214 clothing, valid but not parametrically editable downstream. `ROADMAP.md` horizon 2 is the hybrid OpenCascade kernel that lifts these.
+
 ## Commands
 
 Backend (run from `backend/`):
@@ -28,6 +32,8 @@ npm run lint       # oxlint
 Both at once: `./start.sh` (expects the backend venv to already exist). Or `docker-compose up`.
 
 There is no frontend test suite; `npm run build` is the type-check gate.
+
+**Driving it headlessly** (rollouts, dataset generation): `tests/conftest.py` is the working bootstrap — temp SQLite via `DATABASE_URL`, empty `FORGE_DATA_DIR`, `FORGE_RATE_LIMIT=0`, and `FORGE_AUTH_REQUIRED` left unset so every request is attributed to a shared enterprise dev account. Call `cad_operations.execute` directly to skip HTTP, auth and quota metering entirely. Over HTTP, `POST /api/documents/{id}/op?envelope=1` returns failures as 200 bodies instead of raising. Two things bite at volume: the monthly op quota (metered per mutating op) and `capped_resolution`, which silently changes geometry fidelity with the plan.
 
 ## Architecture
 
@@ -66,6 +72,8 @@ The older linear 7-step flow (`requirements → generative → topology → …`
 **Generative optimization is async + in-memory.** `POST /api/documents/{id}/optimize` spawns a FastAPI `BackgroundTask` and returns a job id; the frontend polls `/api/documents/{id}/optimize/{job_id}`. Jobs live in a bounded process-local dict in `routers/documents.py`. The actual work is `services/simp_optimizer.py` — a real SIMP compliance-minimization solve on a hexahedral voxel mesh (density ops use PyTorch/CUDA when available; the sparse linear solve uses scipy). The result folds back into the tree as an `OptimizeFeature` and stays editable.
 
 **Text-to-CAD has two engines.** `services/text_to_cad_engine.generate_part_tree` (reached from `document_service.create_document(prompt=…)`) produces the feature tree. Geometry comes from a rule-based, credential-free parser (`services/text_to_cad_geometry.py`) by default; an **optional** OpenAI-style LLM client (`services/llm_client.py`) is used only when configured. Text-to-assembly is `services/text_to_assembly.py`, reached from `/api/assemblies/from-prompt`. Anything touching this must degrade gracefully when no LLM key is set.
+
+Note this path emits a **whole tree in one shot** — it never touches the operation catalog, so it produces no tool-use data. `services/decompiler.py` is the bridge: it recovers the op sequence for any such tree and verifies it by replay. The document keeps its `source_prompt`, which is what makes the recovered sequence a training example rather than a log.
 
 **No canned shapes in the parser.** It reads dimensions, never subject nouns. A hardcoded "RC chassis" used to short-circuit any prompt containing `chassis`/`rc`/`rally`/`buggy` and return a fixed plate — and because `"rc" in prompt` is a substring test, *circle*, *arch*, *torch* and *force* all triggered it too. Adding a shape shortcut keyed on a word is how that happens; parse the numbers instead.
 
