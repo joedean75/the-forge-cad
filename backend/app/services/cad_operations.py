@@ -2,8 +2,10 @@
 
 Both the UI and an agent (via REST or the MCP server) drive geometry through
 this catalog rather than emitting whole trees. Each operation has a name, kind
-(query/mutate), a description, and a JSON-schema-ish params block so the surface
-is self-describing for LLM function-calling.
+(query/mutate), a description, and a parameter block that ``services.op_schema``
+turns into strict JSON Schema — so the surface is not merely self-describing but
+machine-checkable: arguments are validated before a handler runs, and a
+constrained decoder can be pointed straight at it.
 """
 
 from __future__ import annotations
@@ -42,6 +44,48 @@ class Operation:
 
 
 _VEC = {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"}}}
+_REQ_VEC = {**_VEC, "required": True}
+
+# `add_primitive` and `add_modifier` used to declare `params: {"type": "object"}`
+# — an opaque blob whose real shape lived only in prose. That is the one thing a
+# constrained decoder cannot work with and the likeliest place for a model to
+# invent key names. The union of every shape's / modifier's keys is spelled out
+# instead, with the description saying which ones apply where. Handlers still
+# apply their own per-shape defaults; this is about naming the vocabulary.
+_PRIMITIVE_PARAMS = {
+    "type": "object",
+    "description": "shape dimensions in metres; which keys apply depends on `shape`",
+    "properties": {
+        "size": {**_VEC, "description": "box only: full extents"},
+        "radius": {"type": "number", "description": "sphere / cylinder"},
+        "base_radius": {"type": "number", "description": "cone"},
+        "height": {"type": "number", "description": "cylinder / cone"},
+        "center": {**_VEC, "description": "all shapes; defaults to the origin"},
+        "axis": {**_VEC, "description": "cylinder / cone; defaults to +Z"},
+    },
+    "additionalProperties": False,
+}
+
+_MODIFIER_PARAMS = {
+    "type": "object",
+    "description": "modifier settings in metres; which keys apply depends on `modifier`",
+    "properties": {
+        "radius": {"type": "number", "description": "fillet / chamfer / hole"},
+        "thickness": {"type": "number", "description": "shell"},
+        "depth": {"type": "number", "description": "hole"},
+        "count": {"type": "integer", "description": "pattern"},
+        "spacing": {"type": "number", "description": "pattern"},
+        "kind": {"enum": ["linear", "circular"], "description": "pattern"},
+        "translate": {**_VEC, "description": "transform"},
+        "rotate": {**_VEC, "description": "transform: XYZ euler degrees"},
+        "scale": {"type": "number", "description": "transform"},
+        "center": {**_VEC, "description": "hole / pattern"},
+        "axis": {**_VEC, "description": "hole / pattern"},
+        "operation": {"enum": ["union", "subtract", "intersect"],
+                      "description": "fillet / chamfer: how the blend combines"},
+    },
+    "additionalProperties": False,
+}
 
 # Populated by @operation as each handler is defined, so a new operation is one
 # decorated function — the registry used to be a 180-line list sitting far from
@@ -129,7 +173,7 @@ def _list_features(doc_id, args):
 
 
 @operation("get_feature", "query", "Get one feature's full definition.",
-           {"feature_id": {"type": "string"}})
+           {"feature_id": {"type": "string", "required": True}})
 def _get_feature(doc_id, args):
     doc = _get(doc_id)
     fid = require(args, "feature_id")
@@ -155,7 +199,7 @@ def _bounding_box(doc_id, args):
 
 
 @operation("measure", "query", "Distance in mm between two points (metres).",
-           {"a": _VEC, "b": _VEC})
+           {"a": _REQ_VEC, "b": _REQ_VEC})
 def _measure(doc_id, args):
     a, b = require(args, "a"), require(args, "b")
     d = math.dist([a["x"], a["y"], a["z"]], [b["x"], b["y"], b["z"]])
@@ -163,9 +207,9 @@ def _measure(doc_id, args):
 
 
 @operation("add_primitive", "mutate", "Add a box/sphere/cylinder/cone, unioned or subtracted. Lengths in metres.",
-           {"shape": {"enum": ["box", "sphere", "cylinder", "cone"]},
+           {"shape": {"enum": ["box", "sphere", "cylinder", "cone"], "required": True},
            "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
-           "params": {"type": "object"}})
+           "params": _PRIMITIVE_PARAMS})
 def _add_primitive(doc_id, args):
     doc = _get(doc_id)
     prim = _make_primitive(require(args, "shape"), args.get("params"))
@@ -367,7 +411,7 @@ def _resolve_on_face(tree, args, params):
 
 @operation("add_sketch", "mutate", "Solve a constrained 2D sketch (points/lines/arcs/circles + constraints) and extrude the profile. "
            "Pass on_face to place the sketch on another feature's face so it follows that feature through edits.",
-           {"sketch": {"type": "object", "description": "{points, lines, arcs, circles, constraints}"},
+           {"sketch": {"type": "object", "required": True, "description": "{points, lines, arcs, circles, constraints}"},
            "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
            "depth": {"type": "number"}, "offset": {"type": "number"},
            "on_face": {"type": "object",
@@ -396,7 +440,8 @@ def _add_sketch(doc_id, args):
 
 
 @operation("update_sketch", "mutate", "Re-solve an existing sketch extrude with an edited sketch spec (and optional plane/offset/depth/on_face).",
-           {"feature_id": {"type": "string"}, "sketch": {"type": "object"},
+           {"feature_id": {"type": "string", "required": True},
+           "sketch": {"type": "object", "required": True},
            "plane": {"enum": ["xy", "xz", "yz"]}, "depth": {"type": "number"}, "offset": {"type": "number"},
            "on_face": {"type": "object", "description": "{feature_id, face} — see add_sketch"}})
 def _update_sketch(doc_id, args):
@@ -422,9 +467,9 @@ def _update_sketch(doc_id, args):
 
 @operation("add_modifier", "mutate", "Apply a modifier: fillet/chamfer/shell/hole/pattern/transform. By default it wraps the "
            "whole body; pass 'target' (a feature id) to apply it to one feature — e.g. pattern a single hole.",
-           {"modifier": {"enum": ["fillet", "chamfer", "shell", "hole", "pattern", "transform"]},
+           {"modifier": {"enum": ["fillet", "chamfer", "shell", "hole", "pattern", "transform"], "required": True},
            "target": {"type": "string", "description": "feature id to modify (default: whole body)"},
-           "params": {"type": "object"}})
+           "params": _MODIFIER_PARAMS})
 def _add_modifier(doc_id, args):
     doc = _get(doc_id)
     mod = _make_modifier(require(args, "modifier"), args.get("params"))
@@ -434,7 +479,9 @@ def _add_modifier(doc_id, args):
 
 
 @operation("set_feature_params", "mutate", "Change a feature's parameters (merged). Lengths in metres.",
-           {"feature_id": {"type": "string"}, "params": {"type": "object"}})
+           {"feature_id": {"type": "string", "required": True},
+           "params": {"type": "object", "required": True,
+           "description": "the same keys the feature already has — read them with get_feature first"}})
 def _set_feature_params(doc_id, args):
     doc = _get(doc_id)
     tree = feature_ops.set_params(doc.feature_tree, require(args, "feature_id"), require(args, "params"))
@@ -443,7 +490,7 @@ def _set_feature_params(doc_id, args):
 
 
 @operation("delete_feature", "mutate", "Remove a feature by id.",
-           {"feature_id": {"type": "string"}})
+           {"feature_id": {"type": "string", "required": True}})
 def _delete_feature(doc_id, args):
     doc = _get(doc_id)
     tree = feature_ops.remove_node(doc.feature_tree, require(args, "feature_id"))
@@ -452,7 +499,7 @@ def _delete_feature(doc_id, args):
 
 
 @operation("add_dimension", "mutate", "Add a point-to-point dimension (metres).",
-           {"a": _VEC, "b": _VEC, "label": {"type": "string"}})
+           {"a": _REQ_VEC, "b": _REQ_VEC, "label": {"type": "string"}})
 def _add_dimension(doc_id, args):
     from app.models.schemas import AddDimensionRequest
 
@@ -464,7 +511,7 @@ def _add_dimension(doc_id, args):
 
 
 @operation("set_feature_suppressed", "mutate", "Suppress or unsuppress a feature (skip it during regeneration without deleting).",
-           {"feature_id": {"type": "string"}, "suppressed": {"type": "boolean"}})
+           {"feature_id": {"type": "string", "required": True}, "suppressed": {"type": "boolean"}})
 def _set_feature_suppressed(doc_id, args):
     doc = _get(doc_id)
     tree = feature_ops.set_suppressed(doc.feature_tree, require(args, "feature_id"), bool(args.get("suppressed", True)))
@@ -476,7 +523,7 @@ def _set_feature_suppressed(doc_id, args):
 @operation("set_feature_keep", "mutate", "Mark a feature as must-keep so generative optimization cannot remove it. Use this "
            "for anything the part needs regardless of load — mounting bosses, bearing seats, "
            "bolt holes. Its material is pinned solid and the optimizer routes load around it.",
-           {"feature_id": {"type": "string"}, "keep": {"type": "boolean", "default": True}})
+           {"feature_id": {"type": "string", "required": True}, "keep": {"type": "boolean", "default": True}})
 def _set_feature_keep(doc_id, args):
     doc = _get(doc_id)
     keep = bool(args.get("keep", True))
@@ -499,7 +546,7 @@ def _list_kept_features(doc_id, args):
 
 
 @operation("reorder_feature", "mutate", "Move a feature up/down within its parent group.",
-           {"feature_id": {"type": "string"}, "direction": {"enum": ["up", "down"]}})
+           {"feature_id": {"type": "string", "required": True}, "direction": {"enum": ["up", "down"]}})
 def _reorder_feature(doc_id, args):
     doc = _get(doc_id)
     tree = feature_ops.reorder(doc.feature_tree, require(args, "feature_id"), args.get("direction", "up"))
@@ -508,7 +555,7 @@ def _reorder_feature(doc_id, args):
 
 
 @operation("ai_edit", "mutate", "Apply a natural-language edit to the whole part.",
-           {"instruction": {"type": "string"}})
+           {"instruction": {"type": "string", "required": True}})
 def _ai_edit(doc_id, args):
     document_service.ai_edit_document(doc_id, require(args, "instruction"))
     return {"message": "applied AI edit"}
@@ -523,7 +570,7 @@ def _list_materials(doc_id, args):
 
 
 @operation("set_material", "mutate", "Assign an engineering material to the part (drives mass, sim, DFM, quotes).",
-           {"material_id": {"type": "string", "description": "e.g. al-6061, steel-304, ti-6al4v, pla"}})
+           {"material_id": {"type": "string", "required": True, "description": "e.g. al-6061, steel-304, ti-6al4v, pla"}})
 def _set_material(doc_id, args):
     doc = document_service.set_material(doc_id, require(args, "material_id"))
     if doc is None:
@@ -618,7 +665,7 @@ def _generate_drawing(doc_id, args):
 
 @operation("compute_fit", "query", "ISO-286 fit/tolerance limits for a nominal size. 'fit' is a single spec ('H7') "
            "or a hole/shaft fit ('H7/g6' → clearance range + classification).",
-           {"nominal_mm": {"type": "number"}, "fit": {"type": "string"}})
+           {"nominal_mm": {"type": "number", "required": True}, "fit": {"type": "string", "required": True}})
 def _compute_fit(doc_id, args):
     from app.services import tolerances
 
@@ -654,7 +701,7 @@ def _release_revision(doc_id, args):
 
 
 @operation("set_lifecycle_state", "mutate", "Set the document lifecycle state: draft | in_review | released | obsolete.",
-           {"state": {"type": "string"}})
+           {"state": {"enum": ["draft", "in_review", "released", "obsolete"], "required": True}})
 def _set_lifecycle_state(doc_id, args):
     doc = document_service.set_lifecycle_state(doc_id, require(args, "state"))
     if doc is None:
@@ -745,7 +792,7 @@ def _slice_part(doc_id, args):
 
 @operation("print_part", "mutate", "Upload the sliced G-code to a Moonraker/Klipper printer and optionally start it. "
            "Slices with defaults first if the part hasn't been sliced.",
-           {"printer_url": {"type": "string", "description": "Moonraker base URL, e.g. http://printer.local:7125"},
+           {"printer_url": {"type": "string", "required": True, "description": "Moonraker base URL, e.g. http://printer.local:7125"},
            "start": {"type": "boolean", "default": False},
            "settings": {"type": "object", "description": "slice settings if slicing is needed"}})
 def _print_part(doc_id, args):
@@ -780,7 +827,15 @@ def _print_part(doc_id, args):
 
 
 def catalog() -> List[Dict[str, Any]]:
-    return [{"name": o.name, "kind": o.kind, "description": o.description, "params": o.params}
+    """The self-describing tool catalog.
+
+    Carries both the descriptor block every existing consumer reads and a strict
+    JSON Schema per operation, which is what a function-calling API or a
+    grammar-constrained decoder actually needs.
+    """
+    from app.services import op_schema
+
+    return [op_schema.describe(o.name, o.kind, o.description, o.params)
             for o in OPERATIONS.values()]
 
 
@@ -791,9 +846,13 @@ def dispatch(op_name: str, doc_id: str, args: Dict[str, Any] | None) -> Dict[str
     a failure rather than propagate it — an agent loop, a training rollout, the
     HTTP layer.
     """
+    from app.services import op_schema
+
     op = OPERATIONS.get(op_name)
     if op is None:
         raise UnknownOperation(f"unknown operation: {op_name!r}", arg="op")
+    # Refuse a malformed call before it can half-apply an edit to the tree.
+    op_schema.validate(op.params, args, op=op_name)
     return op.handler(doc_id, args or {})
 
 
@@ -876,6 +935,9 @@ def execute(
         return round((time.perf_counter() - started) * 1000, 2)
 
     try:
+        from app.services import op_schema
+
+        op_schema.validate(op.params, args, op=op_name)
         result = op.handler(doc_id, args or {})
     except Exception as exc:  # noqa: BLE001 — classified, never swallowed
         err = _as_operation_error(exc)

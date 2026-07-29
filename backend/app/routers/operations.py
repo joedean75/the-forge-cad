@@ -75,8 +75,26 @@ class OperationResponse(BaseModel):
 
 @router.get("/api/operations")
 def list_operations():
-    """Self-describing catalog of CAD operations for agents / MCP."""
+    """Self-describing catalog of CAD operations for agents / MCP.
+
+    Each entry carries both the descriptor block and a strict JSON Schema under
+    ``schema``. For a function-calling API, ``/api/operations/tools`` returns the
+    same thing already in tool-definition form.
+    """
     return {"operations": cad_operations.catalog()}
+
+
+@router.get("/api/operations/tools")
+def list_operation_tools():
+    """The action space as OpenAI-style tool definitions.
+
+    What you hand to a function-calling API, or compile into a grammar to
+    constrain decoding. Generated from the live registry, so it cannot drift from
+    what the server will actually accept.
+    """
+    from app.services import op_schema
+
+    return {"tools": op_schema.tool_definitions()}
 
 
 @router.get("/api/platform")

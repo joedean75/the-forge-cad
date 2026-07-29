@@ -165,7 +165,8 @@ def test_a_missing_argument_is_a_422_over_http_not_a_404():
     doc = _doc()
     r = client.post(f"/api/documents/{doc.id}/op", json={"op": "add_sketch", "args": {}})
     assert r.status_code == 422
-    assert r.json()["detail"] == {"code": "MISSING_ARG", "message": "'sketch' is required",
+    assert r.json()["detail"] == {"code": "MISSING_ARG",
+                                  "message": "'sketch' is required by add_sketch",
                                   "arg": "sketch"}
 
 
