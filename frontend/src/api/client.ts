@@ -27,6 +27,8 @@ import type {
   DocumentParameter,
   MassProperties,
   DrawingResult,
+  DrawingSpec,
+  ValidationReport,
   DocumentRevisionMeta,
   SliceSettings,
   SliceResponse,
@@ -195,10 +197,20 @@ export const api = {
     fetchJson<{ ticket: string; expires_in: number }>(`/documents/${id}/ws-ticket`, { method: 'POST' }),
   /** The single mutation path shared by the UI and AI agents. */
   runOperation: (id: string, op: string, args?: Record<string, unknown>) =>
-    fetchJson<{ ok: boolean; op: string; result: Record<string, unknown>; document?: DesignDocument }>(
-      `/documents/${id}/op`,
-      { method: 'POST', body: JSON.stringify({ op, args: args ?? {} }) },
-    ),
+    fetchJson<{
+      ok: boolean
+      op: string
+      result: Record<string, unknown>
+      /** Typed failure: MISSING_ARG | BAD_ARG | NO_SUCH_FEATURE | PRECONDITION | … */
+      error?: { code: string; message: string; arg?: string } | null
+      /** What the operation changed, including the ids added and removed. */
+      delta?: Record<string, unknown> | null
+      /** Compact document observation: features with their current params, size, mass. */
+      state?: Record<string, unknown> | null
+      /** Non-fatal conditions, chiefly EVAL_FAILED. */
+      warnings?: Array<{ code: string; message: string }>
+      document?: DesignDocument
+    }>(`/documents/${id}/op`, { method: 'POST', body: JSON.stringify({ op, args: args ?? {} }) }),
   optimizeDocument: (id: string, body: { setup?: OptimizationSetup; resolution?: number }) =>
     fetchJson<OptimizeJob>(`/documents/${id}/optimize`, { method: 'POST', body: JSON.stringify(body) }),
   getOptimizeJob: (id: string, jobId: string) =>
@@ -255,6 +267,18 @@ export const api = {
   // ── Drawings, tolerances, revisions ──
   drawing: (id: string, section = true) =>
     fetchJson<DrawingResult>(`/documents/${id}/drawing?section=${section}`),
+  /** Render to an explicit spec: chosen views, sections, dimensions, sheet, scale. */
+  drawingFromSpec: (id: string, spec: DrawingSpec) =>
+    fetchJson<DrawingResult>(`/documents/${id}/drawing`, {
+      method: 'POST',
+      body: JSON.stringify(spec),
+    }),
+  /** Validate a drawing as a manufacturing document. */
+  checkDrawing: (id: string, spec: DrawingSpec = {}) =>
+    fetchJson<ValidationReport>(`/documents/${id}/drawing/check`, {
+      method: 'POST',
+      body: JSON.stringify(spec),
+    }),
   computeFit: (nominalMm: number, fit: string) =>
     fetchJson<Record<string, unknown>>(`/documents/meta/fit?nominal_mm=${nominalMm}&fit=${encodeURIComponent(fit)}`),
   listRevisions: (id: string) => fetchJson<DocumentRevisionMeta[]>(`/documents/${id}/revisions`),

@@ -651,16 +651,72 @@ def _profile_cut(doc_id, args):
             "estimated_minutes": out["estimated_minutes"], "gcode_bytes": len(out["gcode"])}
 
 
-@operation("generate_drawing", "query", "Generate a dimensioned multi-view 2D engineering drawing (front/top/right + section). "
-           "Fetch the full SVG at GET /api/documents/{id}/drawing.svg.",
-           {"section": {"type": "boolean", "default": True}})
+_DRAWING_SPEC = {
+    "type": "object",
+    "description": "what to draw — every field here is a drafting decision, not geometry",
+    "properties": {
+        "views": {"type": "array",
+                  "description": "any of front, back, top, bottom, left, right "
+                                 "(default: front, top, right)"},
+        "sections": {"type": "array",
+                     "description": "[{plane: xy|xz|yz, offset_mm?, label?}] — offset_mm "
+                                    "defaults to the middle of the body"},
+        "dimensions": {"type": "array",
+                       "description": "[{view, type: horizontal|vertical|aligned, "
+                                      "from:[h_mm,v_mm], to:[h_mm,v_mm], offset?, label?}]. "
+                                      "Points are model mm on that view's own two axes "
+                                      "(FRONT is X,Z; TOP is X,Y; RIGHT is Y,Z). Omit "
+                                      "'label' and the true model distance is printed."},
+        "annotations": {"type": "array",
+                        "description": "[{view, at:[h_mm,v_mm], text | gdt_feature | "
+                                       "tolerance_label, dx?, dy?, frame?}] — a leader from "
+                                       "a point on the part to a callout. Naming a "
+                                       "gdt_feature or tolerance_label pulls the text from "
+                                       "the document so it cannot drift."},
+        "projection": {"enum": ["first", "third"], "default": "third"},
+        "sheet": {"enum": ["auto", "a4", "a3", "a2", "a1", "a0"], "default": "auto"},
+        "scale": {"description": "'auto' picks the largest standard scale that fits, "
+                                 "or give a number (1.0 = full size)"},
+        "show_hidden": {"type": "boolean", "default": True,
+                        "description": "dashed lines for detail behind the front face"},
+    },
+    "additionalProperties": False,
+}
+
+
+@operation("generate_drawing", "query", "Generate a dimensioned multi-view 2D engineering drawing. "
+           "You choose the views, section planes, dimensions, annotations, projection angle, "
+           "sheet and scale; projection and section-cutting are exact. Fetch the full SVG at "
+           "GET /api/documents/{id}/drawing.svg.",
+           {"spec": _DRAWING_SPEC,
+           "section": {"type": "boolean", "default": True,
+           "description": "legacy shorthand: add a mid-body section when no spec.sections given"}})
 def _generate_drawing(doc_id, args):
     from app.services import drawing
 
-    out = drawing.generate_drawing(doc_id, section=args.get("section", True))
+    _get(doc_id)
+    out = drawing.generate_drawing(doc_id, section=args.get("section", True),
+                                   spec=args.get("spec"))
     # Keep the op result light for agents; the full SVG is fetched via the endpoint.
-    return {"message": "generated 2D drawing", "views": out["views"],
-            "bbox_mm": out["bbox_mm"], "material": out["material"], "svg_bytes": len(out["svg"])}
+    return {"message": f"generated {out['scale_text']} drawing on a "
+                       f"{out['sheet_mm']['width']:.0f}×{out['sheet_mm']['height']:.0f} mm sheet",
+            "views": out["views"], "hidden": out["hidden"], "sections": out["sections"],
+            "bbox_mm": out["bbox_mm"], "traced_mm": out["traced_mm"],
+            "scale_text": out["scale_text"], "projection": out["projection"],
+            "sheet_mm": out["sheet_mm"], "dimensions": out["dimensions"],
+            "annotations": out["annotations"],
+            "material": out["material"], "svg_bytes": len(out["svg"])}
+
+
+@operation("check_drawing", "query", "Validate a drawing as a manufacturing document: views carry "
+           "geometry, the part is dimensioned, the views match the body, sections cut "
+           "material. Use it to verify a drawing says something about the part.",
+           {"spec": _DRAWING_SPEC})
+def _check_drawing(doc_id, args):
+    from app.services import drawing
+
+    _get(doc_id)
+    return drawing.check_drawing(doc_id, spec=args.get("spec"))
 
 
 @operation("compute_fit", "query", "ISO-286 fit/tolerance limits for a nominal size. 'fit' is a single spec ('H7') "

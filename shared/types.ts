@@ -274,11 +274,65 @@ export interface DocumentRevisionMeta {
   notes: string
 }
 
+/** Which views to draw, where to cut, what to dimension — all choices, no geometry. */
+export interface DrawingSpec {
+  views?: Array<'front' | 'back' | 'top' | 'bottom' | 'left' | 'right'>
+  sections?: Array<{ plane: 'xy' | 'xz' | 'yz'; offset_mm?: number; label?: string }>
+  /** Points are model mm on the view's own two axes (FRONT is X,Z; TOP is X,Y; RIGHT is Y,Z). */
+  dimensions?: Array<{
+    view: string
+    type?: 'horizontal' | 'vertical' | 'aligned'
+    from: [number, number]
+    to: [number, number]
+    offset?: number
+    /** Omit to print the true model distance between the endpoints. */
+    label?: string
+  }>
+  annotations?: Array<{
+    view: string
+    at: [number, number]
+    text?: string
+    /** Pull the text from a GD&T frame / tolerance callout already on the document. */
+    gdt_feature?: string
+    tolerance_label?: string
+    dx?: number
+    dy?: number
+    frame?: boolean
+  }>
+  projection?: 'first' | 'third'
+  sheet?: 'auto' | 'a4' | 'a3' | 'a2' | 'a1' | 'a0'
+  scale?: number | 'auto'
+  show_hidden?: boolean
+}
+
 export interface DrawingResult {
   svg: string
-  views: { front: number; top: number; right: number; section: number }
+  /** Contour counts per view. front/top/right are always present (0 when not drawn). */
+  views: Record<string, number> & { front: number; top: number; right: number; section: number }
+  /** The views actually requested — `views` pads the legacy keys with zeros. */
+  drawn_views: string[]
+  /** Dashed-line contour counts per view. */
+  hidden: Record<string, number>
+  sections: Array<{ label: string; plane: string; cut_at_mm: number; contours: number }>
+  /** From the evaluated body, so it agrees with `bounding_box`. */
   bbox_mm: { width: number; depth: number; height: number }
+  /** What the views traced; a divergence from bbox_mm means the silhouette is wrong. */
+  traced_mm: { width: number; depth: number; height: number }
+  scale: number
+  scale_text: string
+  projection: string
+  sheet_mm: { width: number; height: number }
+  dimensions: number
+  annotations: number
   material: string
+}
+
+/** Structural or drafting checks, shared shape with DfmReport's checks. */
+export interface ValidationReport {
+  valid: boolean
+  checks: DfmCheck[]
+  failed: string[]
+  warnings: string[]
 }
 
 export interface DocumentConfiguration {

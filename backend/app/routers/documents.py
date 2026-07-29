@@ -6,6 +6,7 @@ simulate, DFM and CAM endpoints are added by their respective phases.
 
 import asyncio
 import uuid
+from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import PlainTextResponse, StreamingResponse
@@ -580,13 +581,53 @@ def set_tolerances(body: TolerancesRequest, doc: DesignDocument = Depends(editab
 
 @router.get("/{doc_id}/drawing")
 def drawing(section: bool = True, doc: DesignDocument = Depends(readable_document)):
-    """A dimensioned multi-view 2D engineering drawing (SVG) of the part."""
+    """A dimensioned multi-view 2D engineering drawing (SVG) of the part.
+
+    Draws the standard third-angle front/top/right with a mid-body section. To
+    choose views, sections, dimensions, annotations, projection, sheet or scale,
+    POST a drawing spec to this same path.
+    """
     from app.services import drawing as drawing_svc
 
     try:
         return drawing_svc.generate_drawing(doc.id, section=section)
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+class DrawingSpecRequest(BaseModel):
+    """A drawing spec. Every field is a drafting decision, not geometry."""
+
+    views: Optional[list] = None
+    sections: Optional[list] = None
+    dimensions: Optional[list] = None
+    annotations: Optional[list] = None
+    projection: Optional[str] = None
+    sheet: Optional[str] = None
+    scale: Optional[Any] = None
+    show_hidden: Optional[bool] = None
+
+
+@router.post("/{doc_id}/drawing")
+def drawing_from_spec(body: DrawingSpecRequest,
+                      doc: DesignDocument = Depends(readable_document)):
+    """Render a drawing to an explicit spec."""
+    from app.services import drawing as drawing_svc
+
+    try:
+        return drawing_svc.generate_drawing(
+            doc.id, spec=body.model_dump(exclude_none=True))
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/{doc_id}/drawing/check")
+def drawing_check(body: DrawingSpecRequest,
+                  doc: DesignDocument = Depends(readable_document)):
+    """Validate a drawing as a manufacturing document."""
+    from app.services import drawing as drawing_svc
+
+    return drawing_svc.check_drawing(doc.id, spec=body.model_dump(exclude_none=True))
 
 
 @router.get("/{doc_id}/profile-cut")
