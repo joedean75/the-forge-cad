@@ -77,6 +77,11 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export interface OAuthProvider {
+  id: string
+  name: string
+}
+
 export interface AccountView {
   id: string
   email: string
@@ -441,6 +446,14 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
   me: () => fetchJson<AccountView>('/auth/me'),
+  /** OAuth providers with credentials configured on the server (may be empty). */
+  oauthProviders: () => fetchJson<{ providers: OAuthProvider[] }>('/auth/oauth/providers'),
+  /** Redeem the single-use code from the OAuth callback redirect for a session. */
+  oauthExchange: (code: string) =>
+    fetchJson<{ token: string; account: AccountView }>('/auth/oauth/exchange', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
   listPlans: () =>
     fetchJson<{ plans: PlanSummary[]; billing: { provider: string; live: boolean; note: string | null } }>('/auth/plans'),
   subscribe: (planId: string) =>

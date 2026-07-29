@@ -1,7 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Loader2, ArrowLeft, ArrowRight } from 'lucide-react'
 import { useAuthStore } from '../store/useAuthStore'
 import { useNavStore } from '../store/useNavStore'
+
+/** Pull ?oauth_code / ?oauth_error out of the URL (and scrub them from history). */
+function takeOAuthParams(): { code: string | null; error: string | null } {
+  const params = new URLSearchParams(window.location.search)
+  const code = params.get('oauth_code')
+  const error = params.get('oauth_error')
+  if (code || error) {
+    window.history.replaceState(null, '', window.location.pathname + window.location.hash)
+  }
+  return { code, error }
+}
 
 function TrussMark() {
   return (
@@ -15,11 +26,26 @@ function TrussMark() {
 }
 
 export function SignInScreen() {
-  const { login, signup, error, loading } = useAuthStore()
+  const { login, signup, completeOAuth, oauthProviders, error, loading } = useAuthStore()
   const go = useNavStore((s) => s.go)
   const [mode, setMode] = useState<'login' | 'signup'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [oauthError, setOauthError] = useState<string | null>(null)
+
+  // Returning from an OAuth provider: redeem the one-time code for a session.
+  useEffect(() => {
+    const { code, error: cbError } = takeOAuthParams()
+    if (cbError) setOauthError(cbError)
+    if (code) {
+      completeOAuth(code)
+        .then(() => go('library'))
+        .catch(() => {
+          /* error surfaced from the store */
+        })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const submit = async () => {
     if (!email || !password || loading) return
@@ -97,7 +123,7 @@ export function SignInScreen() {
               />
             </div>
 
-            {error && <p className="text-[11px] text-cad-danger">{error}</p>}
+            {(error || oauthError) && <p className="text-[11px] text-cad-danger">{error ?? oauthError}</p>}
 
             <button
               onClick={submit}
@@ -108,6 +134,30 @@ export function SignInScreen() {
               {mode === 'login' ? 'Sign in' : 'Create account'}
               {!loading && <ArrowRight size={13} />}
             </button>
+
+            {oauthProviders.length > 0 && (
+              <>
+                <div className="flex items-center gap-2 pt-1">
+                  <span className="flex-1 h-px bg-cad-border" />
+                  <span className="text-[10px] text-cad-text/50">or</span>
+                  <span className="flex-1 h-px bg-cad-border" />
+                </div>
+                {oauthProviders.map((p) => (
+                  <button
+                    key={p.id}
+                    disabled={loading}
+                    onClick={() => {
+                      // Full-page navigation: the server 302s to the provider
+                      // with state + PKCE minted per attempt.
+                      window.location.href = `/api/auth/oauth/${p.id}/start`
+                    }}
+                    className="w-full py-2 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-cad-accent/50 text-[11px] font-medium transition-colors disabled:opacity-40"
+                  >
+                    Continue with {p.name}
+                  </button>
+                ))}
+              </>
+            )}
           </div>
         </div>
 

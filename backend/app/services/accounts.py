@@ -36,6 +36,8 @@ _EMAIL_INDEX: Dict[str, str] = {}
 _APIKEY_INDEX: Dict[str, str] = {}
 # stripe customer id -> account id (webhook reverse lookup)
 _STRIPE_INDEX: Dict[str, str] = {}
+# "provider:subject" -> account id (OAuth sign-in lookup)
+_OAUTH_INDEX: Dict[str, str] = {}
 
 
 class AuthError(Exception):
@@ -90,6 +92,8 @@ class Account:
     # Stripe linkage (populated by the checkout webhook; None until a paid plan).
     stripe_customer_id: Optional[str] = None
     stripe_subscription_id: Optional[str] = None
+    # OAuth linkage: provider id -> stable provider subject id ("sub").
+    oauth_ids: Dict[str, str] = field(default_factory=dict)
 
     # -- plan / entitlement ------------------------------------------------
     @property
@@ -113,6 +117,7 @@ class Account:
             "created_at": self.created_at,
             "stripe_customer_id": self.stripe_customer_id,
             "stripe_subscription_id": self.stripe_subscription_id,
+            "oauth_ids": self.oauth_ids,
         }
 
     @classmethod
@@ -126,6 +131,7 @@ class Account:
             created_at=d.get("created_at", ""),
             stripe_customer_id=d.get("stripe_customer_id"),
             stripe_subscription_id=d.get("stripe_subscription_id"),
+            oauth_ids=dict(d.get("oauth_ids") or {}),
         )
         acc.api_keys = [ApiKey(**k) for k in d.get("api_keys", [])]
         return acc
@@ -187,6 +193,8 @@ def _index(acc: Account) -> None:
         _APIKEY_INDEX[k.fingerprint] = acc.id
     if acc.stripe_customer_id:
         _STRIPE_INDEX[acc.stripe_customer_id] = acc.id
+    for provider, subject in acc.oauth_ids.items():
+        _OAUTH_INDEX[f"{provider}:{subject}"] = acc.id
 
 
 def restore_accounts() -> None:
@@ -225,6 +233,40 @@ def create_account(email: str, password: str) -> Account:
     _index(acc)
     _persist(acc)
     return acc
+
+
+def create_oauth_account(email: str) -> Account:
+    """Create an account for a verified OAuth identity — no usable password.
+
+    A random throwaway password is hashed and discarded, so password login is
+    impossible until the user explicitly sets one; only the linked provider
+    (or a password reset flow) can sign this account in.
+    """
+    return create_account(email, secrets.token_urlsafe(32))
+
+
+def account_by_oauth(provider: str, subject: str) -> Optional[Account]:
+    return _ACCOUNTS.get(_OAUTH_INDEX.get(f"{provider}:{subject}", ""))
+
+
+def link_oauth(acc: Account, provider: str, subject: str) -> None:
+    """Bind a provider identity to an account (idempotent for the same pair).
+
+    Refuses to re-bind a subject that already belongs to a different account,
+    and refuses to overwrite an account's existing binding for the provider —
+    either would let one identity hijack another.
+    """
+    existing_owner = _OAUTH_INDEX.get(f"{provider}:{subject}")
+    if existing_owner is not None and existing_owner != acc.id:
+        raise AuthError("this sign-in identity is already linked to another account", status=409)
+    current = acc.oauth_ids.get(provider)
+    if current is not None and current != subject:
+        raise AuthError(
+            f"this account is already linked to a different {provider} identity", status=409
+        )
+    acc.oauth_ids[provider] = subject
+    _OAUTH_INDEX[f"{provider}:{subject}"] = acc.id
+    _persist(acc)
 
 
 # A fixed dummy hash so authentication spends the same PBKDF2 time whether or not

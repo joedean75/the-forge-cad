@@ -15,8 +15,9 @@ CI/CD pipeline (GitHub Actions) is already wired — see the end.
 - **PostgreSQL** as the durable store (`DATABASE_URL`). Dev/tests use embedded
   SQLite automatically.
 - **Some coherent in-process state** — account/API-key indexes, optimize job
-  registry, evaluated-solid cache, rate-limit counters. **Today this means run a
-  single instance / single worker.** (See "Scaling" below for the path off this.)
+  registry, evaluated-solid cache, rate-limit counters, in-flight OAuth
+  state/handoff codes. **Today this means run a single instance / single
+  worker.** (See "Scaling" below for the path off this.)
 
 ## Options considered
 
@@ -114,6 +115,10 @@ lives in process. To scale horizontally later:
 3. **Rate-limit counters** → Redis (the `app/rate_limit.py` seam is drop-in).
 4. **Solid cache** (`_SOLID_CACHE`) is a pure derived cache — safe to keep
    per-worker or move to Redis/object storage.
+5. **OAuth login state** (`_PENDING`/`_HANDOFFS` in `services/oauth.py`) → Redis.
+   Both are short-lived (10 min / 60 s) and already bounded, but a sign-in that
+   starts on one worker and returns on another would fail state validation, so
+   they must be shared before running more than one worker.
 
 Until then, **scale vertically** (more CPU/RAM) and run a single worker; the
 Dockerfile and `render.yaml` are configured this way.
