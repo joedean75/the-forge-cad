@@ -288,6 +288,11 @@ class DesignDocument(BaseModel):
     # The recorded operation sequence that produced this document, when there is
     # one (a copilot run, a replayed trajectory).
     trajectory_id: Optional[str] = None
+    # What the part is supposed to be: measurable requirements the body is scored
+    # against (see services/design_spec.py). Left free-form here and validated
+    # there, because the requirement kinds are a property of what the kernel can
+    # measure and grow with it.
+    spec: Optional[dict] = None
     created_at: str
     updated_at: str
     version_history: List[DocumentVersion] = []

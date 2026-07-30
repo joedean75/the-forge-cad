@@ -132,11 +132,23 @@ def test_a_fillet_reference_survives_the_upstream_change_that_moves_its_edge():
 
 
 def test_a_radius_the_geometry_cannot_carry_says_why():
-    """Not "install the exact kernel" when the kernel is installed and the radius is absurd."""
+    """Not "install the exact kernel" when the kernel is installed and the radius is absurd.
+
+    And it is a failure, not a warning. The general rule — an unevaluatable tree
+    is a warning — exists so a feature can reference a parameter defined a step
+    later. Nothing rescues a 500 mm fillet on a 50 mm plate, so the edit is rolled
+    back and the document is left usable.
+    """
     doc_id = _plate()
+    before = docs.get_document(doc_id).derived.volume
+
     env = ops.execute("fillet_edges", doc_id, {"edges": _vertical_edges(doc_id), "radius": .5})
-    message = " ".join(w["message"] for w in env["warnings"])
-    assert "fillet" in message and "500" in message
+
+    assert env["ok"] is False
+    assert env["error"]["code"] == "PRECONDITION"
+    assert "fillet" in env["error"]["message"] and "500" in env["error"]["message"]
+    assert docs.get_document(doc_id).derived.volume == before
+    assert docs.get_document(doc_id).derived.error is None
 
 
 def test_selecting_an_edge_that_does_not_exist_names_what_does():

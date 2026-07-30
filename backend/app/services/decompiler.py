@@ -53,9 +53,12 @@ _BUILDERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
 }
 
 # Feature type -> (modifier name, its params) for add_modifier.
+#
+# FilletFeature/ChamferFeature are absent on purpose. They are smooth booleans
+# between bodies, and no operation constructs one any more: `add_modifier`
+# ("fillet") now builds a real `EdgeFilletFeature`, so emitting it here would
+# replay into a different shape. See `_BLENDS` below for how they are handled.
 _MODIFIERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
-    "FilletFeature": ("fillet", ("radius", "operation")),
-    "ChamferFeature": ("chamfer", ("radius", "operation")),
     "ShellFeature": ("shell", ("thickness",)),
     "HoleFeature": ("hole", ("radius", "depth", "center", "axis")),
     "PatternFeature": ("pattern", ("kind", "count", "spacing", "axis", "center")),
@@ -73,6 +76,18 @@ _TOPOLOGY_OPS = {
 
 # Bodies whose geometry lives in a cached voxel grid, not in parameters.
 _OPAQUE = {"ImportFeature", "OptimizeFeature"}
+
+# Smooth booleans between bodies. With one child they are inert — a smooth union
+# of a single body is that body, which is exactly what the evaluator's
+# single-child collapse does — so they are stepped through rather than emitted.
+# With two or more they blend, and nothing in the catalog builds that.
+_BLENDS = {"FilletFeature", "ChamferFeature"}
+
+
+def _blend_passthrough(node: dict) -> Optional[dict]:
+    """The lone child of an inert blend, or None if it really does blend."""
+    children = node_children(node)
+    return children[0] if len(children) == 1 else None
 
 
 class Unsupported(Exception):
@@ -138,6 +153,13 @@ def _emit_body(node: dict, steps: List[dict]) -> int:
         op_name, args = _topology_args(node)
         return _push(steps, op_name, args)
 
+    if node_type in _BLENDS:
+        passthrough = _blend_passthrough(node)
+        if passthrough is None:
+            raise Unsupported(
+                f"{node_type} blends two bodies; no operation builds that")
+        return _emit_body(passthrough, steps)
+
     if node_type in _MODIFIERS:
         children = node_children(node)
         if not children:
@@ -155,6 +177,13 @@ def _emit_onto(node: dict, operation: str, steps: List[dict]) -> int:
 
     if node_type in _OPAQUE:
         raise Unsupported(f"{node_type} holds a cached voxel grid no operation can rebuild")
+
+    if node_type in _BLENDS:
+        passthrough = _blend_passthrough(node)
+        if passthrough is None:
+            raise Unsupported(
+                f"{node_type} blends two bodies; no operation builds that")
+        return _emit_onto(passthrough, operation, steps)
 
     if node_type in _MODIFIERS or node_type == "MirrorFeature":
         # A modifier sitting under a boolean was applied to that one feature, not

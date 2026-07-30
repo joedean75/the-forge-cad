@@ -65,7 +65,8 @@ def features(doc) -> List[dict]:
 def summarize(doc) -> dict:
     """Compact, LLM-facing snapshot of the current body."""
     d = doc.derived
-    return {
+    spec = getattr(doc, "spec", None) or {}
+    out = {
         "name": doc.name,
         "features": features(doc),
         "bbox_size_mm": _bbox_mm(d.bbox),
@@ -73,6 +74,13 @@ def summarize(doc) -> dict:
         "material_id": doc.material_id,
         "error": d.error,
     }
+    # What the part is *for*, when a spec was set. The requirement count and the
+    # score are left out on purpose: scoring means meshing the body, and this
+    # runs on every operation. Call verify_against_spec for the number.
+    if spec.get("requirements"):
+        out["spec"] = {"goal": spec.get("goal"),
+                       "requirements": len(spec["requirements"])}
+    return out
 
 
 def snapshot(doc) -> dict:

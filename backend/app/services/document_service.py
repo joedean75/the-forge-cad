@@ -370,6 +370,20 @@ def set_tolerances(doc_id: str, general: Optional[str], tolerances: list, gdt: l
     return doc
 
 
+def set_spec(doc_id: str, spec: Optional[dict]) -> Optional[DesignDocument]:
+    """Record what the part is supposed to be (see services/design_spec)."""
+    from app.services import design_spec
+
+    doc = get_document(doc_id)
+    if doc is None:
+        return None
+    validated = design_spec.validate_spec(spec)
+    doc.spec = validated if validated.get("requirements") else None
+    doc.updated_at = _now()
+    _persist(doc)
+    return doc
+
+
 def add_dimension(doc_id: str, req) -> Optional["Dimension"]:
     """Append a point-to-point dimension to a document."""
     from app.models.schemas import Dimension

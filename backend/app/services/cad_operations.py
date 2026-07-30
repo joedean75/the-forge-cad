@@ -67,11 +67,20 @@ _PRIMITIVE_PARAMS = {
     "additionalProperties": False,
 }
 
+_MODIFIER_TARGET = {"type": "string",
+                    "description": "feature id to modify (default: the whole body)"}
+
+_EDGE_SELECTION = {
+    "type": ["array", "string"], "required": True,
+    "description": 'edge ids from list_edges, or the string "all" for every edge',
+}
+
 _MODIFIER_PARAMS = {
     "type": "object",
     "description": "modifier settings in metres; which keys apply depends on `modifier`",
     "properties": {
-        "radius": {"type": "number", "description": "fillet / chamfer / hole"},
+        "radius": {"type": "number",
+                   "description": "fillet radius / chamfer setback / hole radius"},
         "thickness": {"type": "number", "description": "shell"},
         "depth": {"type": "number", "description": "hole"},
         "count": {"type": "integer", "description": "pattern"},
@@ -82,8 +91,6 @@ _MODIFIER_PARAMS = {
         "scale": {"type": "number", "description": "transform"},
         "center": {**_VEC, "description": "hole / pattern"},
         "axis": {**_VEC, "description": "hole / pattern"},
-        "operation": {"enum": ["union", "subtract", "intersect"],
-                      "description": "fillet / chamfer: how the blend combines"},
     },
     "additionalProperties": False,
 }
@@ -137,9 +144,10 @@ def _make_modifier(kind: str, params: Dict[str, Any] | None) -> Dict[str, Any]:
     p = params or {}
     axis = p.get("axis", {"x": 0, "y": 0, "z": 1})
     center = p.get("center", {"x": 0, "y": 0, "z": 0})
+    # fillet/chamfer are absent: `_add_modifier` routes them to the exact edge
+    # treatments before reaching here, because the smooth-boolean features this
+    # table used to build are inert with a single child.
     table = {
-        "fillet": ("FilletFeature", {"radius": p.get("radius", 0.01), "operation": p.get("operation", "union")}),
-        "chamfer": ("ChamferFeature", {"radius": p.get("radius", 0.01), "operation": p.get("operation", "union")}),
         "shell": ("ShellFeature", {"thickness": p.get("thickness", 0.004)}),
         "hole": ("HoleFeature", {"radius": p.get("radius", 0.005), "depth": p.get("depth", 0.1),
                                  "center": center, "axis": axis}),
@@ -467,16 +475,65 @@ def _update_sketch(doc_id, args):
 
 
 @operation("add_modifier", "mutate", "Apply a modifier: fillet/chamfer/shell/hole/pattern/transform. By default it wraps the "
-           "whole body; pass 'target' (a feature id) to apply it to one feature — e.g. pattern a single hole.",
+           "whole body; pass 'target' (a feature id) to apply it to one feature — e.g. pattern a single hole. "
+           "fillet/chamfer round or cut back every edge of the body; for named edges use fillet_edges/chamfer_edges.",
            {"modifier": {"enum": ["fillet", "chamfer", "shell", "hole", "pattern", "transform"], "required": True},
-           "target": {"type": "string", "description": "feature id to modify (default: whole body)"},
+           "target": _MODIFIER_TARGET,
            "params": _MODIFIER_PARAMS})
 def _add_modifier(doc_id, args):
+    kind = require(args, "modifier")
+    if kind in ("fillet", "chamfer"):
+        return _blend_whole_body(doc_id, kind, args)
+
     doc = _get(doc_id)
-    mod = _make_modifier(require(args, "modifier"), args.get("params"))
+    mod = _make_modifier(kind, args.get("params"))
     tree = feature_ops.add_modifier(doc.feature_tree, mod, target_id=args.get("target"))
     document_service.update_document(doc_id, feature_tree=tree)
-    return {"message": f"added {args['modifier']}", "feature_id": mod["id"]}
+    return {"message": f"added {kind}", "feature_id": mod["id"]}
+
+
+def _blend_whole_body(doc_id, kind: str, args) -> Dict[str, Any]:
+    """`add_modifier(fillet|chamfer)` with nothing named — round the whole body.
+
+    This used to do nothing at all, and report success while doing it. The
+    modifier it built was a `FilletFeature`, which is a *smooth boolean between
+    bodies*; wrapping the root gives it exactly one child, and a smooth union of
+    one body is that body — so `resolve_suppressed` collapsed the single-child
+    boolean away before evaluation. The op returned `ok`, a feature id and an
+    unchanged volume. For an agent that is worse than a failure: it teaches a
+    transition that does not exist.
+
+    A whole-body fillet is a coherent instruction, so it is honoured rather than
+    refused — as an edge fillet over every edge, which is what it means. That
+    needs addressable topology, so without the exact kernel it is a precondition
+    failure that says which operation would have worked.
+    """
+    size = float((args.get("params") or {}).get(
+        "radius", 0.01 if kind == "fillet" else 0.005))
+    if size <= 0:
+        raise BadArgument(f"{kind} radius must be positive", arg="params")
+
+    try:
+        edges = _selected(doc_id, "all", "edge")
+    except PreconditionFailed as exc:
+        raise PreconditionFailed(
+            f"a whole-body {kind} is an edge treatment and needs addressable "
+            f"topology: {exc}. The distance-field `{kind}` modifier is a smooth "
+            "blend *between* two bodies and has nothing to blend here.") from exc
+
+    doc = _get(doc_id)
+    if kind == "fillet":
+        node = {"type": "EdgeFilletFeature", "name": "Fillet",
+                "params": {"radius": size, "edges": edges}}
+    else:
+        node = {"type": "EdgeChamferFeature", "name": "Chamfer",
+                "params": {"distance": size, "edges": edges}}
+
+    tree = feature_ops.add_modifier(doc.feature_tree, node, target_id=args.get("target"))
+    _apply_exact(doc_id, doc.feature_tree, tree,
+                 f"a {size * 1000:g} mm {kind} on all {len(edges)} edge(s)")
+    return {"message": f"{kind}ed all {len(edges)} edge(s) at {size * 1000:g} mm",
+            "feature_id": node["id"], "edges": [e["id"] for e in edges]}
 
 
 @operation("set_feature_params", "mutate", "Change a feature's parameters (merged). Lengths in metres.",
@@ -695,7 +752,13 @@ def _selected(doc_id, ids, kind: str) -> List[Dict[str, Any]]:
     table = naming.face_table(shape) if kind == "face" else naming.edge_table(shape)
     by_id = {d["id"]: d for d in table}
 
-    wanted = [ids] if isinstance(ids, str) else list(ids or [])
+    if isinstance(ids, str) and ids.strip().lower() == "all":
+        # "Round every edge" is a real instruction and a common one. Without the
+        # shorthand it costs a list_edges call and a verbatim echo of every id,
+        # which is a lot of tokens to spend saying "all of them".
+        wanted = [d["id"] for d in table]
+    else:
+        wanted = [ids] if isinstance(ids, str) else list(ids or [])
     if not wanted:
         raise MissingArgument(f"select at least one {kind} (see list_{kind}s)",
                               arg=f"{kind}s")
@@ -708,12 +771,34 @@ def _selected(doc_id, ids, kind: str) -> List[Dict[str, Any]]:
     return [by_id[i] for i in wanted]
 
 
+def _apply_exact(doc_id: str, previous_tree: Dict[str, Any], tree: Dict[str, Any],
+                 what: str) -> None:
+    """Commit a tree only the exact kernel can build, or undo it and say why.
+
+    These operations are the one place where "an unevaluatable tree is a
+    warning" is the wrong contract. That rule exists so a feature can be bound
+    to a parameter expression before the parameter is defined — a real workflow
+    where the document recovers on the next edit. An edge fillet that OCC
+    refuses does not recover: the radius was too big, or the edges do not meet,
+    and the document is now a body that cannot be meshed, exported or measured.
+    So the edit is rolled back and the failure is typed, which is also what
+    makes it legible to an agent — a `PRECONDITION` naming the radius beats an
+    `ok` whose volume happens to be zero.
+    """
+    updated = document_service.update_document(doc_id, feature_tree=tree)
+    error = updated.derived.error if (updated and updated.derived) else None
+    if not error:
+        return
+    document_service.update_document(doc_id, feature_tree=previous_tree)
+    raise PreconditionFailed(f"{what} could not be built: {error}")
+
+
 @operation("fillet_edges", "mutate", "Round named edges of the body to a radius — a real fillet on selected "
            "edges, not a blend between bodies. Pick edge ids with list_edges. "
            "Requires the exact kernel.",
-           {"edges": {"type": "array", "required": True,
-           "description": "edge ids from list_edges"},
-           "radius": {"type": "number", "required": True, "description": "metres"}})
+           {"edges": _EDGE_SELECTION,
+           "radius": {"type": "number", "required": True, "description": "metres"},
+           "target": _MODIFIER_TARGET})
 def _fillet_edges(doc_id, args):
     doc = _get(doc_id)
     radius = float(require(args, "radius"))
@@ -724,16 +809,17 @@ def _fillet_edges(doc_id, args):
     node = {"type": "EdgeFilletFeature", "name": "Fillet",
             "params": {"radius": radius, "edges": references}}
     tree = feature_ops.add_modifier(doc.feature_tree, node, target_id=args.get("target"))
-    document_service.update_document(doc_id, feature_tree=tree)
+    _apply_exact(doc_id, doc.feature_tree, tree,
+                 f"a {radius * 1000:g} mm fillet on {len(references)} edge(s)")
     return {"message": f"filleted {len(references)} edge(s) at {radius * 1000:g} mm",
             "feature_id": node["id"], "edges": [r["id"] for r in references]}
 
 
 @operation("chamfer_edges", "mutate", "Cut named edges back at 45° by a distance — a real chamfer on selected "
            "edges. Pick edge ids with list_edges. Requires the exact kernel.",
-           {"edges": {"type": "array", "required": True,
-           "description": "edge ids from list_edges"},
-           "distance": {"type": "number", "required": True, "description": "metres"}})
+           {"edges": _EDGE_SELECTION,
+           "distance": {"type": "number", "required": True, "description": "metres"},
+           "target": _MODIFIER_TARGET})
 def _chamfer_edges(doc_id, args):
     doc = _get(doc_id)
     distance = float(require(args, "distance"))
@@ -744,7 +830,8 @@ def _chamfer_edges(doc_id, args):
     node = {"type": "EdgeChamferFeature", "name": "Chamfer",
             "params": {"distance": distance, "edges": references}}
     tree = feature_ops.add_modifier(doc.feature_tree, node, target_id=args.get("target"))
-    document_service.update_document(doc_id, feature_tree=tree)
+    _apply_exact(doc_id, doc.feature_tree, tree,
+                 f"a {distance * 1000:g} mm chamfer on {len(references)} edge(s)")
     return {"message": f"chamfered {len(references)} edge(s) at {distance * 1000:g} mm",
             "feature_id": node["id"], "edges": [r["id"] for r in references]}
 
@@ -752,9 +839,10 @@ def _chamfer_edges(doc_id, args):
 @operation("shell_faces", "mutate", "Hollow the body to a wall thickness, removing the named faces so it is "
            "open there. Pick face ids with list_faces. This is a real shell — the "
            "`shell` modifier hollows everything with no opening. Requires the exact kernel.",
-           {"faces": {"type": "array", "required": True,
+           {"faces": {"type": ["array", "string"], "required": True,
            "description": "face ids from list_faces — the openings"},
-           "thickness": {"type": "number", "required": True, "description": "wall thickness, metres"}})
+           "thickness": {"type": "number", "required": True, "description": "wall thickness, metres"},
+           "target": _MODIFIER_TARGET})
 def _shell_faces(doc_id, args):
     doc = _get(doc_id)
     thickness = float(require(args, "thickness"))
@@ -765,7 +853,8 @@ def _shell_faces(doc_id, args):
     node = {"type": "FaceShellFeature", "name": "Shell",
             "params": {"thickness": thickness, "faces": references}}
     tree = feature_ops.add_modifier(doc.feature_tree, node, target_id=args.get("target"))
-    document_service.update_document(doc_id, feature_tree=tree)
+    _apply_exact(doc_id, doc.feature_tree, tree,
+                 f"a {thickness * 1000:g} mm shell through {len(references)} face(s)")
     return {"message": f"shelled to {thickness * 1000:g} mm through {len(references)} face(s)",
             "feature_id": node["id"], "faces": [r["id"] for r in references]}
 
@@ -905,6 +994,54 @@ def _set_tolerances(doc_id, args):
         raise NoSuchDocument(f"no document {doc_id!r}")
     return {"message": f"set {len(doc.tolerances)} tolerance callout(s), {len(doc.gdt)} GD&T frame(s)",
             "general_tolerance": doc.general_tolerance}
+
+
+@operation("set_spec", "mutate", "Record what the part is supposed to be: measurable requirements the body "
+           "is scored against by verify_against_spec. Kinds: bounding_box (axis + value/tolerance or "
+           "min/max, mm), mass (g), volume (cm³), material (id), hole (diameter mm + count), "
+           "feature (a feature type that must be present), watertight, bodies. "
+           "Set this before modelling and the score tells you how close the part is.",
+           {"requirements": {"type": "array", "required": True,
+           "description": "[{id?, kind, label?, axis?, value?, tolerance?, min?, max?, "
+                          "diameter?, diameter_tolerance?, count?}] — [] clears the spec"},
+           "goal": {"type": "string", "description": "the request in words, for the record"}})
+def _set_spec(doc_id, args):
+    from app.services.design_spec import SpecError
+
+    _get(doc_id)
+    spec = {"requirements": require(args, "requirements")}
+    if args.get("goal"):
+        spec["goal"] = args["goal"]
+    try:
+        doc = document_service.set_spec(doc_id, spec)
+    except SpecError as exc:
+        raise BadArgument(str(exc), arg="requirements")
+    count = len((doc.spec or {}).get("requirements", []))
+    return {"message": f"set {count} requirement(s)" if count else "cleared the spec",
+            "requirements": count}
+
+
+@operation("get_spec", "query", "The design spec this part is judged against, if one is set.",
+           {})
+def _get_spec(doc_id, args):
+    doc = _get(doc_id)
+    spec = doc.spec or {}
+    return {"goal": spec.get("goal"), "requirements": spec.get("requirements", [])}
+
+
+@operation("verify_against_spec", "query", "Score the current body against the design spec: one pass/fail row per "
+           "requirement, plus the fraction met. This is the check that distinguishes a "
+           "correct part from a merely valid one — check_geometry says the solid is well "
+           "formed, this says it is the right solid.",
+           {})
+def _verify_against_spec(doc_id, args):
+    from app.services import design_spec
+
+    doc = _get(doc_id)
+    try:
+        return design_spec.verify(doc)
+    except design_spec.SpecError as exc:
+        raise PreconditionFailed(str(exc))
 
 
 @operation("release_revision", "mutate", "Cut an immutable released revision (next letter A/B/C…) from the current geometry.",

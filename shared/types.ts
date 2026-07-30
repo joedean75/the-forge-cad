@@ -228,6 +228,12 @@ export interface DesignDocument {
   optimization?: OptimizationSetup
   derived: DerivedCache
   provenance: DocumentProvenance
+  /** The natural-language request this document came from, when there was one. */
+  source_prompt?: string | null
+  /** The recorded operation sequence that produced it (copilot run, replay). */
+  trajectory_id?: string | null
+  /** Measurable requirements the body is scored against (services/design_spec). */
+  spec?: DesignSpec | null
   created_at: string
   updated_at: string
   version_history: DocumentVersion[]
@@ -246,6 +252,40 @@ export interface DesignDocument {
   /** Revision & release (feature 09). */
   lifecycle_state?: 'draft' | 'in_review' | 'released' | 'obsolete'
   revisions?: DocumentRevisionMeta[]
+}
+
+/** What the part is supposed to be. Every kind is something the kernel can
+ *  measure, so `verify_against_spec` scores it mechanically. */
+export interface SpecRequirement {
+  id?: string
+  kind: 'bounding_box' | 'mass' | 'volume' | 'material' | 'watertight' | 'bodies' | 'hole' | 'feature'
+  label?: string
+  /** bounding_box: which extent. */
+  axis?: 'x' | 'y' | 'z'
+  /** Nominal with optional ± tolerance, or a min/max range. */
+  value?: number | string
+  tolerance?: number
+  min?: number
+  max?: number
+  /** hole: bore diameter in mm, how many, and how close counts. */
+  diameter?: number
+  diameter_tolerance?: number
+  count?: number
+}
+
+export interface DesignSpec {
+  goal?: string
+  requirements: SpecRequirement[]
+}
+
+export interface SpecReport {
+  goal?: string | null
+  checks: DfmCheck[]
+  passed: number
+  failed: number
+  /** Fraction of requirements met — the scalar an RL loop optimises. */
+  score: number
+  met: boolean
 }
 
 export interface ToleranceCallout {

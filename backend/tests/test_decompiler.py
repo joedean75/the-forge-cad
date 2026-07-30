@@ -56,12 +56,25 @@ def test_a_subtraction_keeps_its_operation():
 def test_a_whole_body_modifier_needs_no_target():
     doc_id = _built(
         ("add_primitive", {"shape": "box"}),
-        ("add_modifier", {"modifier": "fillet", "params": {"radius": .002}}),
+        ("add_modifier", {"modifier": "shell", "params": {"thickness": .002}}),
     )
     steps = decompiler.decompile(docs.get_document(doc_id).feature_tree)
     assert [s["op"] for s in steps] == ["add_primitive", "add_modifier"]
     assert "target" not in steps[1]["args"]
-    assert steps[1]["args"]["params"]["radius"] == .002
+    assert steps[1]["args"]["params"]["thickness"] == .002
+
+
+def test_a_whole_body_fillet_decompiles_as_the_edge_op_that_built_it():
+    """`add_modifier("fillet")` builds an `EdgeFilletFeature`, so that is what
+    comes back — not the smooth-boolean modifier the name used to imply."""
+    doc_id = _built(
+        ("add_primitive", {"shape": "box"}),
+        ("add_modifier", {"modifier": "fillet", "params": {"radius": .002}}),
+    )
+    steps = decompiler.decompile(docs.get_document(doc_id).feature_tree)
+    assert [s["op"] for s in steps] == ["add_primitive", "fillet_edges"]
+    assert steps[1]["args"]["radius"] == .002
+    assert len(steps[1]["args"]["edges"]) == 12
 
 
 def test_a_targeted_modifier_refers_to_the_step_that_created_its_feature():

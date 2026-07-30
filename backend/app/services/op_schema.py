@@ -105,11 +105,16 @@ def _check_value(name: str, value: Any, descriptor: Dict[str, Any]) -> None:
         raise BadArgument(
             f"'{name}' must be one of {', '.join(map(str, choices))}; got {value!r}", arg=name)
 
+    # `type` may be a list — JSON Schema's union form, used where an argument
+    # takes either a list of ids or the shorthand "all". Looking a list up in
+    # _TYPE_CHECKS would miss and silently skip the check entirely.
     declared_type = descriptor.get("type")
-    check = _TYPE_CHECKS.get(declared_type)
-    if check is not None and not check(value):
+    names = declared_type if isinstance(declared_type, list) else [declared_type]
+    checks = [_TYPE_CHECKS[t] for t in names if t in _TYPE_CHECKS]
+    if checks and not any(check(value) for check in checks):
         raise BadArgument(
-            f"'{name}' must be {declared_type}; got {type(value).__name__}", arg=name)
+            f"'{name}' must be {' or '.join(str(t) for t in names)}; "
+            f"got {type(value).__name__}", arg=name)
 
 
 def describe(name: str, kind: str, description: str, params: Dict[str, Any]) -> Dict[str, Any]:
