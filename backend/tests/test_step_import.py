@@ -220,9 +220,14 @@ def test_unreadable_iges_reports_why():
     assert "geometry" in resp.json()["detail"].lower()
 
 
-def test_a_step_the_exact_reader_declines_falls_back_to_voxels():
-    """The Forge's own faceted STEP: OCC reads four of its twelve triangles and
-    calls it a shell. That must not become the imported body."""
+def test_our_own_faceted_step_round_trips_faithfully():
+    """Importing a STEP this app wrote must reproduce the body it described.
+
+    Whether that happens exactly or via the voxel fallback depends on the
+    OpenCascade build: some versions read only part of a faceted shell and the
+    reader has to decline, others read it whole. Both are acceptable — importing
+    a *wrong* body is not — so this asserts the geometry, not which path ran.
+    """
     import numpy as np
     import trimesh
 
@@ -231,13 +236,24 @@ def test_a_step_the_exact_reader_declines_falls_back_to_voxels():
 
     box = trimesh.creation.box(extents=[0.1, 0.06, 0.02])
     mesh = FaceMesh(vertices=np.asarray(box.vertices), faces=np.asarray(box.faces))
+    data = write_step(mesh).encode()
 
-    with pytest.raises(step_import.ExactImportError):
-        step_import.read_exact(write_step(mesh).encode(), "step")
+    try:
+        _shape, info = step_import.read_exact(data, "step")
+        # If it reads at all, it must read the whole thing — a partial shell is
+        # the failure mode the fallback exists for.
+        assert info["faces"] == len(mesh.faces), "exact read dropped faces"
+    except step_import.ExactImportError:
+        pass  # declined; the importer falls back to voxels below
 
-    doc = import_service.import_document("faceted.step", write_step(mesh).encode())
-    assert doc.feature_tree["root"]["type"] == "ImportFeature"
+    doc = import_service.import_document("faceted.step", data)
     assert doc.derived.error is None
+    assert doc.feature_tree["root"]["type"] in ("BrepBodyFeature", "ImportFeature")
+
+    bbox = doc.derived.bbox
+    for axis, expected_mm in (("x", 100.0), ("y", 60.0), ("z", 20.0)):
+        size_mm = (getattr(bbox.max, axis) - getattr(bbox.min, axis)) * 1000.0
+        assert size_mm == pytest.approx(expected_mm, abs=1.0), f"{axis} is {size_mm} mm"
 
 
 def test_read_exact_rejects_a_mesh_format():
