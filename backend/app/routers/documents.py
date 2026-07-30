@@ -116,7 +116,11 @@ async def import_document(
     resolution: int = Form(96),
     acc: accounts.Account = Depends(current_account),
 ):
-    """Universal import: STL/OBJ/PLY/GLB/OFF or faceted STEP → editable document."""
+    """Universal import → editable document.
+
+    STEP/IGES come in as exact B-rep (addressable faces, exact measurement,
+    editable re-export); STL/OBJ/PLY/GLB/OFF are voxelized.
+    """
     from app.services import import_service
 
     data = await file.read()

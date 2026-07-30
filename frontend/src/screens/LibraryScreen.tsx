@@ -166,14 +166,14 @@ export function LibraryScreen() {
             <input
               ref={fileRef}
               type="file"
-              accept=".stl,.obj,.ply,.glb,.off,.step,.stp"
+              accept=".stl,.obj,.ply,.glb,.off,.step,.stp,.iges,.igs"
               className="hidden"
               onChange={(e) => e.target.files?.[0] && importFile(e.target.files[0])}
             />
             <button
               onClick={() => fileRef.current?.click()}
               disabled={importing}
-              title="Import STL / OBJ / PLY / GLB / faceted STEP as an editable part"
+              title="Import STEP / IGES as an exact editable solid, or STL / OBJ / PLY / GLB as a voxel body"
               className="flex items-center gap-1.5 px-3 py-1.5 mr-2 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-cad-accent/50 text-[11px] font-medium transition-colors disabled:opacity-40"
             >
               {importing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={13} />}

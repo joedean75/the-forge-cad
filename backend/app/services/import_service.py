@@ -1,13 +1,22 @@
-"""Universal import — turn an uploaded mesh file into a live, editable document.
+"""Universal import — turn an uploaded file into a live, editable document.
 
-Roadmap feature 02. STL/OBJ/PLY/GLB/OFF parse via trimesh; STEP is handled by a
-faceted-B-rep reader that understands triangulated STEP (including The Forge's
-own exports — full round-trip) and fails with a clear message on NURBS STEP.
+Roadmap feature 02. There are two paths, and which one runs decides what you get.
 
-The mesh is voxelized into an occupancy grid and stored on an ImportFeature in
-the same cache framing OptimizeFeature uses, so the imported body evaluates
-through GridSDF and composes with every downstream capability: booleans,
-modifiers, generative optimization, FEA, DFM, CAM, assemblies.
+**STEP and IGES go through OpenCascade** (`cad_kernel/io/step_import.py`) and
+stay exact: the body arrives as a `BrepBodyFeature` carrying real analytic
+surfaces, so its faces and edges are addressable, `mass_properties` is computed
+rather than sampled, and it re-exports as an editable solid. This is the only
+path on which an imported part is the same kind of object as a modelled one.
+
+**Meshes are voxelized**, because an STL has nothing better to recover. The
+occupancy grid is stored on an `ImportFeature` in the same cache framing
+`OptimizeFeature` uses, so the body evaluates through `GridSDF` and composes
+with booleans, modifiers, generative optimization, FEA, DFM, CAM and assemblies.
+
+STEP falls back to the mesh path when OCC is unavailable or the file defeats it,
+via the faceted reader below — which handles triangulated STEP including The
+Forge's own legacy exports. IGES has no such fallback: it is a surface format
+with no faceted convention to parse.
 """
 
 from __future__ import annotations
@@ -15,18 +24,20 @@ from __future__ import annotations
 import base64
 import io
 import re
-import uuid
 from typing import Optional, Tuple
 
 import numpy as np
 import trimesh
 
+from app.cad_kernel.io import step_import
 from app.models.schemas import DesignDocument
 from app.services import document_service
 
 MESH_FORMATS = {"stl", "obj", "ply", "glb", "off"}
-STEP_FORMATS = {"step", "stp"}
-SUPPORTED_FORMATS = MESH_FORMATS | STEP_FORMATS
+STEP_FORMATS = step_import.STEP_FORMATS
+IGES_FORMATS = step_import.IGES_FORMATS
+EXACT_FORMATS = step_import.EXACT_FORMATS
+SUPPORTED_FORMATS = MESH_FORMATS | EXACT_FORMATS
 
 MAX_FILE_BYTES = 50 * 1024 * 1024
 DEFAULT_RESOLUTION = 96  # voxels along the longest axis
@@ -121,6 +132,11 @@ def parse_mesh(filename: str, data: bytes) -> trimesh.Trimesh:
         raise ImportError_(
             f"Unsupported format '.{ext}'. Supported: {', '.join(sorted(SUPPORTED_FORMATS))}."
         )
+    if ext in IGES_FORMATS:
+        raise ImportError_(
+            "IGES import needs the exact kernel (pip install cadquery-ocp). "
+            "There is no faceted fallback for a surface format."
+        )
     if ext in STEP_FORMATS:
         verts, faces = _parse_faceted_step(data.decode("utf-8", errors="replace"))
         mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=True)
@@ -194,6 +210,25 @@ def unpack_density(cache: dict) -> np.ndarray:
     return bits[:n].astype(float).reshape(dims)
 
 
+def _exact_tree(data: bytes, base: str, stem: str, ext: str, units: str) -> dict:
+    """Read a STEP/IGES file as exact B-rep and wrap it in a feature tree."""
+    from app.cad_kernel.evaluator import brep
+
+    shape, info = step_import.read_exact(data, ext, units=units)
+    return {
+        "version": "brep-v1",
+        "root": {
+            "type": "BrepBodyFeature",
+            "id": "f1",
+            "name": f"Import · {stem}",
+            "params": {
+                "payload": brep.serialize(shape),
+                "source": dict(info, filename=base, format=ext, exact=True),
+            },
+        },
+    }
+
+
 def import_document(
     filename: str,
     data: bytes,
@@ -202,36 +237,55 @@ def import_document(
     units: str = "auto",
     owner_id: Optional[str] = None,
 ) -> DesignDocument:
-    """Create a new document whose body is the imported mesh."""
+    """Create a new document whose body is the imported file.
+
+    STEP/IGES import exactly when OpenCascade is present; everything else — and
+    a STEP file OCC cannot read — goes through the voxel path.
+    """
     if len(data) > MAX_FILE_BYTES:
         raise ImportError_(f"File too large ({len(data) // (1024 * 1024)} MB > {MAX_FILE_BYTES // (1024 * 1024)} MB).")
 
-    mesh = parse_mesh(filename, data)
-    scale, detected_units = _unit_scale(mesh, units)
-    if scale != 1.0:
-        mesh = mesh.copy()
-        mesh.apply_scale(scale)
-
-    cache = voxelize(mesh, resolution)
     base = filename.rsplit("/", 1)[-1]
     stem = base.rsplit(".", 1)[0] if "." in base else base
-    tree = {
-        "version": "brep-v1",
-        "root": {
-            "type": "ImportFeature",
-            "id": str(uuid.uuid4()),
-            "name": f"Import · {stem}",
-            "params": {
-                "cache": cache,
-                "source": {
-                    "filename": base,
-                    "format": base.rsplit(".", 1)[-1].lower() if "." in base else "",
-                    "triangles": int(len(mesh.faces)),
-                    "units": detected_units,
+    ext = base.rsplit(".", 1)[-1].lower() if "." in base else ""
+
+    tree: Optional[dict] = None
+    if ext in EXACT_FORMATS and step_import.available():
+        try:
+            tree = _exact_tree(data, base, stem, ext, units)
+        except step_import.ExactImportError as exc:
+            # STEP has a faceted fallback worth trying; IGES has none, so the
+            # reason the exact reader gave is the one the user needs to see.
+            if ext in IGES_FORMATS:
+                raise ImportError_(str(exc))
+        except Exception as exc:  # OCC can fail in ways it does not name well
+            if ext in IGES_FORMATS:
+                raise ImportError_(f"IGES import failed: {exc}")
+
+    if tree is None:
+        mesh = parse_mesh(filename, data)
+        scale, detected_units = _unit_scale(mesh, units)
+        if scale != 1.0:
+            mesh = mesh.copy()
+            mesh.apply_scale(scale)
+        tree = {
+            "version": "brep-v1",
+            "root": {
+                "type": "ImportFeature",
+                "id": "f1",
+                "name": f"Import · {stem}",
+                "params": {
+                    "cache": voxelize(mesh, resolution),
+                    "source": {
+                        "filename": base,
+                        "format": ext,
+                        "triangles": int(len(mesh.faces)),
+                        "units": detected_units,
+                        "exact": False,
+                    },
                 },
             },
-        },
-    }
+        }
 
     doc = document_service.create_document(name=name or stem, owner_id=owner_id)
     updated = document_service.update_document(

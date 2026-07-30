@@ -66,6 +66,16 @@ def write_step_brep(shape, name: str = "part") -> str:
     Interface_Static.SetCVal_s("write.step.product.name", name)
 
     writer = STEPControl_Writer()
+    # The shape above is already in millimetres, so OCC must not convert again.
+    # Left unset, it converts from a *cached global* "CasCade length unit" that
+    # `step_import` raises to metres on every read — which turned an export
+    # taken after an import into a file 1000× too large. Pinning both units on
+    # this model makes the writer's own conversion the identity, whatever ran
+    # before it.
+    model = writer.Model()
+    model.SetLocalLengthUnit(1.0)
+    model.SetWriteLengthUnit(1.0)
+
     if writer.Transfer(scaled, STEPControl_AsIs) != IFSelect_ReturnStatus.IFSelect_RetDone:
         raise ValueError("OCC could not transfer the shape for STEP export")
 

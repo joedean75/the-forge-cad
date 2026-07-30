@@ -122,3 +122,38 @@ class FaceShellFeature(Feature):
         return cls(id=data.get("id"), name=data.get("name", "Shell"),
                    thickness=p.get("thickness", 0.002), faces=p.get("faces", []) or [],
                    children=_children_from(data))
+
+
+@register_feature
+@dataclass
+class BrepBodyFeature(Feature):
+    """An imported B-rep solid, carried as serialized OpenCascade geometry.
+
+    The alternative — and what `ImportFeature` does — is to voxelise the incoming
+    body into a density grid. That works for a mesh, where there is nothing
+    better to recover, but throwing away a STEP file's analytic surfaces loses
+    the only thing that made it worth importing: exact dimensions, faces you can
+    select, and the ability to hand it back out as something another CAD system
+    can edit.
+
+    The payload is OCC's own BRep format, deflated and base64'd. It is lossless
+    and cheap to re-read, which matters because the body is deserialized on every
+    evaluation rather than kept in memory.
+    """
+
+    payload: str = ""                       # zlib+base64 BRep
+    source: Dict[str, Any] = field(default_factory=dict)
+    children: List[Feature] = field(default_factory=list)
+
+    def evaluate(self) -> Solid:
+        return _evaluate_exact(self)
+
+    def _serialize_params(self) -> Dict[str, Any]:
+        return {"payload": self.payload, "source": self.source,
+                "children": [c.to_dict() for c in self.children]}
+
+    @classmethod
+    def _from_dict(cls, data: Dict[str, Any]) -> "BrepBodyFeature":
+        p = data["params"]
+        return cls(id=data.get("id"), name=data.get("name", "Imported body"),
+                   payload=p.get("payload", ""), source=p.get("source", {}) or {})

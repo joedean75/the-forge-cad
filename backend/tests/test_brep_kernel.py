@@ -277,28 +277,29 @@ def test_the_exported_file_declares_millimetres():
 
 def test_the_export_round_trips_at_the_right_size():
     """The end-to-end check that units and scale actually agree."""
-    import tempfile
-
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
-    from OCP.IFSelect import IFSelect_ReturnStatus
-    from OCP.STEPControl import STEPControl_Reader
+
+    from app.cad_kernel.io import step_import
 
     text = document_analysis.exact_step_document(_doc_with_bore())
-    path = tempfile.mktemp(suffix=".step")
-    with open(path, "w") as fh:
-        fh.write(text)
-
-    reader = STEPControl_Reader()
-    assert reader.ReadFile(path) == IFSelect_ReturnStatus.IFSelect_RetDone
-    reader.TransferRoots()
-    shape = reader.OneShape()
+    # Read back through the importer rather than a bare STEPControl_Reader: the
+    # unit a raw reader applies depends on a cached OCC global, so the same file
+    # measures in millimetres or metres depending on what ran before it.
+    shape, info = step_import.read_exact(text.encode(), "step")
+    assert info["units"].startswith("millimetre")
 
     bounds = Bnd_Box()
     BRepBndLib.Add_s(shape, bounds)
+    # Bnd_Box pads by the shape's tolerance. At metre scale that is ~1e-7 m per
+    # side, which is 0.0002 mm of phantom width once converted.
+    bounds.SetGap(0.0)
     xmin, ymin, zmin, xmax, ymax, zmax = bounds.Get()
-    assert (xmax - xmin, ymax - ymin, zmax - zmin) == pytest.approx((80.0, 50.0, 20.0), abs=1e-6)
-    assert brep.volume(shape) == pytest.approx(80 * 50 * 20 - math.pi * 64 * 20, rel=1e-6)
+    size_mm = [(hi - lo) * 1000.0 for lo, hi in
+               ((xmin, xmax), (ymin, ymax), (zmin, zmax))]
+    assert size_mm == pytest.approx([80.0, 50.0, 20.0], abs=1e-6)
+    assert brep.volume(shape) * 1e9 == pytest.approx(
+        80 * 50 * 20 - math.pi * 64 * 20, rel=1e-6)
 
 
 def test_a_body_with_no_exact_form_still_exports_as_facets():

@@ -368,6 +368,43 @@ def _resolved(shape, references, kind: str, what: str):
     return matched, unresolved
 
 
+def serialize(shape) -> str:
+    """An exact shape as a portable string: OCC BRep, deflated, base64'd."""
+    import base64
+    import io
+    import zlib
+
+    from OCP.BRepTools import BRepTools
+
+    buffer = io.BytesIO()
+    BRepTools.Write_s(shape, buffer)
+    return base64.b64encode(zlib.compress(buffer.getvalue(), 6)).decode("ascii")
+
+
+def deserialize(payload: str):
+    """Rebuild a shape from :func:`serialize`."""
+    import base64
+    import io
+    import zlib
+
+    from OCP.BRep import BRep_Builder
+    from OCP.BRepTools import BRepTools
+    from OCP.TopoDS import TopoDS_Shape
+
+    shape = TopoDS_Shape()
+    raw = zlib.decompress(base64.b64decode(payload))
+    BRepTools.Read_s(shape, io.BytesIO(raw), BRep_Builder())
+    if shape.IsNull():
+        raise BrepUnsupported("stored B-rep payload is empty or unreadable")
+    return shape
+
+
+def _brep_body(f):
+    if not getattr(f, "payload", ""):
+        raise BrepUnsupported("BrepBodyFeature has no stored geometry")
+    return deserialize(f.payload)
+
+
 def _edge_fillet(f):
     from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 
@@ -561,6 +598,7 @@ def _profile_wire_2d(profile: dict, to_world):
 
 
 _BUILDERS = {
+    "BrepBodyFeature": _brep_body,
     "RevolveFeature": _revolve,
     "SweepFeature": _sweep,
     "EdgeFilletFeature": _edge_fillet,
@@ -583,7 +621,8 @@ _BUILDERS = {
 # these is pointless — it cannot build them at all — and the fallback destroys
 # the real reason, which is usually specific and actionable ("radius too large
 # for that edge"), replacing it with a generic "needs the exact kernel".
-EXACT_ONLY = {"EdgeFilletFeature", "EdgeChamferFeature", "FaceShellFeature"}
+EXACT_ONLY = {"EdgeFilletFeature", "EdgeChamferFeature", "FaceShellFeature",
+              "BrepBodyFeature"}
 
 
 def requires_exact(feature) -> bool:
