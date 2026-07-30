@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import os
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 from fastapi import HTTPException
@@ -123,6 +123,23 @@ _BUILD_AXES = {
     "+Z": np.array([0.0, 0.0, 1.0]),
 }
 
+_DFM_PROCESSES = ("additive", "milling", "molding", "casting")
+
+
+def _pull_axis(build_axis: str) -> str:
+    """The mould pull / tool approach direction, defaulting to +Z.
+
+    "auto" means *search the orientations* on the additive path. There is no
+    equivalent search here — which way a mould opens is a decision, not
+    something to infer from the geometry it has to release — so it resolves to
+    the conventional +Z rather than silently picking a winner.
+    """
+    named = {"x": "+X", "y": "+Y", "z": "+Z"}
+    key = (build_axis or "").lower()
+    if key in named:
+        return named[key]
+    return build_axis if build_axis in _BUILD_AXES else "+Z"
+
 
 def _auto_build_axis(analysis) -> tuple[str, np.ndarray]:
     """Pick +X/+Y/+Z to minimize overhang area.
@@ -145,10 +162,59 @@ def simulate_document(doc_id: str, resolution: int = 128) -> SimulationResult:
     return _approximate_simulation(solid, spec, mat)
 
 
-def dfm_document(doc_id: str, build_axis: str = "auto", resolution: int = 128) -> DfmReport:
+def _topology_checks(doc_id: str, process: str, axis: str) -> List[DfmCheck]:
+    """Manufacturability measured on the exact body, when there is one.
+
+    Silently empty rather than raising: a shelled or optimized part has no exact
+    form, and losing the whole DFM report over that would be worse than losing
+    the checks that need topology. The mesh checks still run either way.
+    """
+    from app.services import dfm_topology
+
+    from app.services.cad_operations import _exact_shape
+
+    if not dfm_topology.available():
+        return []
+    try:
+        shape = _exact_shape(doc_id)
+    except Exception:
+        return []
+    try:
+        return dfm_topology.checks(shape, process=process, axis=axis)
+    except Exception:
+        _LOGGER.exception("topology DFM failed for %s", doc_id)
+        return []
+
+
+def dfm_document(doc_id: str, build_axis: str = "auto", resolution: int = 128,
+                 process: str = "additive") -> DfmReport:
     doc = docs.get_document(doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    process = (process or "additive").lower()
+    if process not in _DFM_PROCESSES:
+        raise ValueError(
+            f"unknown process {process!r}; one of {', '.join(_DFM_PROCESSES)}")
+
+    if process != "additive":
+        # Overhang, support volume and print time are questions about a powder-bed
+        # build. Asked of a milled or moulded part they have no answer, and an
+        # invented one would be worse than none — so a subtractive/formative
+        # report is the topology checks and nothing else. No quote either: this
+        # module has no cost model for those processes, and a made-up number is
+        # exactly the sort of signal a model would learn to optimise.
+        checks = _topology_checks(doc_id, process, _pull_axis(build_axis))
+        if not checks:
+            raise ValueError(
+                f"a {process} report needs the exact kernel and a body it can "
+                "build; this part evaluates through the distance field only")
+        met = sum(1 for c in checks if c.status == "pass")
+        return DfmReport(
+            process=process.upper(),
+            checks=checks,
+            printability_score=int(round(100.0 * met / len(checks))),
+        )
 
     solid = docs.get_solid(doc_id, resolution=resolution)
 
@@ -187,6 +253,19 @@ def dfm_document(doc_id: str, build_axis: str = "auto", resolution: int = 128) -
         DfmCheck(id="feature_size", label="Feature size", status="pass" if feature_size_ok else "fail", detail=f"{min_edge*1000:.2f} mm min edge", value=min_edge),
         DfmCheck(id="support", label="Support volume", status="warn" if support_volume > 0 else "pass", detail=f"{support_volume*1e6:.2f} mm³", value=support_volume),
     ]
+
+    # Overhang and support are honest tessellation questions — a face normal
+    # against a build direction survives meshing fine. `feature_size` is not: it
+    # reports the shortest edge of a marching-cubes mesh, which is a property of
+    # `resolution`. When the exact kernel can build the body, the real wall
+    # thickness measured on it replaces that row rather than sitting beside it,
+    # because two "minimum feature" numbers that disagree is worse than one.
+    exact = _topology_checks(doc_id, "additive", _pull_axis(build_axis))
+    if exact:
+        replaces = {c.id for c in exact}
+        if "wall_thickness" in replaces:
+            checks = [c for c in checks if c.id != "feature_size"]
+        checks.extend(exact)
 
     return DfmReport(
         process="LPBF",

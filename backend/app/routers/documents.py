@@ -275,9 +275,11 @@ def list_orders(doc: DesignDocument = Depends(readable_document)):
 def dfm_document(
     build_axis: str = Query("auto"),
     resolution: int = Query(128, ge=32, le=512),
+    process: str = Query("additive"),
     doc: DesignDocument = Depends(readable_document),
 ):
-    return document_analysis.dfm_document(doc.id, build_axis=build_axis, resolution=resolution)
+    return document_analysis.dfm_document(
+        doc.id, build_axis=build_axis, resolution=resolution, process=process)
 
 
 @router.get("/{doc_id}/step")

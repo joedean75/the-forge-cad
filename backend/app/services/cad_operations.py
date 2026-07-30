@@ -870,19 +870,35 @@ def _check_geometry(doc_id, args):
     return geometry_check.check_document(doc_id, resolution=int(args.get("resolution", 128)))
 
 
-@operation("dfm", "query", "Design-for-manufacture report for additive (LPBF): overhang angle, minimum "
-           "feature size, support volume, printability score and an indicative quote.",
-           {"build_axis": {"enum": ["auto", "x", "y", "z"], "default": "auto"},
-           "resolution": {"type": "number", "default": 128}})
+@operation("dfm", "query", "Design-for-manufacture report. 'additive' (LPBF, the default) reports overhang, "
+           "support volume, printability and a quote; 'milling', 'molding' and 'casting' report what "
+           "needs real topology — wall thickness, smallest bore, trapped voids, plus draft and "
+           "undercuts for a mould or 3-axis tool access for a cutter. Everything except the "
+           "additive-specific rows is measured on the exact body, so it does not move with "
+           "'resolution'. Non-additive processes need the exact kernel.",
+           {"process": {"enum": ["additive", "milling", "molding", "casting"], "default": "additive",
+           "description": "what the part will be made by"},
+           "build_axis": {"enum": ["auto", "x", "y", "z"], "default": "auto",
+           "description": "build direction for additive; mould pull / tool approach otherwise "
+                          "('auto' means +Z there — which way a mould opens is a decision, "
+                          "not something to infer)"},
+           "resolution": {"type": "number", "default": 128,
+           "description": "meshing resolution; affects the additive rows only"}})
 def _dfm(doc_id, args):
     """DFM was reachable only over REST, so an agent driving the op catalog could
     build a part but never check whether it could be made."""
     from app.services import document_analysis
 
     _get(doc_id)  # typed NoSuchDocument rather than the router's HTTPException
-    report = document_analysis.dfm_document(
-        doc_id, build_axis=str(args.get("build_axis", "auto")),
-        resolution=int(args.get("resolution", 128)))
+    process = str(args.get("process", "additive"))
+    try:
+        report = document_analysis.dfm_document(
+            doc_id, build_axis=str(args.get("build_axis", "auto")),
+            resolution=int(args.get("resolution", 128)), process=process)
+    except ValueError as exc:
+        # "this part has no exact form" is a different previous step, not a
+        # different argument — model it the way the rest of the catalog does.
+        raise PreconditionFailed(str(exc)) from exc
     return report.model_dump()
 
 
