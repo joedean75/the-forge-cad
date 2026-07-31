@@ -130,20 +130,13 @@ def mass_properties(doc_id: str) -> Dict:
 
 def _exact_properties(doc) -> Optional[Dict]:
     """Volume, area and centre of mass straight from the B-rep, or None."""
-    from app.cad_kernel.core.feature_tree import FeatureTree
     from app.cad_kernel.evaluator import brep
-    from app.services import feature_ops
+    from app.services import document_service
 
     if not brep.AVAILABLE:
         return None
     try:
-        active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
-        if doc.parameters:
-            from app.services import parameters
-
-            scope, _ = parameters.resolve_values(doc.parameters)
-            active = parameters.resolve_tree(active, scope)
-        shape = brep.brep_from_feature(FeatureTree.from_dict(active).root)
+        shape = document_service.get_exact_shape(doc.id)
         if shape is None:
             return None
         return {"volume": brep.volume(shape), "area": brep.surface_area(shape),

@@ -183,11 +183,9 @@ def analyse_document(doc_id: str, resolution: int = 128,
 
     try:
         from app.cad_kernel.core.feature_tree import FeatureTree
-        from app.services import feature_ops
 
-        active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
         report = fea.solve(
-            FeatureTree.from_dict(active).root,
+            FeatureTree.from_dict(docs.resolved_tree(doc)).root,
             youngs_pa=material.youngs_modulus * 1e9,
             yield_mpa=material.yield_strength,
             density=material.density,
@@ -354,26 +352,16 @@ def exact_step_document(doc_id: str) -> Optional[str]:
     the caller falls back to the faceted writer rather than exporting something
     that differs from the body the rest of the system computed.
     """
-    from app.cad_kernel.core.feature_tree import FeatureTree
-    from app.cad_kernel.evaluator import brep
     from app.cad_kernel.io.step_brep import write_step_brep
-    from app.services import feature_ops
 
-    if not brep.AVAILABLE:
-        return None
     doc = docs.get_document(doc_id)
     if doc is None:
         return None
     try:
-        # The same resolution pipeline the SDF path uses, minus the sampling:
-        # suppression, datums and driving parameters all still apply.
-        active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
-        if doc.parameters:
-            from app.services import parameters
-
-            scope, _ = parameters.resolve_values(doc.parameters)
-            active = parameters.resolve_tree(active, scope)
-        shape = brep.brep_from_feature(FeatureTree.from_dict(active).root)
+        # `get_exact_shape` applies the same resolution pipeline the SDF path
+        # uses — suppression, datums, driving parameters — minus the sampling,
+        # and caches the result on the resolved tree's hash.
+        shape = docs.get_exact_shape(doc_id)
         if shape is None:
             return None
         return write_step_brep(shape, name=(doc.name or "part")[:40])

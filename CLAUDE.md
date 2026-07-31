@@ -41,7 +41,9 @@ Both at once: `./start.sh` (expects the backend venv to already exist). Or `dock
 
 There is no frontend test suite; `npm run build` is the type-check gate.
 
-**Driving it headlessly** (rollouts, dataset generation): `tests/conftest.py` is the working bootstrap — temp SQLite via `DATABASE_URL`, empty `FORGE_DATA_DIR`, `FORGE_RATE_LIMIT=0`, and `FORGE_AUTH_REQUIRED` left unset so every request is attributed to a shared enterprise dev account. Call `cad_operations.execute` directly to skip HTTP, auth and quota metering entirely. Over HTTP, `POST /api/documents/{id}/op?envelope=1` returns failures as 200 bodies instead of raising. Two things bite at volume: the monthly op quota (metered per mutating op) and `capped_resolution`, which silently changes geometry fidelity with the plan.
+**Driving it headlessly** (rollouts, dataset generation): `tests/conftest.py` is the working bootstrap — temp SQLite via `DATABASE_URL`, empty `FORGE_DATA_DIR`, `FORGE_RATE_LIMIT=0`, and `FORGE_AUTH_REQUIRED` left unset so every request is attributed to a shared enterprise dev account. Call `cad_operations.execute` directly to skip HTTP, auth and quota metering entirely. Over HTTP, `POST /api/documents/{id}/op?envelope=1` returns failures as 200 bodies instead of raising.
+
+Two things used to bite at volume and now have a switch: `services/rollout.py`. `with rollout.rollout(resolution=192):` turns metering off and pins resolution, or `FORGE_ROLLOUT=1` (+ `FORGE_ROLLOUT_RESOLUTION`) sets it process-wide. The quota one is obvious — a few hundred thousand edits exhausts even the enterprise allowance and the failure arrives as a 402 mid-rollout. **Pinning matters more**: `capped_resolution` clamps to the account's plan, so the same document evaluates differently for different accounts, which destroys the one property a dataset needs — that a recorded observation can be reproduced. Both are opt-in and scoped to a block; neither touches `can_access`, which is the security boundary rather than a billing counter.
 
 ## Architecture
 
