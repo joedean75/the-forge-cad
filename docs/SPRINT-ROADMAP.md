@@ -1,19 +1,16 @@
 # Sprint roadmap — closing out the exact-kernel programme
 
-Sprints 1–7 are landed on `claude/cad-system-agent-review-48kf9k` (601 tests).
-Sprint 9 landed next (`abd5251`), then Sprint 8. What remains is Sprint 10 and
-the four honourable mentions.
+Sprints 1–9 are on `main` (638 tests). **One sprint remains: 10**, plus four
+honourable mentions.
 
-`ROADMAP.md` is the product-level document and describes horizons. This one is
-narrower and concrete: what is left in the work that turned the SDF editor into
-an exact-kernel CAD system with a machine-checkable action space, in the order
-it should be done and with the trap that will actually bite in each.
+[PRODUCT-ROADMAP.md](../PRODUCT-ROADMAP.md) is the product-level document. This
+one is narrower and concrete: what is left in the work that turned the SDF
+editor into an exact-kernel CAD system with a machine-checkable action space,
+with the trap that will actually bite in each.
 
 ## What is already true
 
-Worth stating, because three of the remaining sprints only make sense on top of
-it and because `ROADMAP.md`'s "kernel is implicit, not B-rep — biggest lift" no
-longer describes the system.
+Worth stating, because the remaining sprints only make sense on top of it.
 
 | Landed | What it bought |
 |---|---|
@@ -26,8 +23,8 @@ longer describes the system.
 | Sheet metal on the exact kernel | The last common part with no addressable topology |
 | Real FEA (`fea.py`), `simulate` in the catalog | A verifiable signal that means something |
 | True ruled loft (`RuledLoftFeature`) | Frustum volumes exact to 1e-6 |
-| Caching + rollout mode (Sprint 9) | `_BREP_CACHE`, both caches bounded, metering off in a block |
-| Generative history (Sprint 8, `core/history.py`) | A reference follows the topology instead of re-measuring it |
+| Sprint 9: B-rep cache, bounded LRUs, `rollout.py` | 4 ops → 1 OCC build; reproducible rollouts |
+| Sprint 8: generative history (`core/history.py`) | A reference follows the topology instead of re-measuring it |
 
 Deliberately unchanged: `LoftFeature`, `FilletFeature`/`ChamferFeature` and
 `ShellFeature` keep their distance-field meaning, because changing what an
@@ -36,20 +33,26 @@ having two features.
 
 ---
 
-## Sprint 8 — generative-history topological naming — **landed**
+## Sprint 8 — generative-history topological naming  ✅ *shipped*
 
-Built as `cad_kernel/core/history.py`, threaded through `evaluator/brep.py` and
-resolved in `naming.resolve_references`; `tests/test_topological_history.py`
-covers it. What the plan below got right, and the three places it needed
-amending:
+Every face and edge carries a **tag** — an identity, `{feature_id}:{kind}:{index}`,
+minted by the feature that created it and propagated through OCC's
+`Modified`/`Generated`/`IsDeleted` at each stage of the build
+(`cad_kernel/core/history.py`, threaded through `evaluator/brep.py`).
+`naming.resolve_references` follows the tag first and falls back to descriptor
+matching, returning a verdict per reference: `matched`, `split`, `deleted` or
+`unresolved`. `check_references` publishes those verdicts, and `execute` warns
+when an edit leaves a body that still builds but reaches fewer edges than it was
+given — valid geometry that quietly stopped matching the request is the failure a
+geometry check cannot see.
 
-* **Tags, not a `BRepTools_History` object.** The accumulator is a per-build
-  recorder of `sub-shape -> tag` maps rather than a history handle, because the
+Three places the plan below needed amending:
+
+* **Tags, not a `BRepTools_History` object.** The accumulator records
+  `sub-shape → tag` per stage rather than holding a history handle, because the
   question at rebuild time is not "what did this builder do" but "which feature
-  originally made this entity". A tag is `{feature_id}:{kind}:{index}`, minted
-  by the creating feature and carried forward through each builder's
-  `Modified`/`Generated`. `BRepTools_History` would have worked as the transport
-  and adds nothing over calling the builders directly.
+  originally made this entity". `BRepTools_History` would have worked as the
+  transport and adds nothing over calling the builders directly.
 * **`IsDeleted` had to be *distrusted* by default**, which the plan did not
   anticipate. `BRepFilletAPI_MakeFillet` reports untouched box edges as deleted;
   believing it would declare every edge of a filleted part destroyed. Only the
@@ -61,17 +64,20 @@ amending:
 
 The trap the plan called — design for absent history, and do not delete
 descriptor matching — was the right one and is what the fallback order encodes.
+Reported deletion deliberately *skips* the descriptor fallback: given a face an
+upstream edit destroyed, measuring will happily find something 0.5 mm away and
+move the fillet onto it, and there is a test pinning exactly that.
 
-**Cost**, measured the way Sprint 9 asked for rather than asserted: recording is
-always on, and adds **6–8%** to an exact build (2 features 4.3 → 4.5 ms,
-5 features 18.1 → 19.4 ms, 13 features 68.0 → 73.5 ms — flat, not growing with
-the tree). It was **+346%** first. The whole difference is one line in
-`history._drain`: `list(occ_list)` on a `TopTools_ListOfShape` costs ~0.26 ms
-*whether or not the list is empty*, because pybind builds an iterator either way,
-and the module asks two such questions of every sub-shape at every stage — almost
-all of which answer empty. Checking `Size()` first costs a thousandth of that.
+**Cost**, measured rather than asserted: recording is always on and adds **6–8%**
+to an exact build (2 features 4.3 → 4.5 ms, 13 features 68.0 → 73.5 ms — flat,
+not growing with the tree). It was **+346%** first, and the whole difference is
+one line in `history._drain`: `list(occ_list)` on a `TopTools_ListOfShape` costs
+~0.26 ms *whether or not the list is empty*, because pybind builds an iterator
+either way, and the module asks two such questions of every sub-shape at every
+stage — almost all of which answer empty. Checking `Size()` first costs a
+thousandth of that.
 
-Original plan follows.
+The original plan follows, for the reasoning rather than the instructions.
 
 **Why now.** This is the last correctness gap in the exact kernel, and it is the
 famously hard problem in parametric CAD. `core/naming.py` matches entities by
@@ -118,55 +124,18 @@ need a second pass.
 
 ---
 
-## Sprint 9 — caching and rollout throughput — **landed** (`abd5251`)
+## Sprint 9 — caching and rollout throughput  ✅ *shipped*
 
-**Why now.** Sprints 4–7 each added an expensive path, and none of them cache.
-The cost shows up exactly where it hurts most: generating training data.
+`document_service.get_exact_shape` owns the B-rep build and caches it on the
+hash of the **resolved** tree — not the document id, because parameters are
+resolved *into* the tree rather than stored in it, so hashing the raw tree would
+serve a body that silently disagrees with the document. A four-operation
+read-only inspection went from 12 recursive OCC builds to 3.
 
-Three specific problems, in order of severity:
-
-- **`_exact_shape` rebuilds the entire OCC tree on every call**
-  (`cad_operations.py`). `list_faces`, `list_edges`, `fillet_edges`,
-  `mass_properties`, `dfm`, `verify_against_spec` and the drawing path each
-  rebuild from the root. An agent that lists edges, picks one and fillets it has
-  built the same body three times. There is no equivalent of `_SOLID_CACHE` for
-  the B-rep.
-- **`_SOLID_CACHE` is unbounded** (`document_service.py:44`). It is a plain dict
-  keyed by document id with no eviction, holding an evaluated `Solid` per
-  document. Fine for a UI session, a leak for a rollout loop that touches
-  thousands of documents.
-- **Metering and `capped_resolution` are still in the path**
-  (`app/security.py`). The monthly op quota meters every mutating op, and
-  `capped_resolution` silently changes geometry fidelity with the account's
-  plan — so the same document yields different geometry depending on who asks.
-  Both are correct for a product and wrong for a dataset.
-
-**What to do.**
-
-1. A `_BREP_CACHE` keyed by `(doc_id, tree_hash)` — the tree hash already exists
-   for `DerivedCache.mesh_hash`. Invalidate on tree change, which
-   `update_document` already detects via `_tree_needs_rebuild`.
-2. Bound both caches with an LRU. Size by count, not bytes; an OCC shape's
-   memory is not introspectable from Python.
-3. A documented rollout mode — an env flag or a context manager beside
-   `trajectories.recording` — that bypasses metering and pins resolution. Put it
-   next to the harness notes in `CLAUDE.md`, because the point is that it is
-   *discoverable*, not that it exists.
-
-**How you know it worked.** Benchmark, do not assert: time an
-`add_primitive → list_edges → fillet_edges → dfm → verify_against_spec` sequence
-before and after, and record the figure in the commit. Add one test that the
-cache is actually invalidated by a tree change — a stale B-rep cache is a far
-nastier bug than a slow one, because the geometry silently disagrees with the
-document.
-
-**Traps.** Do not cache on `doc_id` alone. The whole reason `DerivedCache`
-records `resolution` and `sampler` is that geometry is only comparable when the
-conditions match; a B-rep cache has the same obligation.
-
-**Size.** Medium, and the highest value per hour of the three.
-
----
+Both geometry caches are LRU-bounded at 64 entries. `services/rollout.py` turns
+metering off and pins resolution for a training loop; pinning is the half that
+matters, because the plan cap otherwise makes the same document evaluate
+differently for different callers. Neither switch touches access control.
 
 ## Sprint 10 — surface the new capabilities in the UI
 
@@ -247,13 +216,15 @@ training-data half of this project, and nobody has looked at it.
 
 ## Suggested order
 
-**9 → 8 → 10**, not 8 → 9 → 10. 9 and 8 are done; 10 is what is left.
+**8 before 10.** Both 9 and 8 are done, in that order — 9 was cheap and made
+every later iteration faster, which is exactly why it was pulled forward, and 8
+was the hardest thing left and wanted that fast rebuild loop.
 
-Sprint 9 was cheap, unblocked everything that followed by making iteration fast,
-and was the only one whose absence actively degraded the training-data use case.
-Sprint 8 was the hardest and benefited from a fast rebuild loop. Sprint 10 is
-best last, because it is the one that has to be built against a settled
-backend — and because a face picker built before Sprint 8 would have needed
-revisiting once references gained history. It does now: the picker should show
-the `split` and `deleted` states `check_references` reports, since a selection
-that lost its target is invisible in the viewport.
+Sprint 10 is what remains, and it was right to leave it last: it has to be built
+against a settled backend, and a face picker written before references gained
+history would need revisiting. It does now — the picker should surface the
+`split` and `deleted` states `check_references` reports, because a selection that
+lost its target is invisible in the viewport.
+
+The honourable mentions are all independent of both and can be picked up at any
+time. The cheapest with real value is the DXF path out of `drawing.py`.

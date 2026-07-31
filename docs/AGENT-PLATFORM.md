@@ -37,6 +37,101 @@ curl -s -X POST $BASE/api/documents/$DOC/op \
 Every mutating call returns the updated document (feature tree + derived
 mesh/bbox/mass), so agents can verify each step.
 
+Add `?envelope=1` and failures come back as `200` bodies instead of raising —
+`{ok, error:{code,message,arg}, delta, state, warnings}`. That is the shape to
+drive a loop from: `ok` is computed, `error.code` is one of a stable set
+(`MISSING_ARG`, `BAD_ARG`, `NO_SUCH_FEATURE`, `PRECONDITION`, `EVAL_FAILED`, …),
+and `delta` reports what actually changed about the geometry.
+
+`GET /api/operations/tools` returns the same catalog as OpenAI-style function
+definitions with strict JSON Schema, for constrained decoding.
+
+## Selecting faces and edges
+
+The operations above address the body as a whole. These address its topology,
+and need the exact kernel (`pip install cadquery-ocp`) — without it they return
+a `PRECONDITION` error saying so.
+
+```bash
+# What can I select? Each entry has a stable id, kind, size and position.
+curl -s -X POST $BASE/api/documents/$DOC/op -H 'X-Api-Key: fk_…' \
+  -H 'Content-Type: application/json' -d '{"op":"list_edges","args":{"kind":"circle"}}'
+
+# Round the ones you picked — or pass "all" instead of a list.
+-d '{"op":"fillet_edges","args":{"edges":["E1a2b3c4"],"radius":0.001}}'
+```
+
+`fillet_edges`, `chamfer_edges` and `shell_faces` are real edge/face treatments,
+not smooth blends. They roll the edit back and return a typed `PRECONDITION` if
+OCC cannot build them, so a failed fillet never leaves the document unevaluatable.
+
+A selection is stored as an *identity*, not a measurement, and is followed
+through the construction history on every rebuild — so an upstream edit that
+splits the edge you filleted leaves the reference naming **both** segments, and
+one that destroys it says so instead of quietly moving the fillet to whatever was
+nearest. Ask which happened:
+
+```bash
+-d '{"op":"check_references","args":{}}'
+# -> {"lost":1,"split":0,"ok":false,"features":[{"feature_id":"f4",
+#     "references":[{"id":"E5523fd09","status":"deleted","resolves_to":0,
+#                    "meaning":"an upstream edit destroyed it — reselect and reapply"}]}]}
+```
+
+`status` is `matched`, `split`, `deleted` or `unresolved`. Any mutating operation
+that leaves a reference unresolved also says so in the envelope's `warnings` —
+worth reading, because the body it leaves behind is a perfectly valid solid that
+`check_geometry` will pass.
+
+## Checking the part
+
+Four different questions, deliberately separate:
+
+```bash
+# Is it a well-formed solid? (watertight, winding, connected bodies)
+-d '{"op":"check_geometry","args":{}}'
+
+# Can it be made? process = additive | milling | molding | casting
+-d '{"op":"dfm","args":{"process":"milling"}}'
+
+# Will it hold? Real hex-element FEA — check `solver` in the result;
+# "closed-form estimate" means no real solve ran.
+-d '{"op":"simulate","args":{}}'
+
+# Is it the RIGHT part? Requirements you set, scored.
+-d '{"op":"set_spec","args":{"requirements":[
+      {"kind":"bounding_box","axis":"x","value":80,"tolerance":0.5},
+      {"kind":"hole","diameter":10,"count":4},
+      {"kind":"mass","max":200}]}}'
+-d '{"op":"verify_against_spec","args":{}}'
+```
+
+`verify_against_spec` returns a pass/fail row per requirement plus `score`, the
+fraction met — that is the reward signal. An unmeasurable requirement fails
+loudly rather than being skipped, so the score cannot be inflated by a spec the
+kernel could not check.
+
+## Rollouts and training data
+
+`services/trajectories.recording(doc_id, goal=…)` records every operation as
+`(goal, obs_before, op, args, result, delta, obs_after)`;
+`GET /api/trajectories/export.jsonl` exports them in fine-tuning shape.
+`services/decompiler.py` goes the other way — it recovers the op sequence for
+any existing feature tree and verifies it by replay.
+
+Two things bite at volume, and `services/rollout.py` is the switch:
+
+```python
+from app.services import rollout
+with rollout.rollout(resolution=192):
+    ...   # metering off, resolution pinned
+```
+
+Metering is obvious. **Pinning matters more**: resolution is otherwise capped by
+the account's plan, so the same document evaluates differently for different
+callers — which destroys the one property a dataset needs. `FORGE_ROLLOUT=1`
+sets it process-wide. Neither switch touches access control.
+
 ## Copilot (multi-step agentic loop)
 
 ```bash
@@ -79,9 +174,11 @@ agent can go prompt → part → print in two operations. MCP tools: `slice_part
 ## Import / export / quotes
 
 ```bash
-# Mesh file → editable part (STL/OBJ/PLY/GLB/OFF, faceted STEP)
+# STEP/IGES → exact editable solid (addressable faces, exact measurement).
+# Meshes (STL/OBJ/PLY/GLB/OFF) import as a voxel body instead — an STL has
+# nothing better to recover. Units come from a STEP/IGES header, not a guess.
 curl -s -X POST $BASE/api/documents/import -H 'X-Api-Key: fk_…' \
-  -F file=@bracket.stl -F units=auto
+  -F file=@bracket.step -F units=auto
 
 # Instant manufacturing quotes, then an order
 curl -s -X POST $BASE/api/documents/$DOC/quotes -H 'X-Api-Key: fk_…' \

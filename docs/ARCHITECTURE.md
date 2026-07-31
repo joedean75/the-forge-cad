@@ -14,20 +14,38 @@ shared/types.ts (hand-mirrored)          ▼
 
 ## The CAD kernel (`backend/app/cad_kernel/`)
 
-Self-contained and SDF-first. A `FeatureTree` of primitives, booleans,
-modifiers, sketches (`ops/`) is evaluated as a **signed distance field**
-(`evaluator/sdf.py`), meshed with marching cubes (`geom/meshing.py`), and
-exported to STL/STEP (`io/`). `kernel.py` is the facade. The common
-box/cylinder/boolean case samples through a native Rust module (`forge_sdf`);
-everything else falls back to vectorized numpy.
+Self-contained, and **two kernels behind one facade**. A `FeatureTree` of
+primitives, booleans, modifiers and sketches (`ops/`) is evaluated by
+`kernel.py`, which tries in order:
 
-The SDF representation is what makes the rest of the product cheap:
+1. **Exact B-rep** via OpenCascade (`evaluator/brep.py`) — analytic surfaces,
+   addressable faces and edges, exact dimensions, real STEP.
+2. **Native Rust SDF** (`forge_sdf`) for the box/cylinder/boolean hot path.
+3. **numpy SDF** (`evaluator/sdf.py`) for everything else.
 
-- **Generative results and imports compose** — a SIMP density grid or an
-  imported mesh becomes a `GridSDF` (voxel occupancy → EDT), so optimized and
-  imported bodies keep participating in booleans, fillets, and shells.
+Whichever ran is recorded in `derived.sampler`. Both paths mesh through
+marching cubes (`geom/meshing.py`) for display and export to STL/STEP (`io/`).
+
+**Why both.** The B-rep kernel is what gives geometry an *identity*: marching
+cubes returns one face with no surface, so on the SDF path no edge is
+selectable and a dimension is only exact to a sample spacing. But the SDF is
+the only thing that can evaluate a voxel density field, so it keeps the parts
+of the product that depend on that:
+
+- **Generative results and mesh imports compose** — a SIMP density grid or a
+  voxelized STL becomes a `GridSDF`, so those bodies still take part in
+  booleans, fillets and shells.
 - **The FDM slicer offsets by iso-contouring** the field per layer
   ([PRINTING.md](PRINTING.md)).
+
+`brep_from_feature` returns `None` rather than approximating anything it cannot
+build faithfully, and one such feature disqualifies the whole tree — half a body
+built exactly and half approximated is worse than either. OCP is an optional
+~143 MB dependency; without it everything still works through the SDF, but no
+face or edge is addressable and STEP export is faceted.
+
+`CLAUDE.md` carries the per-feature reasoning: which features each kernel owns,
+and why the ones that look mappable are not.
 
 ## Documents & operations
 

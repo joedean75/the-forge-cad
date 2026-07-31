@@ -1,7 +1,19 @@
-# The Forge — Product Roadmap (Market Read & Next 5 Features)
+# The Forge — Product Roadmap
 
-_Product strategy, July 2026. Companion to the technical `ROADMAP.md` (kernel horizons)._
-_Interactive version: published as a Claude artifact._
+_Product strategy and market read, July 2026._
+
+Three waves of work, in the order they were done. **Everything in waves one and
+two has shipped**; the third is in progress.
+
+| Wave | What | State |
+|---|---|---|
+| One — market wedge | Copilot, universal import, instant quotes, agent platform, real-time collaboration | shipped |
+| Two — production workflow | the ten standard-CAD features (materials, parameters, assemblies, drawings, GD&T, revisions …) | shipped |
+| Three — exact kernel | OpenCascade alongside the SDF, edge selection, exact import, design specs, topology DFM, real FEA | mostly shipped — see [docs/SPRINT-ROADMAP.md](docs/SPRINT-ROADMAP.md) |
+
+For what the system *does today* rather than what was planned, read
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); `CLAUDE.md` is authoritative on
+the kernel's behaviour and the reasoning behind it.
 
 ## Thesis
 
@@ -36,9 +48,11 @@ on that seam.
 4. **Distribution is a plugin/API, not a destination.** AdamCAD's key move was an
    Onshape plugin; Zoo bets developer-first on API + kernel.
 
-## The next five features
+## The five wave-one features
 
-Ordered by leverage; each builds on something The Forge already has.
+All five have shipped. They are kept below as written — including the original
+`_NOW_` / `_NEXT_` / `_LATER_` priority markers — because the reasoning is the
+record of *why* each was built in that order.
 
 ### 01 · Forge Copilot — the agentic engineering loop  · _NOW_
 A conversational agent that plans and **executes** across model → optimize →
@@ -53,6 +67,8 @@ with human approve & undo on every step.
 ### 02 · Universal import — existing parts, editable  · _NOW_
 Upload STEP / STL / OBJ → becomes a live document body via the mesh→SDF bridge:
 measurable, optimizable, DFM-checkable, machinable, assemblable.
+_Wave three went further than this: STEP and IGES now import **exact**, with
+addressable faces and edges. Only meshes take the SDF bridge._
 - **Why now:** interoperability is the #1 pro-adoption wall; unlocks "optimize /
   quote the part I already have."
 - **Builds on:** the MeshSDF / GridSDF bridge already used for generative results;
@@ -89,12 +105,12 @@ branch/merge on the op stream.
 
 - **Now** (wedge + adoption): 01 Forge Copilot, 02 Universal import.
 - **Next** (revenue + reach): 03 Instant quotes, 04 Agent platform.
-- **Later** (infra moat): 05 Real-time collaboration, ahead of the Horizon-2
-  hybrid B-Rep kernel (`ROADMAP.md`).
+- **Later** (infra moat): 05 Real-time collaboration, ahead of the hybrid B-rep
+  kernel — which has since shipped (see below).
 
 ---
 
-# Production workflow — top 10 standard-CAD features
+# Wave two — production workflow: ten standard-CAD features
 
 _Added July 2026. Roadmap features 01–05 above have all shipped; this is the next
 horizon: closing the gap from "generates and makes parts" to a **complete
