@@ -902,6 +902,29 @@ def _dfm(doc_id, args):
     return report.model_dump()
 
 
+@operation("simulate", "query", "Linear-static FEA: von Mises stress, displacement and safety factor "
+           "against the material's yield, from the load cases and supports on the document's "
+           "optimization setup. An 8-node hexahedral solve on the body itself, so the answer "
+           "depends on the shape, where the load is and where the part is held. Check `solver` "
+           "in the result: 'closed-form estimate' means no real solve ran and the numbers are "
+           "not an analysis.",
+           {"elements": {"type": "number", "default": 8000,
+           "description": "element budget; more is slower and resolves stress further"},
+           "resolution": {"type": "number", "default": 128,
+           "description": "meshing resolution for the fallback estimate only"}})
+def _simulate(doc_id, args):
+    """`simulate` was deliberately kept out of the catalog while it was a
+    closed-form guess — a verifiable signal that means nothing is worse than no
+    signal, because a model will optimise it. Now that a real solve backs it, it
+    belongs in the action space, and the result says which one produced it."""
+    from app.services import document_analysis
+
+    _get(doc_id)
+    return document_analysis.analyse_document(
+        doc_id, resolution=int(args.get("resolution", 128)),
+        elements=int(args["elements"]) if args.get("elements") else None)
+
+
 @operation("profile_cut", "query", "2D laser/plasma/waterjet cut of the part outline from sheet, kerf-compensated. "
            "Fetch G-code at GET /api/documents/{id}/profile-cut.gcode.",
            {"kerf_mm": {"type": "number", "default": 0.2}, "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},

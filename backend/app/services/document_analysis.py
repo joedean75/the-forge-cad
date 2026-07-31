@@ -152,14 +152,72 @@ def _auto_build_axis(analysis) -> tuple[str, np.ndarray]:
 
 
 def simulate_document(doc_id: str, resolution: int = 128) -> SimulationResult:
+    """The REST surface's simulation, now a real solve where one is possible."""
+    report = analyse_document(doc_id, resolution=resolution)
+    return SimulationResult(
+        max_stress=report["max_stress"],
+        max_displacement=report["max_displacement"],
+        safety_factor=report["safety_factor"],
+        compliance=report["compliance"],
+        mass=report["mass"],
+    )
+
+
+def analyse_document(doc_id: str, resolution: int = 128,
+                     elements: Optional[int] = None) -> dict:
+    """Linear-static FEA of the document, with the closed-form estimate as a last resort.
+
+    Which one ran is in `solver`, and that distinction is the whole point: the
+    estimate cannot tell a cube from a cantilever, so nothing should score
+    against it without knowing it is what produced the number.
+    """
+    from app.services import fea
+
     doc = docs.get_document(doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    spec = _spec_from_optimization(doc.name, doc.optimization) if doc.optimization else _default_spec()
+    spec = (_spec_from_optimization(doc.name, doc.optimization) if doc.optimization
+            else _default_spec())
+    material = _material_for_spec(spec)
+
+    try:
+        from app.cad_kernel.core.feature_tree import FeatureTree
+        from app.services import feature_ops
+
+        active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
+        report = fea.solve(
+            FeatureTree.from_dict(active).root,
+            youngs_pa=material.youngs_modulus * 1e9,
+            yield_mpa=material.yield_strength,
+            density=material.density,
+            loads=list(spec.load_cases),
+            constraints=list(spec.constraints),
+            **({"target_elements": int(elements)} if elements else {}),
+        )
+        report["material"] = material.name
+        return report
+    except Exception as exc:
+        # Python clears the exception name at the end of the block, so the
+        # reason has to be carried out rather than referenced below.
+        reason = str(exc)
+        _LOGGER.info("FEA fell back to the closed-form estimate for %s: %s", doc_id, reason)
+
     solid = docs.get_solid(doc_id, resolution=resolution)
-    mat = _material_for_spec(spec)
-    return _approximate_simulation(solid, spec, mat)
+    estimate = _approximate_simulation(solid, spec, material)
+    return {
+        "solver": "closed-form estimate",
+        "estimate_only": True,
+        "reason": reason,
+        "material": material.name,
+        **estimate.model_dump(),
+        "notes": [
+            "this is NOT an analysis: max_stress is total_force / volume^(2/3) "
+            "clamped to [0.01, 500] MPa, which does not depend on the shape, the "
+            "load's position or where the part is held. Two different parts under "
+            "the same load get the same answer.",
+        ],
+    }
 
 
 def _topology_checks(doc_id: str, process: str, axis: str) -> List[DfmCheck]:
