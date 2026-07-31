@@ -48,6 +48,8 @@ _BUILDERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "RevolveFeature": ("add_revolve", ("profile", "axis", "center", "angle")),
     "SweepFeature": ("add_sweep", ("path", "radius")),
     "LoftFeature": ("add_loft", ("profile_a", "profile_b", "plane", "offset_a", "offset_b")),
+    "RuledLoftFeature": ("add_ruled_loft",
+                         ("profile_a", "profile_b", "plane", "offset_a", "offset_b", "ruled")),
     "SheetMetalFeature": ("add_sheet_metal",
                           ("thickness", "length", "width", "bend_radius", "k_factor", "flanges")),
 }

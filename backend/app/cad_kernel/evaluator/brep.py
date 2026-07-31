@@ -29,9 +29,9 @@ What it does not build, and why:
   values*, which its own docstring calls an approximation rather than a ruled
   surface. OCC's `ThruSections` builds a true loft, which is a genuinely
   different shape — so mapping it here would silently change what an existing
-  document means depending on whether OCC happens to be installed. A true loft
-  belongs as its own feature, the way `EdgeFilletFeature` sits beside
-  `FilletFeature`, not as a swap behind the same name.
+  document means depending on whether OCC happens to be installed. The true
+  loft is ``RuledLoftFeature`` instead, sitting beside it the way
+  `EdgeFilletFeature` sits beside `FilletFeature`.
 
 Units are metres throughout, matching the rest of the kernel. OCC's default
 tolerances are pitched at millimetres, but `Precision::Confusion` is 1e-7, which
@@ -597,6 +597,30 @@ def _profile_wire_2d(profile: dict, to_world):
     return polygon.Wire()
 
 
+def _ruled_loft(f):
+    """A genuine ruled surface between two profiles, via `ThruSections`.
+
+    Deliberately *not* wired to `LoftFeature`: `LoftSDF` interpolates distance
+    values, which is a different body. See `ops/exact.RuledLoftFeature`.
+    """
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
+
+    from app.cad_kernel.core.planes import plane_normal
+
+    normal = plane_normal(getattr(f, "plane", "xy"))
+    offset_a, offset_b = float(f.offset_a), float(f.offset_b)
+    if abs(offset_b - offset_a) < 1e-12:
+        raise BrepUnsupported("the two loft sections are at the same height")
+
+    builder = BRepOffsetAPI_ThruSections(True, bool(getattr(f, "ruled", True)))
+    for profile, offset in ((f.profile_a, offset_a), (f.profile_b, offset_b)):
+        builder.AddWire(_profile_wire(profile or {}, normal, offset, 0.0, 0.0))
+    builder.Build()
+    if not builder.IsDone():
+        raise BrepUnsupported("OCC could not loft between those two profiles")
+    return builder.Shape()
+
+
 def _sheet_metal(f):
     """A base flange plus bent edge flanges, built the way the field defines them.
 
@@ -686,6 +710,7 @@ def _flange_profile(r_in: float, r_out: float, sweep: float, leg: float, place):
 
 
 _BUILDERS = {
+    "RuledLoftFeature": _ruled_loft,
     "SheetMetalFeature": _sheet_metal,
     "BrepBodyFeature": _brep_body,
     "RevolveFeature": _revolve,
@@ -711,7 +736,7 @@ _BUILDERS = {
 # the real reason, which is usually specific and actionable ("radius too large
 # for that edge"), replacing it with a generic "needs the exact kernel".
 EXACT_ONLY = {"EdgeFilletFeature", "EdgeChamferFeature", "FaceShellFeature",
-              "BrepBodyFeature"}
+              "BrepBodyFeature", "RuledLoftFeature"}
 
 
 def requires_exact(feature) -> bool:

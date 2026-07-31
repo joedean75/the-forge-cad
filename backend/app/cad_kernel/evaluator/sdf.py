@@ -856,6 +856,7 @@ _SDF_BUILDERS = {
     "EdgeChamferFeature": _sdf_needs_exact_kernel,
     "FaceShellFeature": _sdf_needs_exact_kernel,
     "BrepBodyFeature": _sdf_needs_exact_kernel,
+    "RuledLoftFeature": _sdf_needs_exact_kernel,
 }
 
 

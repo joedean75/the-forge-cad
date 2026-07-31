@@ -294,6 +294,31 @@ def _add_loft(doc_id, args):
     return {"message": "added loft", "feature_id": node["id"]}
 
 
+@operation("add_ruled_loft", "mutate", "Loft between two profiles with a real ruled surface — straight lines between "
+           "the two rims, which is what every CAD system means by 'loft'. Distinct from "
+           "add_loft, whose distance-field blend bulges at the waist: they are different "
+           "shapes, both useful. Set ruled=false for a smooth surface through the sections. "
+           "Requires the exact kernel.",
+           {"profile_a": {"type": "object"}, "profile_b": {"type": "object"},
+           "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
+           "offset_a": {"type": "number"}, "offset_b": {"type": "number"},
+           "ruled": {"type": "boolean", "default": True,
+           "description": "straight rulings between the sections; false blends smoothly"},
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
+def _add_ruled_loft(doc_id, args):
+    doc = _get(doc_id)
+    node = {"type": "RuledLoftFeature", "name": "Ruled loft", "params": {
+        "profile_a": args.get("profile_a", {"type": "rect", "width": 0.04, "height": 0.04, "cx": 0, "cy": 0}),
+        "profile_b": args.get("profile_b", {"type": "circle", "radius": 0.015, "cx": 0, "cy": 0}),
+        "plane": args.get("plane", "xy"),
+        "offset_a": args.get("offset_a", 0.0), "offset_b": args.get("offset_b", 0.05),
+        "ruled": bool(args.get("ruled", True))}}
+    previous = doc.feature_tree
+    tree = feature_ops.add_primitive(previous, node, args.get("operation", "union"))
+    _apply_exact(doc_id, previous, tree, "a ruled loft between those profiles")
+    return {"message": "added ruled loft", "feature_id": node["id"]}
+
+
 @operation("add_sheet_metal", "mutate", "Create a sheet-metal base flange: a flat plate of constant thickness that edge "
            "flanges can be bent from. Lengths in metres. Optionally pass 'flanges' up front, "
            "each {edge: x+|x-|y+|y-, length, angle, radius}.",

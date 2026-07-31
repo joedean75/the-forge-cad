@@ -126,6 +126,53 @@ class FaceShellFeature(Feature):
 
 @register_feature
 @dataclass
+class RuledLoftFeature(Feature):
+    """A real loft: a ruled surface between two profiles.
+
+    `LoftFeature` next door blends the two profiles' *distance values*, which is
+    not a ruled surface — the waist of a circle-to-square transition bulges the
+    way an average of two fields does, not the way a straight line drawn between
+    the two rims does. Both are useful shapes and they are genuinely different,
+    which is why this is a second feature rather than a better implementation of
+    the first. Swapping the old one for this behind the same name would change
+    what an existing document means depending on whether OCC is installed.
+
+    `ruled=False` asks `ThruSections` for a smooth C1 surface through the
+    sections instead of straight rulings — the same operation every parametric
+    CAD system offers as "loft" versus "ruled loft".
+    """
+
+    profile_a: Dict[str, Any] = field(
+        default_factory=lambda: {"type": "rect", "width": 0.04, "height": 0.04})
+    profile_b: Dict[str, Any] = field(
+        default_factory=lambda: {"type": "circle", "radius": 0.015})
+    plane: str = "xy"
+    offset_a: float = 0.0
+    offset_b: float = 0.05
+    ruled: bool = True
+
+    def evaluate(self) -> Solid:
+        return _evaluate_exact(self)
+
+    def _serialize_params(self) -> Dict[str, Any]:
+        return {"profile_a": self.profile_a, "profile_b": self.profile_b,
+                "plane": self.plane, "offset_a": self.offset_a,
+                "offset_b": self.offset_b, "ruled": self.ruled}
+
+    @classmethod
+    def _from_dict(cls, data: Dict[str, Any]) -> "RuledLoftFeature":
+        p = data["params"]
+        return cls(id=data.get("id"), name=data.get("name", "Ruled loft"),
+                   profile_a=p.get("profile_a") or {"type": "rect", "width": 0.04, "height": 0.04},
+                   profile_b=p.get("profile_b") or {"type": "circle", "radius": 0.015},
+                   plane=p.get("plane", "xy"),
+                   offset_a=float(p.get("offset_a", 0.0)),
+                   offset_b=float(p.get("offset_b", 0.05)),
+                   ruled=bool(p.get("ruled", True)))
+
+
+@register_feature
+@dataclass
 class BrepBodyFeature(Feature):
     """An imported B-rep solid, carried as serialized OpenCascade geometry.
 
