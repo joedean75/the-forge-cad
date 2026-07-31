@@ -1,0 +1,221 @@
+# Sprint roadmap — closing out the exact-kernel programme
+
+Sprints 1–7 are landed on `claude/cad-system-agent-review-48kf9k` (601 tests).
+This is the plan for what remains: three sprints and four honourable mentions.
+
+`ROADMAP.md` is the product-level document and describes horizons. This one is
+narrower and concrete: what is left in the work that turned the SDF editor into
+an exact-kernel CAD system with a machine-checkable action space, in the order
+it should be done and with the trap that will actually bite in each.
+
+## What is already true
+
+Worth stating, because three of the remaining sprints only make sense on top of
+it and because `ROADMAP.md`'s "kernel is implicit, not B-rep — biggest lift" no
+longer describes the system.
+
+| Landed | What it bought |
+|---|---|
+| Exact B-rep kernel alongside the SDF (`evaluator/brep.py`) | Addressable faces/edges, exact dimensions, analytic STEP |
+| Edge fillet/chamfer, face shell (`ops/exact.py`) | The edge-selection idiom parametric CAD runs on |
+| STEP/IGES import as `BrepBodyFeature` | Imported parts edit like modelled ones |
+| Whole-body fillet fixed; `_apply_exact` rollback | No operation reports success while doing nothing |
+| Design spec + `verify_against_spec` | A reward function with ground truth |
+| Topology DFM (`dfm_topology.py`) | Wall thickness, draft, undercuts, tool access — resolution-independent |
+| Sheet metal on the exact kernel | The last common part with no addressable topology |
+| Real FEA (`fea.py`), `simulate` in the catalog | A verifiable signal that means something |
+| True ruled loft (`RuledLoftFeature`) | Frustum volumes exact to 1e-6 |
+
+Deliberately unchanged: `LoftFeature`, `FilletFeature`/`ChamferFeature` and
+`ShellFeature` keep their distance-field meaning, because changing what an
+existing document evaluates to based on whether OCC is installed is worse than
+having two features.
+
+---
+
+## Sprint 8 — generative-history topological naming
+
+**Why now.** This is the last correctness gap in the exact kernel, and it is the
+famously hard problem in parametric CAD. `core/naming.py` matches entities by
+*descriptor* — kind, size, and position normalised to the body's bounding box —
+with `_MATCH_TOL = 0.08`. Normalising to the bbox was the insight that made
+resize work: stretch a plate 80 → 120 mm and its corner edges move 20 mm
+absolute but zero normalised, so a fillet placed on them stays put.
+
+What descriptors cannot survive is an operation that *re-topologises*. Cut a
+pocket through a filleted face and the face is split into two; both halves have
+new sizes and new normalised positions, and the reference either resolves to
+one arbitrarily or is reported unresolvable. Neither is right — the correct
+answer is "this reference now names two faces".
+
+**What to do.** OCC already tracks exactly this. Every `BRepAlgoAPI_*` and
+`BRepFilletAPI_*` builder exposes `Modified(shape)`, `Generated(shape)` and
+`IsDeleted(shape)`, and 7.x collects them into `BRepTools_History`. Thread a
+history object through `brep.py`'s builders, so each evaluation records how the
+previous topology maps to the new. A stored reference then resolves by
+*following the map* rather than by re-measuring:
+
+1. Add a `History` accumulator alongside the shape in `_BUILDERS`, so
+   `brep_from_feature` can return `(shape, history)` internally while keeping
+   the public signature.
+2. Persist a per-feature entity id at creation (not a descriptor — an identity)
+   and record `id → {modified, generated, deleted}` per rebuild.
+3. `naming.resolve` tries the history chain first and falls back to descriptor
+   matching, which stays as the answer for imported bodies with no history.
+
+**How you know it worked.** The test descriptors cannot pass: fillet an edge,
+then cut a slot across the face it borders, and assert the fillet still names
+*both* resulting edge segments and the body rebuilds. Second: change an upstream
+dimension so a face disappears entirely, and assert the reference reports
+`deleted` rather than snapping to a neighbour.
+
+**Traps.** `BRepTools_History` is not populated by every builder — `MakeBox` has
+no history because it has no input. Design for absent history rather than
+assuming it. And do not delete descriptor matching: it is the only thing that
+works for a `BrepBodyFeature` read from a STEP file, which has no construction
+history by definition.
+
+**Size.** Large. This is the biggest remaining item and the one most likely to
+need a second pass.
+
+---
+
+## Sprint 9 — caching and rollout throughput
+
+**Why now.** Sprints 4–7 each added an expensive path, and none of them cache.
+The cost shows up exactly where it hurts most: generating training data.
+
+Three specific problems, in order of severity:
+
+- **`_exact_shape` rebuilds the entire OCC tree on every call**
+  (`cad_operations.py`). `list_faces`, `list_edges`, `fillet_edges`,
+  `mass_properties`, `dfm`, `verify_against_spec` and the drawing path each
+  rebuild from the root. An agent that lists edges, picks one and fillets it has
+  built the same body three times. There is no equivalent of `_SOLID_CACHE` for
+  the B-rep.
+- **`_SOLID_CACHE` is unbounded** (`document_service.py:44`). It is a plain dict
+  keyed by document id with no eviction, holding an evaluated `Solid` per
+  document. Fine for a UI session, a leak for a rollout loop that touches
+  thousands of documents.
+- **Metering and `capped_resolution` are still in the path**
+  (`app/security.py`). The monthly op quota meters every mutating op, and
+  `capped_resolution` silently changes geometry fidelity with the account's
+  plan — so the same document yields different geometry depending on who asks.
+  Both are correct for a product and wrong for a dataset.
+
+**What to do.**
+
+1. A `_BREP_CACHE` keyed by `(doc_id, tree_hash)` — the tree hash already exists
+   for `DerivedCache.mesh_hash`. Invalidate on tree change, which
+   `update_document` already detects via `_tree_needs_rebuild`.
+2. Bound both caches with an LRU. Size by count, not bytes; an OCC shape's
+   memory is not introspectable from Python.
+3. A documented rollout mode — an env flag or a context manager beside
+   `trajectories.recording` — that bypasses metering and pins resolution. Put it
+   next to the harness notes in `CLAUDE.md`, because the point is that it is
+   *discoverable*, not that it exists.
+
+**How you know it worked.** Benchmark, do not assert: time an
+`add_primitive → list_edges → fillet_edges → dfm → verify_against_spec` sequence
+before and after, and record the figure in the commit. Add one test that the
+cache is actually invalidated by a tree change — a stale B-rep cache is a far
+nastier bug than a slow one, because the geometry silently disagrees with the
+document.
+
+**Traps.** Do not cache on `doc_id` alone. The whole reason `DerivedCache`
+records `resolution` and `sampler` is that geometry is only comparable when the
+conditions match; a B-rep cache has the same obligation.
+
+**Size.** Medium, and the highest value per hour of the three.
+
+---
+
+## Sprint 10 — surface the new capabilities in the UI
+
+**Why now.** Six sprints of capability are reachable only through the operation
+API. A human driving the editor cannot select a face, cannot choose a
+manufacturing process, cannot see a spec score, and cannot read an FEA result
+that is now real. The frontend has drifted behind the backend by roughly the
+whole programme.
+
+**What to do**, in dependency order — each is a panel under
+`frontend/src/features/*`, all going through the typed `api` object:
+
+1. **Face/edge picker** (`model`). The unlock everything else needs. `list_faces`
+   and `list_edges` already return stable ids with kind, size and position;
+   render them as selectable overlays and feed the selection to `fillet_edges`,
+   `chamfer_edges` and `shell_faces`. `"all"` is accepted in place of an id list,
+   so "round every edge" is one control.
+2. **Process selector for DFM** (`make`). `runDfm` already takes a `DfmProcess`;
+   it is hardcoded to `additive` at the one call site. Show the topology rows
+   and — importantly — show *no quote* for the non-additive processes rather
+   than a blank field, because the absence is deliberate.
+3. **Spec panel** (`validate`). `set_spec` / `verify_against_spec` with the
+   per-requirement pass/fail rows and the score. This is the screen that tells a
+   user whether the part is *right*, not merely valid.
+4. **Analysis results** (`analysis`). `simulate` returns `solver`, both stress
+   figures, the mesh used and the notes. Surface `estimate_only` prominently —
+   a fallback that looks like an analysis is the thing the sprint was written to
+   prevent.
+5. **Drawing spec** (`make`). `DrawingSpec` lets the caller choose views,
+   sections, dimensions, projection angle and sheet. The UI still sends the old
+   boolean.
+
+**How you know it worked.** `npm run build` is the type-check gate and there is
+no frontend test suite, so this one is driven by using it. A reasonable bar:
+model a bracket, fillet a picked edge, set a spec, verify it, run a milling DFM
+and generate a sectioned drawing — without touching the API directly.
+
+**Traps.** `shared/types.ts` mirrors the Pydantic models **by hand**. Every
+sprint here has already added its types (`DfmProcess`, `DesignSpec`,
+`SpecReport`); check them rather than redeclaring.
+
+**Size.** Large in aggregate, but genuinely incremental — each panel ships
+independently.
+
+---
+
+## Honourable mentions
+
+Real work, not filler; they did not make the ten because each is narrower.
+
+**Drawing completeness.** The spec-driven drawing engine has views, sections,
+hidden lines, dimensions and GD&T leaders. Missing: cutting-plane lines with
+direction arrows on the parent view, detail and auxiliary views, PDF output, a
+path from `drawing.py`'s polylines into `io/dxf.py` (which today is wired only
+to sheet-metal flat patterns), and BOM balloons for assemblies. The DXF path is
+the cheapest and the most useful — it makes a drawing manufacturable rather
+than viewable.
+
+**Exact assembly interference.** `services/interference.py` samples surface
+points into the other part's SDF. It works, and Sprint 1's exactness already
+forced one fix there (an exact box has 8 vertices, none strictly inside an
+overlapping box — triangle centroids were added). With both bodies exact,
+`BRepAlgoAPI_Common` gives the actual intersection volume instead of a sample
+count, which turns "these parts clash" into "these parts clash by 0.4 mm³".
+
+**Multi-body documents.** The durable unit is one `DesignDocument` with one
+root. Real parts are sometimes several disjoint solids, and
+`geometry_check.check_solid` already counts connected components — it reports
+multi-body as a finding because nothing downstream can represent it.
+
+**Trajectory dataset export at volume.** `decompile_all` and `export_jsonl`
+exist and work on single documents. What has not been done is running them over
+a corpus, measuring the replay-verification hit rate, and reporting which
+feature types fail to decompile. That number is the actual health metric for the
+training-data half of this project, and nobody has looked at it.
+
+---
+
+## Suggested order
+
+**9 → 8 → 10**, not 8 → 9 → 10.
+
+Sprint 9 is cheap, unblocks everything that follows by making iteration fast,
+and is the only one whose absence actively degrades the training-data use case
+today. Sprint 8 is the hardest and benefits from a fast rebuild loop. Sprint 10
+is best last, because it is the one that has to be built against a settled
+backend — and because a face picker built before Sprint 8 would need revisiting
+when references gain history.
+
+If only one gets done: **Sprint 9**.
