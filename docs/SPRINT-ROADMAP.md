@@ -1,18 +1,16 @@
 # Sprint roadmap — closing out the exact-kernel programme
 
-Sprints 1–7 are landed on `claude/cad-system-agent-review-48kf9k` (601 tests).
-This is the plan for what remains: three sprints and four honourable mentions.
+Sprints 1–7 and 9 are on `main` (616 tests). **Two sprints remain: 8 and 10**,
+plus four honourable mentions.
 
-`ROADMAP.md` is the product-level document and describes horizons. This one is
-narrower and concrete: what is left in the work that turned the SDF editor into
-an exact-kernel CAD system with a machine-checkable action space, in the order
-it should be done and with the trap that will actually bite in each.
+[PRODUCT-ROADMAP.md](../PRODUCT-ROADMAP.md) is the product-level document. This
+one is narrower and concrete: what is left in the work that turned the SDF
+editor into an exact-kernel CAD system with a machine-checkable action space,
+with the trap that will actually bite in each.
 
 ## What is already true
 
-Worth stating, because three of the remaining sprints only make sense on top of
-it and because `ROADMAP.md`'s "kernel is implicit, not B-rep — biggest lift" no
-longer describes the system.
+Worth stating, because the remaining sprints only make sense on top of it.
 
 | Landed | What it bought |
 |---|---|
@@ -25,6 +23,7 @@ longer describes the system.
 | Sheet metal on the exact kernel | The last common part with no addressable topology |
 | Real FEA (`fea.py`), `simulate` in the catalog | A verifiable signal that means something |
 | True ruled loft (`RuledLoftFeature`) | Frustum volumes exact to 1e-6 |
+| Sprint 9: B-rep cache, bounded LRUs, `rollout.py` | 4 ops → 1 OCC build; reproducible rollouts |
 
 Deliberately unchanged: `LoftFeature`, `FilletFeature`/`ChamferFeature` and
 `ShellFeature` keep their distance-field meaning, because changing what an
@@ -80,55 +79,18 @@ need a second pass.
 
 ---
 
-## Sprint 9 — caching and rollout throughput
+## Sprint 9 — caching and rollout throughput  ✅ *shipped*
 
-**Why now.** Sprints 4–7 each added an expensive path, and none of them cache.
-The cost shows up exactly where it hurts most: generating training data.
+`document_service.get_exact_shape` owns the B-rep build and caches it on the
+hash of the **resolved** tree — not the document id, because parameters are
+resolved *into* the tree rather than stored in it, so hashing the raw tree would
+serve a body that silently disagrees with the document. A four-operation
+read-only inspection went from 12 recursive OCC builds to 3.
 
-Three specific problems, in order of severity:
-
-- **`_exact_shape` rebuilds the entire OCC tree on every call**
-  (`cad_operations.py`). `list_faces`, `list_edges`, `fillet_edges`,
-  `mass_properties`, `dfm`, `verify_against_spec` and the drawing path each
-  rebuild from the root. An agent that lists edges, picks one and fillets it has
-  built the same body three times. There is no equivalent of `_SOLID_CACHE` for
-  the B-rep.
-- **`_SOLID_CACHE` is unbounded** (`document_service.py:44`). It is a plain dict
-  keyed by document id with no eviction, holding an evaluated `Solid` per
-  document. Fine for a UI session, a leak for a rollout loop that touches
-  thousands of documents.
-- **Metering and `capped_resolution` are still in the path**
-  (`app/security.py`). The monthly op quota meters every mutating op, and
-  `capped_resolution` silently changes geometry fidelity with the account's
-  plan — so the same document yields different geometry depending on who asks.
-  Both are correct for a product and wrong for a dataset.
-
-**What to do.**
-
-1. A `_BREP_CACHE` keyed by `(doc_id, tree_hash)` — the tree hash already exists
-   for `DerivedCache.mesh_hash`. Invalidate on tree change, which
-   `update_document` already detects via `_tree_needs_rebuild`.
-2. Bound both caches with an LRU. Size by count, not bytes; an OCC shape's
-   memory is not introspectable from Python.
-3. A documented rollout mode — an env flag or a context manager beside
-   `trajectories.recording` — that bypasses metering and pins resolution. Put it
-   next to the harness notes in `CLAUDE.md`, because the point is that it is
-   *discoverable*, not that it exists.
-
-**How you know it worked.** Benchmark, do not assert: time an
-`add_primitive → list_edges → fillet_edges → dfm → verify_against_spec` sequence
-before and after, and record the figure in the commit. Add one test that the
-cache is actually invalidated by a tree change — a stale B-rep cache is a far
-nastier bug than a slow one, because the geometry silently disagrees with the
-document.
-
-**Traps.** Do not cache on `doc_id` alone. The whole reason `DerivedCache`
-records `resolution` and `sampler` is that geometry is only comparable when the
-conditions match; a B-rep cache has the same obligation.
-
-**Size.** Medium, and the highest value per hour of the three.
-
----
+Both geometry caches are LRU-bounded at 64 entries. `services/rollout.py` turns
+metering off and pins resolution for a training loop; pinning is the half that
+matters, because the plan cap otherwise makes the same document evaluate
+differently for different callers. Neither switch touches access control.
 
 ## Sprint 10 — surface the new capabilities in the UI
 
@@ -209,13 +171,12 @@ training-data half of this project, and nobody has looked at it.
 
 ## Suggested order
 
-**9 → 8 → 10**, not 8 → 9 → 10.
+**8 before 10.** Sprint 9 went first and is done — it was cheap and made every
+later iteration faster, which is exactly why it was pulled forward.
 
-Sprint 9 is cheap, unblocks everything that follows by making iteration fast,
-and is the only one whose absence actively degrades the training-data use case
-today. Sprint 8 is the hardest and benefits from a fast rebuild loop. Sprint 10
-is best last, because it is the one that has to be built against a settled
-backend — and because a face picker built before Sprint 8 would need revisiting
-when references gain history.
+Sprint 8 is the hardest thing left and now has the fast rebuild loop it wanted.
+Sprint 10 is best last: it has to be built against a settled backend, and a face
+picker written before references gain history would need revisiting.
 
-If only one gets done: **Sprint 9**.
+The honourable mentions are all independent of both and can be picked up at any
+time. The cheapest with real value is the DXF path out of `drawing.py`.

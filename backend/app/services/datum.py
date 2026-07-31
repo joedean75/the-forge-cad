@@ -9,8 +9,9 @@ of dangling at a stale absolute offset.
 
 This covers the common "sketch on a face, then edit the base" workflow. It does
 NOT survive an upstream edit that removes the referenced feature or fundamentally
-changes which face is "top"; true topological naming is gated on the Horizon-2
-hybrid B-rep kernel (see ROADMAP.md).
+changes which face is "top". Where the exact kernel can build the body,
+`cad_kernel/core/naming.py` names real faces and edges by descriptor instead;
+this module remains the answer whenever it cannot.
 
 Face names map to a sketch plane + the extreme coordinate along that plane's
 normal:

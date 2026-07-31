@@ -5,10 +5,14 @@ parametrically, optimize it generatively, get instant manufacturing quotes, slic
 it, and print it on your own machine — with every one of those steps equally
 available to AI agents through a first-class API.
 
-The geometry engine is real: a from-scratch **SDF-based CAD kernel** (signed
-distance fields evaluated to meshes via marching cubes, with a native Rust
-sampler on the hot path) and a real **3D SIMP topology optimizer**
-(numpy/scipy, GPU density ops via PyTorch when CUDA is present).
+The geometry engine is real, and there are two of them. An **exact B-rep kernel**
+on OpenCascade gives faces and edges you can select, exact dimensions and
+analytic STEP; a from-scratch **SDF kernel** (signed distance fields meshed via
+marching cubes, native Rust sampler on the hot path) handles what implicit
+geometry does better — voxel density fields from the optimizer, mesh imports,
+smooth blends. The kernel tries exact first and records which one ran. Alongside
+them: a real **3D SIMP topology optimizer** and a real **linear-static FEA
+solve** (numpy/scipy, GPU density ops via PyTorch when CUDA is present).
 
 ## What it does
 
@@ -17,12 +21,12 @@ sampler on the hot path) and a real **3D SIMP topology optimizer**
 | **Text-to-CAD** | A prompt bar that turns "a 100×50×30 mm bracket with two mounting holes" into an editable feature tree. LLM-first with validation + self-repair; a rule-based parser covers everything credential-free. |
 | **Image-to-CAD** | Hand it a sketch, logo, drawing or photo. A vision model builds the tree when one is configured; otherwise the silhouette is **traced** into an extruded profile — holes included, exact and instant, no credentials. Either way you get an editable feature tree, not an opaque mesh. |
 | **Forge Copilot** | An agentic loop that plans and executes multi-step edits ("shell it to 2 mm and fillet the top edges") through the same operation API agents use — every step visible and undoable. |
-| **Parametric modeling** | Feature tree (box/cylinder/sphere/cone, booleans, fillet/chamfer/shell/hole/pattern/transform, constrained sketches, **revolve/mirror/sweep/loft**) with a CAD-standard tool ribbon, driving parameters, configurations, dimensions, and version history. |
+| **Parametric modeling** | Feature tree (box/cylinder/sphere/cone, booleans, fillet/chamfer/shell/hole/pattern/transform, constrained sketches, **revolve/mirror/sweep/loft**, plus real **edge fillets and chamfers on selected edges** and shells that open named faces) with a CAD-standard tool ribbon, driving parameters, configurations, dimensions, and version history. |
 | **Sheet metal** | Base flange + edge flanges with real bend geometry (inside radius, angle, up or down), and **flat-pattern unfold** — developed blank, K-factor bend allowances and bend lines. Exports DXF (outline on `CUT`, bends on `BEND`) and the cutting pipeline cuts the *blank*, holes included. |
 | **Materials** | 43 grades in 12 browsable categories, tagged maker or professional — filaments and resins through to tool steel, titanium, PEEK and composites — driving mass, simulation, DFM and quotes. |
 | **Generative design** | SIMP topology optimization scoped to *your part* — the result folds back into the tree as an `OptimizeFeature` and stays editable. Flag features **must-keep** so the solve can't delete a mounting boss it thinks is unloaded, and anything it does eat through is reported instead of quietly missing. |
-| **Universal import** | STL / OBJ / PLY / GLB / OFF and faceted STEP become editable bodies (voxelized into the SDF representation). |
-| **Validate & Make** | Simulation on the evaluated solid, DFM checks, instant quotes across CNC / FDM / SLA / LPBF with order placement (RFQs; pluggable supplier API). |
+| **Universal import** | **STEP / IGES arrive exact** — addressable faces and edges, exact measurement, editable re-export; units come from the file header, not a size guess. Meshes (STL / OBJ / PLY / GLB / OFF) are voxelized instead, because an STL has nothing better to recover. |
+| **Validate & Make** | Linear-static **FEA** (hex elements, von Mises stress, displacement, safety factor), **DFM per process** — additive, milling, molding, casting — with wall thickness, draft, undercuts and tool access measured on the exact body, plus **design specs** that score the part against stated requirements. Instant quotes across CNC / FDM / SLA / LPBF with order placement. |
 | **CAM** | CNC 2.5D roughing + finishing toolpaths, and **2D laser / plasma / waterjet profile cutting** (kerf-compensated sheet-cut G-code) — both from the same SDF section machinery. |
 | **3D printing** | A built-in SDF-native FDM slicer — walls, solid top/bottom skins, infill, skirt, retraction, cooling — producing Klipper/Marlin G-code, with a layer preview and one-click upload to a Moonraker printer. See [docs/PRINTING.md](docs/PRINTING.md). |
 | **Machine control** | Moonraker/Klipper status, temperatures, jog, job progress. |
@@ -74,11 +78,26 @@ Assemblies compose part documents with placement transforms.
 
 ## Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system map, kernel, data model, configuration.
-- [docs/AGENT-PLATFORM.md](docs/AGENT-PLATFORM.md) — build agents against the API/MCP surface.
+**Start here**
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the system fits together: the
+  two kernels, documents and operations, storage, configuration.
+- [CLAUDE.md](CLAUDE.md) — the working reference. Longer and more opinionated than
+  the others: what each part does, and *why it is that way* rather than the
+  obvious alternative. Authoritative when docs disagree.
+
+**By task**
+
+- [docs/AGENT-PLATFORM.md](docs/AGENT-PLATFORM.md) — driving Forge from an agent:
+  the operation API, face/edge selection, verification, MCP, rollouts.
 - [docs/PRINTING.md](docs/PRINTING.md) — the slicer and print pipeline.
 - [DEPLOY.md](DEPLOY.md) — production deployment (single Docker image + Postgres).
-- [PRODUCT-ROADMAP.md](PRODUCT-ROADMAP.md) — market read and shipped roadmap.
+
+**Where it's going**
+
+- [PRODUCT-ROADMAP.md](PRODUCT-ROADMAP.md) — market read and the three waves of work.
+- [docs/SPRINT-ROADMAP.md](docs/SPRINT-ROADMAP.md) — the two sprints still open,
+  with the trap in each.
 
 ## Development
 
