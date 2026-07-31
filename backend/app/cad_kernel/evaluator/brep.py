@@ -91,7 +91,7 @@ class BrepUnsupported(Exception):
 # Feature types the SDF kernel owns outright. Listed rather than inferred so the
 # reason for each is written down next to it (see the module docstring).
 UNSUPPORTED = {
-    "FilletFeature", "ChamferFeature", "ShellFeature", "SheetMetalFeature",
+    "FilletFeature", "ChamferFeature", "ShellFeature",
     "OptimizeFeature", "ImportFeature", "LoftFeature",
 }
 
@@ -597,7 +597,96 @@ def _profile_wire_2d(profile: dict, to_world):
     return polygon.Wire()
 
 
+def _sheet_metal(f):
+    """A base flange plus bent edge flanges, built the way the field defines them.
+
+    `SheetMetalSDF` is not a generic solid and this is not a generic translation
+    of one: it is the same construction in exact geometry. Each flange is an
+    annular sector welded to the plate edge plus a straight leg tangent to the
+    end of that sector, solved in the plane normal to the bend line and extruded
+    across the part. Mapping it any other way — a fillet on a corner, say —
+    would give a body that differs from the one `flat_pattern` unfolds, and the
+    developed blank is the whole reason this feature exists.
+
+    In the local frame ``qa = (a - ca) * out_sign``, ``qz = (z - cz) * up_sign``
+    the sector runs from straight down, ``(0, -1)``, rotating toward ``+qa``.
+    """
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.gp import gp_Vec
+
+    thickness = float(f.thickness)
+    hx, hy = float(f.length) / 2.0, float(f.width) / 2.0
+    body = BRepPrimAPI_MakeBox(
+        gp_Pnt(-hx, -hy, 0.0), float(f.length), float(f.width), thickness).Shape()
+
+    for flange in f.normalized_flanges():
+        axis, sign = flange["edge"][0], flange["edge"][1]
+        out_sign = 1.0 if sign == "+" else -1.0
+        up_sign = 1.0 if flange["angle"] > 0 else -1.0
+        sweep = math.radians(abs(flange["angle"]))
+        r_in = float(flange["radius"])
+        leg = float(flange["length"])
+
+        edge, half_across = (hx, hy) if axis == "x" else (hy, hx)
+        ca = edge * out_sign
+        cz = thickness + r_in if up_sign > 0 else -r_in
+
+        def world(qa: float, qz: float, across: float):
+            a = ca + qa * out_sign
+            z = cz + qz * up_sign
+            return gp_Pnt(a, across, z) if axis == "x" else gp_Pnt(across, a, z)
+
+        wire = _flange_profile(r_in, r_in + thickness, sweep, leg,
+                               lambda qa, qz: world(qa, qz, -half_across))
+        face = BRepBuilderAPI_MakeFace(wire, True).Face()
+        vector = (gp_Vec(0.0, 2.0 * half_across, 0.0) if axis == "x"
+                  else gp_Vec(2.0 * half_across, 0.0, 0.0))
+        body = BRepAlgoAPI_Fuse(body, BRepPrimAPI_MakePrism(face, vector).Shape()).Shape()
+
+    return body
+
+
+def _flange_profile(r_in: float, r_out: float, sweep: float, leg: float, place):
+    """The bend-plus-leg section as a closed wire, via `place(qa, qz)`.
+
+    A zero inside radius is legal — a sharp bend — and collapses the inner arc to
+    a point. Building the arc anyway would hand OCC two coincident endpoints.
+    """
+    from OCP.GC import GC_MakeArcOfCircle
+
+    sin_s, cos_s = math.sin(sweep), math.cos(sweep)
+    half = sweep / 2.0
+    tan_a, tan_z = cos_s, sin_s
+
+    inner_start = (0.0, -r_in)
+    inner_end = (r_in * sin_s, -r_in * cos_s)
+    outer_start = (0.0, -r_out)
+    outer_end = (r_out * sin_s, -r_out * cos_s)
+    leg_inner = (inner_end[0] + leg * tan_a, inner_end[1] + leg * tan_z)
+    leg_outer = (outer_end[0] + leg * tan_a, outer_end[1] + leg * tan_z)
+
+    builder = BRepBuilderAPI_MakeWire()
+
+    def line(p, q):
+        builder.Add(BRepBuilderAPI_MakeEdge(place(*p), place(*q)).Edge())
+
+    def arc(radius, start, end):
+        mid = (radius * math.sin(half), -radius * math.cos(half))
+        builder.Add(BRepBuilderAPI_MakeEdge(
+            GC_MakeArcOfCircle(place(*start), place(*mid), place(*end)).Value()).Edge())
+
+    if r_in > 1e-12:
+        arc(r_in, inner_start, inner_end)
+    line(inner_end, leg_inner)
+    line(leg_inner, leg_outer)
+    line(leg_outer, outer_end)
+    arc(r_out, outer_end, outer_start)
+    line(outer_start, inner_start)
+    return builder.Wire()
+
+
 _BUILDERS = {
+    "SheetMetalFeature": _sheet_metal,
     "BrepBodyFeature": _brep_body,
     "RevolveFeature": _revolve,
     "SweepFeature": _sweep,

@@ -230,8 +230,14 @@ def test_an_exactly_representable_body_is_evaluated_exactly():
 
 
 def test_a_body_the_exact_kernel_cannot_build_falls_back_silently():
-    doc = docs.create_document(name="SheetMetal", resolution=32, owner_id=None)
-    ops.dispatch("add_sheet_metal", doc.id, {"thickness": .0015, "length": .1, "width": .06})
+    """A smooth-boolean shell has no B-rep form, and the document still evaluates.
+
+    Sheet metal used to be the example here; it is built exactly now, so the
+    fallback needs a body that genuinely has no exact form to demonstrate on.
+    """
+    doc = docs.create_document(name="Shelled", resolution=32, owner_id=None)
+    ops.dispatch("add_primitive", doc.id, {"shape": "box"})
+    ops.dispatch("add_modifier", doc.id, {"modifier": "shell", "params": {"thickness": .004}})
     derived = docs.get_document(doc.id).derived
     assert derived.sampler in ("native", "numpy")
     assert derived.error is None
