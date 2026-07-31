@@ -238,22 +238,35 @@ def test_our_own_faceted_step_round_trips_faithfully():
     mesh = FaceMesh(vertices=np.asarray(box.vertices), faces=np.asarray(box.faces))
     data = write_step(mesh).encode()
 
+    exact = True
     try:
         _shape, info = step_import.read_exact(data, "step")
         # If it reads at all, it must read the whole thing — a partial shell is
         # the failure mode the fallback exists for.
         assert info["faces"] == len(mesh.faces), "exact read dropped faces"
     except step_import.ExactImportError:
-        pass  # declined; the importer falls back to voxels below
+        exact = False  # declined; the importer falls back to voxels below
 
     doc = import_service.import_document("faceted.step", data)
     assert doc.derived.error is None
-    assert doc.feature_tree["root"]["type"] in ("BrepBodyFeature", "ImportFeature")
+    assert doc.feature_tree["root"]["type"] == (
+        "BrepBodyFeature" if exact else "ImportFeature")
 
+    # What "faithful" means depends on which path ran, and the difference is the
+    # reason the exact path was worth building. Exact is exact. The voxel path
+    # grids the body at a pitch of longest_axis / 96 — about 1.04 mm here — frames
+    # cells on their centres and rounds outward at both ends, so it never loses
+    # material and gains a few cells. Asserting a symmetric tolerance around the
+    # nominal misstates that: the error is one-sided.
+    pitch_mm = 100.0 / 96.0
     bbox = doc.derived.bbox
     for axis, expected_mm in (("x", 100.0), ("y", 60.0), ("z", 20.0)):
         size_mm = (getattr(bbox.max, axis) - getattr(bbox.min, axis)) * 1000.0
-        assert size_mm == pytest.approx(expected_mm, abs=1.0), f"{axis} is {size_mm} mm"
+        if exact:
+            assert size_mm == pytest.approx(expected_mm, abs=1e-6), f"{axis} is {size_mm} mm"
+        else:
+            assert expected_mm - 1e-6 <= size_mm <= expected_mm + 3.0 * pitch_mm, \
+                f"{axis} is {size_mm} mm"
 
 
 def test_read_exact_rejects_a_mesh_format():

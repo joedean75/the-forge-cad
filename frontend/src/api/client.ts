@@ -1,6 +1,7 @@
 import type {
   OptimizeJob,
   SimulationResult,
+  DfmProcess,
   DfmReport,
   CamResult,
   LlmConfig,
@@ -222,8 +223,11 @@ export const api = {
     fetchJson<OptimizeJob>(`/documents/${id}/optimize/${jobId}`),
   simulateDocument: (id: string, resolution = 128) =>
     fetchJson<SimulationResult>(`/documents/${id}/simulate?resolution=${resolution}`, { method: 'POST' }),
-  dfmDocument: (id: string, buildAxis = 'auto', resolution = 128) =>
-    fetchJson<DfmReport>(`/documents/${id}/dfm?build_axis=${buildAxis}&resolution=${resolution}`, { method: 'POST' }),
+  dfmDocument: (id: string, buildAxis = 'auto', resolution = 128, process: DfmProcess = 'additive') =>
+    fetchJson<DfmReport>(
+      `/documents/${id}/dfm?build_axis=${buildAxis}&resolution=${resolution}&process=${process}`,
+      { method: 'POST' },
+    ),
   exportDocumentStep: (id: string, resolution = 128) =>
     fetch(`/api/documents/${id}/step?resolution=${resolution}`, { headers: authHeaders() }).then((res) => {
       if (!res.ok) throw new Error(`API error: ${res.status}`)

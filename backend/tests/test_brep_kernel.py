@@ -149,10 +149,17 @@ def test_a_thin_feature_is_still_exact_at_metre_scale():
 # ---------------------------------------------------- honest unsupported --
 
 @pytest.mark.parametrize("kind", ["FilletFeature", "ChamferFeature", "ShellFeature",
-                                  "SheetMetalFeature", "OptimizeFeature", "ImportFeature",
-                                  "LoftFeature"])
+                                  "OptimizeFeature", "ImportFeature", "LoftFeature"])
 def test_features_with_no_exact_form_are_declined_not_approximated(kind):
     assert kind in brep.UNSUPPORTED
+
+
+def test_sheet_metal_is_built_exactly_rather_than_declined():
+    """It used to be declined on the grounds that its value was the bend model.
+    That was true of `flat_pattern`, which is analytic and untouched — but the
+    *body* is a plate, an annular sector and a tangent leg, all of which OCC
+    builds directly. See tests/test_sheet_metal_brep.py."""
+    assert "SheetMetalFeature" not in brep.UNSUPPORTED
 
 
 def test_a_loft_is_declined_because_an_exact_one_is_a_different_shape():

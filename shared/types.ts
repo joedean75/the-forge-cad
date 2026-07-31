@@ -135,6 +135,10 @@ export interface DfmCheck {
   value?: number
 }
 
+/** What the part will be made by. 'additive' reports overhang/support/quote;
+ *  the rest report topology-measured manufacturability and carry no quote. */
+export type DfmProcess = 'additive' | 'milling' | 'molding' | 'casting'
+
 export interface DfmReport {
   process: string
   checks: DfmCheck[]

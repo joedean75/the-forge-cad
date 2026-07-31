@@ -8,6 +8,7 @@ import type {
   LoadCase,
   Objective,
   SimulationResult,
+  DfmProcess,
   DfmReport,
   CamResult,
   Vector3,
@@ -67,7 +68,7 @@ interface DocumentState {
     load_cases?: LoadCase[]
   }) => Promise<void>
   runSimulate: () => Promise<void>
-  runDfm: (buildAxis?: string) => Promise<void>
+  runDfm: (buildAxis?: string, process?: DfmProcess) => Promise<void>
   runCam: (tool: { diameter_mm: number; stepdown_mm: number; stepover_mm: number; feed_mm_min: number }) => Promise<void>
   exportStep: () => Promise<void>
   downloadGcode: () => void
@@ -286,12 +287,12 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }
   },
 
-  runDfm: async (buildAxis = 'auto') => {
+  runDfm: async (buildAxis = 'auto', process: DfmProcess = 'additive') => {
     const { doc } = get()
     if (!doc) return
     set({ busy: true, error: null })
     try {
-      const dfm = await api.dfmDocument(doc.id, buildAxis, 96)
+      const dfm = await api.dfmDocument(doc.id, buildAxis, 96, process)
       set({ dfm })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'DFM analysis failed' })

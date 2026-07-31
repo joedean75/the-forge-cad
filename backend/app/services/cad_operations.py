@@ -294,6 +294,31 @@ def _add_loft(doc_id, args):
     return {"message": "added loft", "feature_id": node["id"]}
 
 
+@operation("add_ruled_loft", "mutate", "Loft between two profiles with a real ruled surface — straight lines between "
+           "the two rims, which is what every CAD system means by 'loft'. Distinct from "
+           "add_loft, whose distance-field blend bulges at the waist: they are different "
+           "shapes, both useful. Set ruled=false for a smooth surface through the sections. "
+           "Requires the exact kernel.",
+           {"profile_a": {"type": "object"}, "profile_b": {"type": "object"},
+           "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
+           "offset_a": {"type": "number"}, "offset_b": {"type": "number"},
+           "ruled": {"type": "boolean", "default": True,
+           "description": "straight rulings between the sections; false blends smoothly"},
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
+def _add_ruled_loft(doc_id, args):
+    doc = _get(doc_id)
+    node = {"type": "RuledLoftFeature", "name": "Ruled loft", "params": {
+        "profile_a": args.get("profile_a", {"type": "rect", "width": 0.04, "height": 0.04, "cx": 0, "cy": 0}),
+        "profile_b": args.get("profile_b", {"type": "circle", "radius": 0.015, "cx": 0, "cy": 0}),
+        "plane": args.get("plane", "xy"),
+        "offset_a": args.get("offset_a", 0.0), "offset_b": args.get("offset_b", 0.05),
+        "ruled": bool(args.get("ruled", True))}}
+    previous = doc.feature_tree
+    tree = feature_ops.add_primitive(previous, node, args.get("operation", "union"))
+    _apply_exact(doc_id, previous, tree, "a ruled loft between those profiles")
+    return {"message": "added ruled loft", "feature_id": node["id"]}
+
+
 @operation("add_sheet_metal", "mutate", "Create a sheet-metal base flange: a flat plate of constant thickness that edge "
            "flanges can be bent from. Lengths in metres. Optionally pass 'flanges' up front, "
            "each {edge: x+|x-|y+|y-, length, angle, radius}.",
@@ -870,20 +895,59 @@ def _check_geometry(doc_id, args):
     return geometry_check.check_document(doc_id, resolution=int(args.get("resolution", 128)))
 
 
-@operation("dfm", "query", "Design-for-manufacture report for additive (LPBF): overhang angle, minimum "
-           "feature size, support volume, printability score and an indicative quote.",
-           {"build_axis": {"enum": ["auto", "x", "y", "z"], "default": "auto"},
-           "resolution": {"type": "number", "default": 128}})
+@operation("dfm", "query", "Design-for-manufacture report. 'additive' (LPBF, the default) reports overhang, "
+           "support volume, printability and a quote; 'milling', 'molding' and 'casting' report what "
+           "needs real topology — wall thickness, smallest bore, trapped voids, plus draft and "
+           "undercuts for a mould or 3-axis tool access for a cutter. Everything except the "
+           "additive-specific rows is measured on the exact body, so it does not move with "
+           "'resolution'. Non-additive processes need the exact kernel.",
+           {"process": {"enum": ["additive", "milling", "molding", "casting"], "default": "additive",
+           "description": "what the part will be made by"},
+           "build_axis": {"enum": ["auto", "x", "y", "z"], "default": "auto",
+           "description": "build direction for additive; mould pull / tool approach otherwise "
+                          "('auto' means +Z there — which way a mould opens is a decision, "
+                          "not something to infer)"},
+           "resolution": {"type": "number", "default": 128,
+           "description": "meshing resolution; affects the additive rows only"}})
 def _dfm(doc_id, args):
     """DFM was reachable only over REST, so an agent driving the op catalog could
     build a part but never check whether it could be made."""
     from app.services import document_analysis
 
     _get(doc_id)  # typed NoSuchDocument rather than the router's HTTPException
-    report = document_analysis.dfm_document(
-        doc_id, build_axis=str(args.get("build_axis", "auto")),
-        resolution=int(args.get("resolution", 128)))
+    process = str(args.get("process", "additive"))
+    try:
+        report = document_analysis.dfm_document(
+            doc_id, build_axis=str(args.get("build_axis", "auto")),
+            resolution=int(args.get("resolution", 128)), process=process)
+    except ValueError as exc:
+        # "this part has no exact form" is a different previous step, not a
+        # different argument — model it the way the rest of the catalog does.
+        raise PreconditionFailed(str(exc)) from exc
     return report.model_dump()
+
+
+@operation("simulate", "query", "Linear-static FEA: von Mises stress, displacement and safety factor "
+           "against the material's yield, from the load cases and supports on the document's "
+           "optimization setup. An 8-node hexahedral solve on the body itself, so the answer "
+           "depends on the shape, where the load is and where the part is held. Check `solver` "
+           "in the result: 'closed-form estimate' means no real solve ran and the numbers are "
+           "not an analysis.",
+           {"elements": {"type": "number", "default": 8000,
+           "description": "element budget; more is slower and resolves stress further"},
+           "resolution": {"type": "number", "default": 128,
+           "description": "meshing resolution for the fallback estimate only"}})
+def _simulate(doc_id, args):
+    """`simulate` was deliberately kept out of the catalog while it was a
+    closed-form guess — a verifiable signal that means nothing is worse than no
+    signal, because a model will optimise it. Now that a real solve backs it, it
+    belongs in the action space, and the result says which one produced it."""
+    from app.services import document_analysis
+
+    _get(doc_id)
+    return document_analysis.analyse_document(
+        doc_id, resolution=int(args.get("resolution", 128)),
+        elements=int(args["elements"]) if args.get("elements") else None)
 
 
 @operation("profile_cut", "query", "2D laser/plasma/waterjet cut of the part outline from sheet, kerf-compensated. "

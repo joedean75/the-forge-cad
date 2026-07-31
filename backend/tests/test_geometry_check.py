@@ -105,7 +105,11 @@ def test_dfm_is_now_callable_as_an_operation():
     env = ops.execute("dfm", doc.id, {"resolution": 32})
     assert env["ok"] is True
     assert "printability_score" in env["result"]
-    assert {c["id"] for c in env["result"]["checks"]} == {"overhang", "feature_size", "support"}
+    ids = {c["id"] for c in env["result"]["checks"]}
+    assert {"overhang", "support"} <= ids
+    # On the exact kernel the mesh-edge `feature_size` proxy is replaced by a
+    # real wall thickness; without it, the proxy is all there is.
+    assert ("wall_thickness" in ids) != ("feature_size" in ids)
 
 
 def test_check_geometry_through_execute_returns_a_scoreable_shape():
