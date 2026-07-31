@@ -4,6 +4,16 @@ A staged plan from the current implicit-kernel parametric editor to a
 professional-grade parametric + generative CAD suite, with an **AI-native operation API**
 maintained as a first-class concern throughout.
 
+> **Status note.** The B-rep kernel this document calls the "biggest lift" and
+> defers to Horizon 2 **has landed**: OpenCascade runs alongside the SDF and is
+> tried first, faces and edges are addressable, STEP is analytic, and STEP/IGES
+> import exactly. Gaps 1 and 6 below are therefore largely closed, and gap 3
+> (topological naming) is partly closed — descriptor-based naming normalised to
+> the bounding box survives dimension changes, though not yet re-topologising
+> operations. Read this file for the product horizons and
+> **`docs/SPRINT-ROADMAP.md` for the current work in flight**; `CLAUDE.md` is
+> authoritative on what the kernel actually does today.
+
 ## Where we are
 
 A **document-centric parametric editor** on an **implicit (SDF) kernel**:

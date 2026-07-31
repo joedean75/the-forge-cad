@@ -82,6 +82,10 @@ def require_entitlement(name: str):
 
 def meter_operation(acc: accounts.Account, n: int = 1) -> None:
     """Charge N mutating operations against the account's quota (raises 402)."""
+    from app.services import rollout
+
+    if rollout.active():
+        return  # a training rollout is not billable; see services/rollout.py
     try:
         acc.record_op(n)
     except accounts.AuthError as exc:
@@ -89,6 +93,17 @@ def meter_operation(acc: accounts.Account, n: int = 1) -> None:
 
 
 def capped_resolution(acc: accounts.Account, requested: Optional[int], default: int = 128) -> int:
-    """Clamp a requested meshing/solve resolution to the plan's cap."""
+    """Clamp a requested meshing/solve resolution to the plan's cap.
+
+    Inside a rollout with a pinned resolution the cap is bypassed, because the
+    plan deciding geometry fidelity means the same document evaluates
+    differently for different accounts — fine for a product, fatal for a
+    dataset whose observations have to be reproducible.
+    """
+    from app.services import rollout
+
+    pinned = rollout.pinned_resolution()
+    if pinned is not None:
+        return int(pinned)
     res = requested if requested else default
     return min(int(res), acc.plan.resolution_cap)

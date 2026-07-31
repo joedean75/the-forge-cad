@@ -699,7 +699,6 @@ def _exact_shape(doc_id):
     worth telling apart: the deployment has no exact kernel, or this particular
     body cannot be built exactly.
     """
-    from app.cad_kernel.core.feature_tree import FeatureTree
     from app.cad_kernel.evaluator import brep
 
     if not brep.AVAILABLE:
@@ -707,15 +706,8 @@ def _exact_shape(doc_id):
             "this deployment has no exact kernel installed (pip install cadquery-ocp), "
             "so faces and edges are not addressable")
 
-    doc = _get(doc_id)
-    active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
-    if doc.parameters:
-        from app.services import parameters
-
-        scope, _ = parameters.resolve_values(doc.parameters)
-        active = parameters.resolve_tree(active, scope)
-
-    shape = brep.brep_from_feature(FeatureTree.from_dict(active).root)
+    _get(doc_id)  # typed NoSuchDocument before anything geometric happens
+    shape = document_service.get_exact_shape(doc_id)
     if shape is None:
         raise PreconditionFailed(
             "this body has no exact form, so it has no addressable faces or edges. "

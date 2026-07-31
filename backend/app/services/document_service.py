@@ -15,8 +15,9 @@ import hashlib
 import json
 import logging
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.cad_kernel.core.feature_tree import FeatureTree, walk_nodes
 from app.cad_kernel.core.topology import Solid
@@ -38,10 +39,68 @@ _LOGGER = logging.getLogger(__name__)
 # Default density used for mass estimates when no material is bound to a doc.
 _DEFAULT_DENSITY = 2700.0  # kg/m^3 (aluminium-like)
 
+class _LruCache(dict):
+    """A dict that forgets its least-recently-used entry past `capacity`.
+
+    Both geometry caches were plain dicts with no eviction: fine for a UI
+    session holding a handful of documents, a leak for a rollout loop that
+    touches thousands. Subclassing dict keeps `in`, `[]` and `.pop(k, default)`
+    working for the existing call sites (and the tests that reach into them)
+    rather than forcing an interface change through the codebase.
+
+    Bounded by *count*, not bytes: an evaluated solid's memory is a mesh whose
+    size depends on resolution, and an OCC shape's is not introspectable from
+    Python at all, so any byte figure would be invented.
+    """
+
+    def __init__(self, capacity: int):
+        super().__init__()
+        self._capacity = capacity
+        self._order: "OrderedDict[str, None]" = OrderedDict()
+
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        self._order.move_to_end(key)
+        return value
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self._order[key] = None
+        self._order.move_to_end(key)
+        while len(self._order) > self._capacity:
+            oldest, _ = self._order.popitem(last=False)
+            super().pop(oldest, None)
+
+    def pop(self, key, *default):
+        self._order.pop(key, None)
+        return super().pop(key, *default)
+
+    def clear(self) -> None:
+        self._order.clear()
+        super().clear()
+
+
 # Process-local stores. Documents persist to disk; evaluated solids are cached
 # in memory only and re-derived lazily on restart.
 DOCUMENTS: Dict[str, DesignDocument] = {}
-_SOLID_CACHE: Dict[str, Solid] = {}
+
+_SOLID_CACHE_SIZE = 64
+_BREP_CACHE_SIZE = 64
+
+_SOLID_CACHE: Dict[str, Solid] = _LruCache(_SOLID_CACHE_SIZE)
+
+# Exact bodies, keyed by the hash of the *resolved* tree rather than the
+# document id. Resolving suppression, datums and parameters is milliseconds;
+# building the OpenCascade solid is not, and every topology-addressing
+# operation — list_faces, list_edges, fillet_edges, mass_properties, dfm,
+# verify_against_spec, the drawing path — used to rebuild it from the root. An
+# agent that lists edges, picks one and fillets it built the same body three
+# times.
+#
+# Keying on the resolved tree rather than on `doc_id` is the part that has to be
+# right: a stale exact body is far nastier than a slow one, because the geometry
+# silently stops agreeing with the document.
+_BREP_CACHE: Dict[str, Any] = _LruCache(_BREP_CACHE_SIZE)
 
 
 def _now() -> str:
@@ -179,6 +238,60 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
     if persist:
         _persist(doc)
     return doc
+
+
+def resolved_tree(doc: DesignDocument) -> dict:
+    """The tree as it will actually be evaluated: suppression, datums, parameters.
+
+    Extracted because three call sites had grown their own copy of this
+    sequence, and a fourth would silently diverge from the body the rest of the
+    system computes.
+    """
+    from app.services import feature_ops
+
+    active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
+    if doc.parameters:
+        from app.services import parameters
+
+        overrides = {}
+        if doc.active_configuration:
+            cfg = next((c for c in doc.configurations if c.name == doc.active_configuration), None)
+            if cfg:
+                overrides = cfg.overrides
+        scope, _ = parameters.resolve_values(doc.parameters, overrides)
+        active = parameters.resolve_tree(active, scope)
+    return active
+
+
+def get_exact_shape(doc_id: str):
+    """The document's exact B-rep body, or None if it has no exact form.
+
+    Cached on the resolved tree's hash, so the topology operations that all
+    used to rebuild from the root now share one build. Returns ``None`` rather
+    than raising: whether that is a precondition failure or a fallback to the
+    faceted path is the caller's decision, not this function's.
+    """
+    from app.cad_kernel.core.feature_tree import FeatureTree
+    from app.cad_kernel.evaluator import brep
+
+    if not brep.AVAILABLE:
+        return None
+    doc = get_document(doc_id)
+    if doc is None:
+        return None
+
+    active = resolved_tree(doc)
+    key = _hash_tree(active)
+    if key in _BREP_CACHE:
+        return _BREP_CACHE[key]
+
+    shape = brep.brep_from_feature(FeatureTree.from_dict(active).root)
+    if shape is not None:
+        # Only successes are cached. A None means "no exact form", which is
+        # cheap to re-derive and would otherwise pin a negative result across a
+        # code change that makes the feature representable.
+        _BREP_CACHE[key] = shape
+    return shape
 
 
 def get_solid(doc_id: str, resolution: int = 128) -> Solid:
