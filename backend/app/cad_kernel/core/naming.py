@@ -24,10 +24,21 @@ Three properties follow.
   20 mm bore that becomes 21 mm is still the same bore while one that becomes
   60 mm is treated as a different feature.
 
-This is weaker than a full generative-history naming scheme (following faces
-through `BRepAlgoAPI`'s Generated/Modified maps), and it is honest about that: a
-reference that cannot be matched within tolerance is reported as unresolvable
-rather than quietly snapping to whatever was nearest.
+Descriptors are no longer the whole story. `core/history` follows entities through
+`BRepAlgoAPI`'s Modified/Generated/IsDeleted maps and gives each one a **tag** — an
+identity minted by the feature that created it, rather than a measurement of what
+it currently looks like. Where a tag is available it is tried first, because it
+answers the question descriptors cannot: an edge a later cut split in two is
+*both* segments, not the nearer one. Descriptor matching remains the fallback and
+is not going anywhere — it is the only thing that works for a `BrepBodyFeature`
+read from a STEP file, which has no construction history by definition, and for
+references stored before tags existed.
+
+A reference that cannot be matched within tolerance is reported as unresolvable
+rather than quietly snapping to whatever was nearest; one the history says was
+destroyed is reported *deleted*, and is not offered to descriptor matching at all,
+because "the face you picked is gone" and "I could not find the face you picked"
+call for different fixes.
 
 Ids are content-derived, so the same body always produces the same names — the
 same property the feature-id allocator provides, and for the same reason: an
@@ -227,15 +238,42 @@ def edges(shape) -> List[Any]:
     return [TopoDS.Edge_s(s) for s in _explore(shape, TopAbs_ShapeEnum.TopAbs_EDGE)]
 
 
-def face_table(shape) -> List[Dict[str, Any]]:
-    """Every face with its name, sorted so the listing is stable run to run."""
-    bounds = body_bounds(shape)
-    return sorted([face_descriptor(f, bounds) for f in faces(shape)], key=_sort_key)
+def as_kind(sub, kind: str):
+    """Downcast a bare `TopoDS_Shape` to the face or edge type OCC's API wants.
+
+    Anything arriving from a history map — `Modified`, `Generated`, a shape map —
+    is the base class, and `BRepFilletAPI_MakeFillet.Add` will not take it.
+    """
+    from OCP.TopoDS import TopoDS
+
+    return TopoDS.Face_s(sub) if kind == "face" else TopoDS.Edge_s(sub)
 
 
-def edge_table(shape) -> List[Dict[str, Any]]:
+def face_table(shape, entities=None) -> List[Dict[str, Any]]:
+    """Every face with its name, sorted so the listing is stable run to run.
+
+    ``entities`` is the build's `history.EntityMap`, when there is one. Each
+    descriptor then also carries the ``tag`` its entity was created under, which
+    is what makes a stored selection followable through a later re-topologising
+    edit rather than merely re-measurable.
+    """
+    return _table(shape, faces(shape), face_descriptor, entities, "face")
+
+
+def edge_table(shape, entities=None) -> List[Dict[str, Any]]:
+    return _table(shape, edges(shape), edge_descriptor, entities, "edge")
+
+
+def _table(shape, subshapes, describe, entities, kind: str) -> List[Dict[str, Any]]:
     bounds = body_bounds(shape)
-    return sorted([edge_descriptor(e, bounds) for e in edges(shape)], key=_sort_key)
+    table = []
+    for sub in subshapes:
+        descriptor = describe(sub, bounds)
+        tag = entities.tag_of(sub) if entities is not None else None
+        if tag is not None:
+            descriptor["tag"] = tag
+        table.append(descriptor)
+    return sorted(table, key=_sort_key)
 
 
 def _sort_key(descriptor: Dict[str, Any]) -> Tuple:
@@ -266,57 +304,115 @@ def _distance(a: Dict[str, Any], b: Dict[str, Any]) -> Optional[float]:
     return positional + relative_size * _MATCH_TOL * 0.5
 
 
-def resolve(shape, references: List[Dict[str, Any]], kind: str = "edge"):
+def resolve(shape, references: List[Dict[str, Any]], kind: str = "edge",
+            entities=None):
     """Match stored references against the current body.
 
-    Returns ``(matched_subshapes, unresolved_references)``. Exact id matches are
-    taken first; anything left over is matched to the nearest descriptor of the
-    same kind within tolerance, so a reference survives the upstream dimension
-    change that moved what it points at. Whatever still cannot be matched is
-    handed back rather than guessed at — a fillet silently applied to the wrong
-    edge is worse than one that reports it lost its target.
+    Returns ``(matched_subshapes, unresolved_references)`` — the shape of the
+    answer the B-rep builders want. `resolve_references` is the same work with the
+    per-reference verdict kept, which is what anything reporting to a caller
+    should use.
     """
+    outcomes = resolve_references(shape, references, kind=kind, entities=entities)
+    matched = [sub for outcome in outcomes for sub in outcome["shapes"]]
+    unresolved = [o["reference"] for o in outcomes if not o["shapes"]]
+    return matched, unresolved
+
+
+def resolve_references(shape, references: List[Dict[str, Any]], kind: str = "edge",
+                       entities=None) -> List[Dict[str, Any]]:
+    """What each stored reference resolves to on the current body, and how.
+
+    One row per reference: ``{reference, id, status, shapes}``, where ``status``
+    is one of
+
+    ``matched``     one entity, the ordinary case;
+    ``split``       several — an upstream edit divided what this named, and the
+                    reference now correctly names every piece;
+    ``deleted``     the history says an upstream edit destroyed it;
+    ``unresolved``  nothing on this body is it, within tolerance.
+
+    Order of attempts is history, then exact id, then nearest descriptor.
+    ``deleted`` deliberately short-circuits the fallbacks: once the construction
+    history has said an entity was consumed, letting a descriptor find "something
+    a bit like it nearby" is exactly the silent mis-selection this module exists
+    to prevent.
+    """
+    from OCP.TopTools import TopTools_IndexedMapOfShape
+
     explore_fn = faces if kind == "face" else edges
     describe = face_descriptor if kind == "face" else edge_descriptor
 
-    # Describe each sub-shape once and keep both the table and the id -> shape
-    # mapping from that single pass, so the two can never disagree.
+    # Describe each sub-shape once and keep the table, the id -> shape mapping and
+    # the shape -> id mapping from that single pass, so none of the three can
+    # disagree with the others.
     bounds = body_bounds(shape)
     subshapes: Dict[str, Any] = {}
     current: List[Dict[str, Any]] = []
+    index = TopTools_IndexedMapOfShape()
+    id_at: Dict[int, str] = {}
     for sub in explore_fn(shape):
         descriptor = describe(sub, bounds)
         subshapes[descriptor["id"]] = sub
         current.append(descriptor)
+        id_at[index.Add(sub)] = descriptor["id"]
 
     by_id = {d["id"]: d for d in current}
-    matched, unresolved, used = [], [], set()
+    by_tag = entities.entities(shape, kind) if entities is not None else {}
+    removed = entities.removed if entities is not None else set()
+
+    outcomes: List[Dict[str, Any]] = []
+    used: set = set()
+
+    def claim(sub) -> None:
+        found = id_at.get(index.FindIndex(sub))
+        if found:
+            used.add(found)
 
     for reference in references:
-        ref_id = reference.get("id") if isinstance(reference, dict) else str(reference)
+        ref = reference if isinstance(reference, dict) else {"id": str(reference)}
+        ref_id = ref.get("id")
+        row = {"reference": reference, "id": ref_id}
+
+        tag = ref.get("tag")
+        if tag:
+            following = [as_kind(s, kind) for s in (by_tag.get(tag) or [])]
+            if following:
+                for sub in following:
+                    claim(sub)
+                outcomes.append({**row, "shapes": following,
+                                 "status": "split" if len(following) > 1 else "matched"})
+                continue
+            if tag in removed:
+                outcomes.append({**row, "shapes": [], "status": "deleted"})
+                continue
+            # No tag on this body and nothing said it was destroyed: the history
+            # has a gap (not every builder reports what happened to every
+            # sub-shape), so fall through to measuring.
+
         if ref_id in by_id and ref_id not in used:
-            matched.append(subshapes[ref_id])
             used.add(ref_id)
+            outcomes.append({**row, "shapes": [subshapes[ref_id]], "status": "matched"})
             continue
 
-        if not isinstance(reference, dict) or len(reference) <= 1:
-            unresolved.append(reference)
+        if len(ref) <= 1:
+            outcomes.append({**row, "shapes": [], "status": "unresolved"})
             continue
 
         best, best_distance = None, None
         for descriptor in current:
             if descriptor["id"] in used:
                 continue
-            distance = _distance(reference, descriptor)
+            distance = _distance(ref, descriptor)
             if distance is None:
                 continue
             if best_distance is None or distance < best_distance:
                 best, best_distance = descriptor, distance
 
         if best is not None and best_distance is not None and best_distance <= _MATCH_TOL:
-            matched.append(subshapes[best["id"]])
             used.add(best["id"])
+            outcomes.append({**row, "shapes": [subshapes[best["id"]]], "status": "matched"})
         else:
-            unresolved.append(reference)
+            outcomes.append({**row, "shapes": [], "status": "unresolved"})
 
-    return matched, unresolved
+    return outcomes

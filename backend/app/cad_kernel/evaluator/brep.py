@@ -33,6 +33,14 @@ What it does not build, and why:
   loft is ``RuledLoftFeature`` instead, sitting beside it the way
   `EdgeFilletFeature` sits beside `FilletFeature`.
 
+Every build also records a **generative history** (`core/history`): which feature
+created each face and edge, and what each one became as the tree was assembled.
+That is what lets a stored selection be resolved by following the topology rather
+than by re-measuring it — see `_resolved` and `build_with_history`. It costs a
+topology traversal per stage and no geometry evaluation, and it is always on,
+because the builders that resolve references need it mid-build whether or not the
+caller wants it afterwards.
+
 Units are metres throughout, matching the rest of the kernel. OCC's default
 tolerances are pitched at millimetres, but `Precision::Confusion` is 1e-7, which
 at metre scale is 0.1 µm — four orders of magnitude below the thinnest feature
@@ -43,9 +51,13 @@ down to a 0.2 mm plate.
 from __future__ import annotations
 
 import math
-from typing import Any, List, Optional
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+from app.cad_kernel.core import history
 
 try:  # OCP (OpenCascade 7.x bindings) is an optional dependency.
     from OCP.BRep import BRep_Builder
@@ -96,6 +108,106 @@ UNSUPPORTED = {
 }
 
 
+# ---------------------------------------------------- generative history --
+
+class _Recorder:
+    """Tag maps for every shape built during one evaluation.
+
+    Keyed on `id(shape)` — the Python handle a builder returned — because that is
+    the only thing that identifies a *whole body* between the moment it is built
+    and the moment its parent consumes it. Sub-shape identity is a different
+    question and `history.ShapeKeys` answers it. The built shapes are kept alive
+    in `_alive` for exactly that reason: a freed handle's `id` could be reused by
+    a later one and silently hand a body the wrong map.
+    """
+
+    def __init__(self):
+        self.keys = history.ShapeKeys()
+        self._maps: Dict[int, history.EntityMap] = {}
+        self._alive: List[Any] = []
+        # What each topology-addressing feature's stored references resolved to
+        # this build. Collected here rather than recomputed on demand because the
+        # answer is only knowable while the intermediate bodies still exist.
+        self.reports: List[Dict[str, Any]] = []
+
+    def set(self, shape, entities: history.EntityMap) -> history.EntityMap:
+        self._maps[id(shape)] = entities
+        self._alive.append(shape)
+        return entities
+
+    def get(self, shape) -> Optional[history.EntityMap]:
+        return self._maps.get(id(shape)) if shape is not None else None
+
+
+_RECORDER: ContextVar[Optional[_Recorder]] = ContextVar("brep_recorder", default=None)
+
+
+@contextmanager
+def _recording():
+    """Run a build with a recorder, reusing an outer one if a build is already up."""
+    existing = _RECORDER.get()
+    if existing is not None:
+        yield existing
+        return
+    recorder = _Recorder()
+    token = _RECORDER.set(recorder)
+    try:
+        yield recorder
+    finally:
+        _RECORDER.reset(token)
+
+
+def _owner(feature) -> str:
+    """The tag namespace for entities this feature creates.
+
+    Feature ids are deterministic (`feature_ops.IdAllocator`), so tags are too.
+    The type-name fallback only fires for a hand-built tree that never went
+    through the document layer, where every node of a type shares a namespace —
+    weaker, but no worse than having no tags at all.
+    """
+    return str(getattr(feature, "id", None) or type(feature).__name__)
+
+
+def _tags(shape) -> Optional[history.EntityMap]:
+    recorder = _RECORDER.get()
+    return recorder.get(shape) if recorder is not None else None
+
+
+def _record(owner, result, builder, sources, *, trust_deleted: bool = False):
+    """Carry the sources' tags across one OCC builder onto ``result``.
+
+    ``owner`` is a feature or a namespace string; whatever the stage creates from
+    nothing is tagged under it.
+    """
+    recorder = _RECORDER.get()
+    if recorder is None:
+        return result
+    name = owner if isinstance(owner, str) else _owner(owner)
+    pairs = [(s, _tags(s)) for s in sources]
+    recorder.set(result, history.advance(pairs, builder, result, name,
+                                         recorder.keys, trust_deleted=trust_deleted))
+    return result
+
+
+def _record_map(result, entities):
+    recorder = _RECORDER.get()
+    if recorder is not None and entities is not None:
+        recorder.set(result, entities)
+    return result
+
+
+def _seeded(shape, owner: str):
+    """First tags for a shape built from nothing, or None outside a build."""
+    recorder = _RECORDER.get()
+    return history.seed(shape, owner, recorder.keys) if recorder is not None else None
+
+
+def _suffix(shape, mark: str):
+    """The shape's tags, marked as one copy — see `EntityMap.suffixed`."""
+    entities = _tags(shape)
+    return entities.suffixed(mark) if entities is not None else None
+
+
 def _pnt(v) -> "gp_Pnt":
     return gp_Pnt(float(v.x), float(v.y), float(v.z))
 
@@ -117,8 +229,16 @@ def _rotation_trsf(matrix: np.ndarray) -> "gp_Trsf":
     return trsf
 
 
-def _transformed(shape, trsf: "gp_Trsf"):
-    return BRepBuilderAPI_Transform(shape, trsf, True).Shape()
+def _transformed(shape, trsf: "gp_Trsf", owner: Optional[str] = None):
+    """Move a shape, carrying its entity tags with it when a build is recording.
+
+    A rigid transform is the one stage where history is exactly 1:1 — nothing is
+    split, merged or consumed — so a reference to a face survives a translate,
+    rotate or mirror unconditionally.
+    """
+    builder = BRepBuilderAPI_Transform(shape, trsf, True)
+    result = builder.Shape()
+    return _record(owner, result, builder, [shape]) if owner is not None else result
 
 
 # ------------------------------------------------------------- primitives --
@@ -183,7 +303,10 @@ def _boolean(f):
         # much later, so it is turned into a fallback signal here.
         if not builder.IsDone():
             raise BrepUnsupported(f"OCC {operation} failed")
-        result = builder.Shape()
+        # A boolean is the one builder that both splits entities and genuinely
+        # consumes them, and its history is filled properly — so this is the one
+        # place `IsDeleted` is believed.
+        result = _record(f, builder.Shape(), builder, [result, other], trust_deleted=True)
     return result
 
 
@@ -192,10 +315,14 @@ def _hole(f):
     if body is None:
         raise BrepUnsupported("hole target has no exact form")
     tool = _cylinder_shape(f.radius, f.depth, f.center, f.axis)
+    # The tool is a body in its own right as far as naming is concerned: the bore
+    # wall a hole leaves is the cylinder's own lateral face, carried through the
+    # cut, so a reference to it survives the plate being resized around it.
+    _record_map(tool, _seeded(tool, f"{_owner(f)}~tool"))
     builder = BRepAlgoAPI_Cut(body, tool)
     if not builder.IsDone():
         raise BrepUnsupported("OCC hole cut failed")
-    return builder.Shape()
+    return _record(f, builder.Shape(), builder, [body, tool], trust_deleted=True)
 
 
 # ------------------------------------------------------------- modifiers --
@@ -214,7 +341,8 @@ def _transform(f):
     translate = gp_Trsf()
     translate.SetTranslation(gp_Vec(float(f.translate.x), float(f.translate.y),
                                     float(f.translate.z)))
-    return _transformed(child, translate.Multiplied(rotate.Multiplied(scale)))
+    return _transformed(child, translate.Multiplied(rotate.Multiplied(scale)),
+                        _owner(f))
 
 
 _MIRROR_NORMALS = {"xy": (0.0, 0.0, 1.0), "xz": (0.0, 1.0, 0.0), "yz": (1.0, 0.0, 0.0)}
@@ -232,10 +360,16 @@ def _mirror(f):
     trsf = gp_Trsf()
     trsf.SetMirror(gp_Ax2(origin, gp_Dir(nx, ny, nz)))
 
-    builder = BRepAlgoAPI_Fuse(child, _transformed(child, trsf))
+    # The reflection's entities are their originals' twins, not the originals, so
+    # their tags are suffixed — otherwise a fillet on one corner would silently
+    # round the mirrored one too.
+    reflected = _transformed(child, trsf, _owner(f))
+    _record_map(reflected, _suffix(reflected, "#m"))
+
+    builder = BRepAlgoAPI_Fuse(child, reflected)
     if not builder.IsDone():
         raise BrepUnsupported("OCC mirror fuse failed")
-    return builder.Shape()
+    return _record(f, builder.Shape(), builder, [child, reflected], trust_deleted=True)
 
 
 def _pattern(f):
@@ -260,22 +394,36 @@ def _pattern(f):
         for i in range(count):
             trsf = gp_Trsf()
             trsf.SetRotation(pivot, math.radians(360.0 * i / count))
-            copies.append(_transformed(child, trsf))
+            copies.append(_instance(child, trsf, f, i))
     else:
         for i in range(count):
             trsf = gp_Trsf()
             trsf.SetTranslation(gp_Vec(float(f.axis.x) * float(f.spacing) * i,
                                        float(f.axis.y) * float(f.spacing) * i,
                                        float(f.axis.z) * float(f.spacing) * i))
-            copies.append(_transformed(child, trsf))
+            copies.append(_instance(child, trsf, f, i))
 
     result = copies[0]
     for other in copies[1:]:
         builder = BRepAlgoAPI_Fuse(result, other)
         if not builder.IsDone():
             raise BrepUnsupported("OCC pattern fuse failed")
-        result = builder.Shape()
+        result = _record(f, builder.Shape(), builder, [result, other], trust_deleted=True)
     return result
+
+
+def _instance(child, trsf: "gp_Trsf", f, index: int):
+    """One copy of a patterned body, its entities marked with the copy number.
+
+    Copy 0 keeps the child's own tags, so a reference taken before the pattern
+    was added still names the original. Every other copy is a distinct entity and
+    is tagged as one — an agent filleting "the top edge" of instance 2 has to be
+    able to say which.
+    """
+    copy = _transformed(child, trsf, _owner(f))
+    if index:
+        _record_map(copy, _suffix(copy, f"#{index}"))
+    return copy
 
 
 # --------------------------------------------------------------- extrude --
@@ -355,17 +503,42 @@ def _extrude(f):
 
 # ------------------------------------------------- topology-addressing ops --
 
-def _resolved(shape, references, kind: str, what: str):
-    """Turn stored references into live sub-shapes, or say which were lost."""
+def _resolved(shape, references, kind: str, what: str, feature=None):
+    """Turn stored references into live sub-shapes, or say which were lost.
+
+    Resolution follows the generative history first and falls back to descriptor
+    matching, so a reference to an edge a later cut split names *both* segments
+    rather than one of them arbitrarily. The per-reference outcome is filed on the
+    recorder: it is only knowable here, while the child body still exists, and
+    `check_references` reads it back so an agent can see which of its selections
+    an upstream edit destroyed.
+    """
     from app.cad_kernel.core import naming
 
     if not references:
         raise BrepUnsupported(f"no {kind}s selected for {what}")
-    matched, unresolved = naming.resolve(shape, list(references), kind=kind)
+
+    outcomes = naming.resolve_references(shape, list(references), kind=kind,
+                                         entities=_tags(shape))
+    recorder = _RECORDER.get()
+    if recorder is not None and feature is not None:
+        recorder.reports.append({
+            "feature_id": getattr(feature, "id", None),
+            "feature": type(feature).__name__,
+            "operation": what,
+            "kind": kind,
+            "references": [{"id": o["id"], "status": o["status"],
+                            "resolves_to": len(o["shapes"])} for o in outcomes],
+        })
+
+    matched = [sub for outcome in outcomes for sub in outcome["shapes"]]
     if not matched:
+        lost = sum(1 for o in outcomes if o["status"] == "deleted")
+        detail = (f"{lost} of them destroyed by an upstream edit" if lost
+                  else "none of them can be matched on the current body")
         raise BrepUnsupported(
-            f"none of the {len(references)} selected {kind}s survive on the current body")
-    return matched, unresolved
+            f"the {len(references)} selected {kind}s no longer exist: {detail}")
+    return matched, [o["reference"] for o in outcomes if not o["shapes"]]
 
 
 def serialize(shape) -> str:
@@ -412,7 +585,7 @@ def _edge_fillet(f):
     if body is None:
         raise BrepUnsupported("fillet target has no exact form")
 
-    edges, _ = _resolved(body, f.edges, "edge", "fillet")
+    edges, _ = _resolved(body, f.edges, "edge", "fillet", f)
     builder = BRepFilletAPI_MakeFillet(body)
     for edge in edges:
         builder.Add(float(f.radius), edge)
@@ -421,7 +594,9 @@ def _edge_fillet(f):
         # Overwhelmingly this is a radius larger than the geometry can carry.
         raise BrepUnsupported(
             f"OCC could not build a {f.radius * 1000:g} mm fillet on those edges")
-    return builder.Shape()
+    # `trust_deleted` stays off: BRepFilletAPI reports untouched box edges as
+    # deleted, so believing it here would declare live geometry destroyed.
+    return _record(f, builder.Shape(), builder, [body])
 
 
 def _edge_chamfer(f):
@@ -431,7 +606,7 @@ def _edge_chamfer(f):
     if body is None:
         raise BrepUnsupported("chamfer target has no exact form")
 
-    edges, _ = _resolved(body, f.edges, "edge", "chamfer")
+    edges, _ = _resolved(body, f.edges, "edge", "chamfer", f)
     builder = BRepFilletAPI_MakeChamfer(body)
     for edge in edges:
         builder.Add(float(f.distance), edge)
@@ -439,7 +614,7 @@ def _edge_chamfer(f):
     if not builder.IsDone():
         raise BrepUnsupported(
             f"OCC could not build a {f.distance * 1000:g} mm chamfer on those edges")
-    return builder.Shape()
+    return _record(f, builder.Shape(), builder, [body])
 
 
 def _face_shell(f):
@@ -450,7 +625,7 @@ def _face_shell(f):
     if body is None:
         raise BrepUnsupported("shell target has no exact form")
 
-    faces, _ = _resolved(body, f.faces, "face", "shell")
+    faces, _ = _resolved(body, f.faces, "face", "shell", f)
     removed = TopTools_ListOfShape()
     for face in faces:
         removed.Append(face)
@@ -463,7 +638,7 @@ def _face_shell(f):
     if not builder.IsDone():
         raise BrepUnsupported(
             f"OCC could not shell to {f.thickness * 1000:g} mm through those faces")
-    return builder.Shape()
+    return _record(f, builder.Shape(), builder, [body])
 
 
 # Revolve axis name -> (world index along the axis, the two in-plane indices),
@@ -751,7 +926,8 @@ def build_strict(feature):
     if not AVAILABLE:
         raise BrepUnsupported(
             "this deployment has no exact kernel installed (pip install cadquery-ocp)")
-    return _build(feature)
+    with _recording():
+        return _build(feature)
 
 
 def supports(feature) -> bool:
@@ -768,17 +944,43 @@ def brep_from_feature(feature) -> Optional["TopoDS_Shape"]:
     Never approximates: a tree containing one unsupported feature yields None so
     the caller falls back to the SDF kernel for the whole body, rather than
     showing something subtly different from what the rest of the system computes.
+
+    The public signature is unchanged by generative history: a build always
+    records one, because the builders that resolve stored references need it
+    mid-build whether or not the caller wants it afterwards. `build_with_history`
+    is the same build with the map handed back.
+    """
+    return build_with_history(feature)[0]
+
+
+def build_with_history(feature) -> Tuple[Optional["TopoDS_Shape"], Optional[Dict[str, Any]]]:
+    """``(shape, history)`` — the exact body and how its topology is named.
+
+    ``history`` is ``{"entities", "references", "error"}``: the tag map for the
+    returned shape, what each topology-addressing feature's stored references
+    resolved to on the way up, and why the build stopped if it did.
+
+    The reference verdicts are returned **even when the build fails**, which is
+    the case that matters most: a fillet whose edges an upstream edit destroyed is
+    a build failure whose only useful diagnosis — "the four edges you picked are
+    gone" — is collected on the way to that failure and would otherwise be thrown
+    away with it.
     """
     if not AVAILABLE:
-        return None
-    try:
-        return _build(feature)
-    except BrepUnsupported:
-        return None
-    except Exception:  # noqa: BLE001 — OCC raises many exception types
-        # Treated exactly like "unsupported": the SDF kernel takes over. A failed
-        # boolean must not take a document down with it.
-        return None
+        return None, None
+    with _recording() as recorder:
+        shape, error = None, None
+        try:
+            shape = _build(feature)
+        except BrepUnsupported as exc:
+            error = str(exc)
+        except Exception as exc:  # noqa: BLE001 — OCC raises many exception types
+            # Treated exactly like "unsupported": the SDF kernel takes over. A
+            # failed boolean must not take a document down with it.
+            error = str(exc)
+        return shape, {"entities": recorder.get(shape),
+                       "references": list(recorder.reports),
+                       "error": error}
 
 
 def _build(feature):
@@ -791,6 +993,11 @@ def _build(feature):
     shape = builder(feature)
     if shape is None or shape.IsNull():
         raise BrepUnsupported(f"{name} produced no shape")
+    recorder = _RECORDER.get()
+    if recorder is not None and recorder.get(shape) is None:
+        # A leaf — a primitive, a sheet-metal body, an imported solid. It has no
+        # input to inherit from, so this is where its entities are first named.
+        recorder.set(shape, history.seed(shape, _owner(feature), recorder.keys))
     return shape
 
 

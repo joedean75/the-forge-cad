@@ -1,7 +1,8 @@
 # Sprint roadmap — closing out the exact-kernel programme
 
 Sprints 1–7 are landed on `claude/cad-system-agent-review-48kf9k` (601 tests).
-This is the plan for what remains: three sprints and four honourable mentions.
+Sprint 9 landed next (`abd5251`), then Sprint 8. What remains is Sprint 10 and
+the four honourable mentions.
 
 `ROADMAP.md` is the product-level document and describes horizons. This one is
 narrower and concrete: what is left in the work that turned the SDF editor into
@@ -25,6 +26,8 @@ longer describes the system.
 | Sheet metal on the exact kernel | The last common part with no addressable topology |
 | Real FEA (`fea.py`), `simulate` in the catalog | A verifiable signal that means something |
 | True ruled loft (`RuledLoftFeature`) | Frustum volumes exact to 1e-6 |
+| Caching + rollout mode (Sprint 9) | `_BREP_CACHE`, both caches bounded, metering off in a block |
+| Generative history (Sprint 8, `core/history.py`) | A reference follows the topology instead of re-measuring it |
 
 Deliberately unchanged: `LoftFeature`, `FilletFeature`/`ChamferFeature` and
 `ShellFeature` keep their distance-field meaning, because changing what an
@@ -33,7 +36,42 @@ having two features.
 
 ---
 
-## Sprint 8 — generative-history topological naming
+## Sprint 8 — generative-history topological naming — **landed**
+
+Built as `cad_kernel/core/history.py`, threaded through `evaluator/brep.py` and
+resolved in `naming.resolve_references`; `tests/test_topological_history.py`
+covers it. What the plan below got right, and the three places it needed
+amending:
+
+* **Tags, not a `BRepTools_History` object.** The accumulator is a per-build
+  recorder of `sub-shape -> tag` maps rather than a history handle, because the
+  question at rebuild time is not "what did this builder do" but "which feature
+  originally made this entity". A tag is `{feature_id}:{kind}:{index}`, minted
+  by the creating feature and carried forward through each builder's
+  `Modified`/`Generated`. `BRepTools_History` would have worked as the transport
+  and adds nothing over calling the builders directly.
+* **`IsDeleted` had to be *distrusted* by default**, which the plan did not
+  anticipate. `BRepFilletAPI_MakeFillet` reports untouched box edges as deleted;
+  believing it would declare every edge of a filleted part destroyed. Only the
+  `BRepAlgoAPI_*` booleans are believed (`advance(..., trust_deleted=True)`).
+* **The verdict has to outlive the failure it explains.** A fillet whose edges
+  were destroyed is a build failure, and the diagnosis is collected on the way
+  to it — so `build_with_history` returns the reference verdicts even when the
+  shape is `None`, and `check_references` reads them either way.
+
+The trap the plan called — design for absent history, and do not delete
+descriptor matching — was the right one and is what the fallback order encodes.
+
+**Cost**, measured the way Sprint 9 asked for rather than asserted: recording is
+always on, and adds **6–8%** to an exact build (2 features 4.3 → 4.5 ms,
+5 features 18.1 → 19.4 ms, 13 features 68.0 → 73.5 ms — flat, not growing with
+the tree). It was **+346%** first. The whole difference is one line in
+`history._drain`: `list(occ_list)` on a `TopTools_ListOfShape` costs ~0.26 ms
+*whether or not the list is empty*, because pybind builds an iterator either way,
+and the module asks two such questions of every sub-shape at every stage — almost
+all of which answer empty. Checking `Size()` first costs a thousandth of that.
+
+Original plan follows.
 
 **Why now.** This is the last correctness gap in the exact kernel, and it is the
 famously hard problem in parametric CAD. `core/naming.py` matches entities by
@@ -80,7 +118,7 @@ need a second pass.
 
 ---
 
-## Sprint 9 — caching and rollout throughput
+## Sprint 9 — caching and rollout throughput — **landed** (`abd5251`)
 
 **Why now.** Sprints 4–7 each added an expensive path, and none of them cache.
 The cost shows up exactly where it hurts most: generating training data.
@@ -209,13 +247,13 @@ training-data half of this project, and nobody has looked at it.
 
 ## Suggested order
 
-**9 → 8 → 10**, not 8 → 9 → 10.
+**9 → 8 → 10**, not 8 → 9 → 10. 9 and 8 are done; 10 is what is left.
 
-Sprint 9 is cheap, unblocks everything that follows by making iteration fast,
-and is the only one whose absence actively degrades the training-data use case
-today. Sprint 8 is the hardest and benefits from a fast rebuild loop. Sprint 10
-is best last, because it is the one that has to be built against a settled
-backend — and because a face picker built before Sprint 8 would need revisiting
-when references gain history.
-
-If only one gets done: **Sprint 9**.
+Sprint 9 was cheap, unblocked everything that followed by making iteration fast,
+and was the only one whose absence actively degraded the training-data use case.
+Sprint 8 was the hardest and benefited from a fast rebuild loop. Sprint 10 is
+best last, because it is the one that has to be built against a settled
+backend — and because a face picker built before Sprint 8 would have needed
+revisiting once references gained history. It does now: the picker should show
+the `split` and `deleted` states `check_references` reports, since a selection
+that lost its target is invisible in the viewport.

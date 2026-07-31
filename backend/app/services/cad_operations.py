@@ -692,12 +692,13 @@ def _mass_properties(doc_id, args):
     return mass_properties.mass_properties(doc_id)
 
 
-def _exact_shape(doc_id):
-    """The document's exact B-rep body, or a precondition failure explaining why not.
+def _exact_body(doc_id):
+    """The document's exact build, or a precondition failure explaining why not.
 
     The gate in front of every topology-addressing operation. Both refusals are
     worth telling apart: the deployment has no exact kernel, or this particular
-    body cannot be built exactly.
+    body cannot be built exactly. Returns the whole `ExactBody` — the shape plus
+    the entity tags a selection has to carry to survive a re-topologising edit.
     """
     from app.cad_kernel.evaluator import brep
 
@@ -707,13 +708,18 @@ def _exact_shape(doc_id):
             "so faces and edges are not addressable")
 
     _get(doc_id)  # typed NoSuchDocument before anything geometric happens
-    shape = document_service.get_exact_shape(doc_id)
-    if shape is None:
+    body = document_service.get_exact_body(doc_id)
+    if body is None:
         raise PreconditionFailed(
             "this body has no exact form, so it has no addressable faces or edges. "
             "Smooth-boolean fillet/chamfer, shell, sheet metal, imported and "
             "optimized bodies are evaluated as a distance field instead.")
-    return shape
+    return body
+
+
+def _exact_shape(doc_id):
+    """Just the shape. Kept because most callers want nothing else."""
+    return _exact_body(doc_id).shape
 
 
 @operation("list_faces", "query", "List the body's faces with stable ids, so they can be selected. "
@@ -760,13 +766,18 @@ def _selected(doc_id, ids, kind: str) -> List[Dict[str, Any]]:
 
     An id alone is a hash of the entity's current measurements, so storing just
     that would break the moment an upstream dimension moved it. The whole
-    descriptor is stored instead, letting `naming.resolve` fall back to nearest
-    match and carry the fillet with the edge it was put on.
+    descriptor is stored instead — including the generative-history ``tag``, the
+    entity's identity as opposed to its measurements. `naming.resolve_references`
+    follows the tag first, so a selection survives an upstream edit that *splits*
+    what it named, and falls back to nearest-descriptor match where there is no
+    history to follow.
     """
     from app.cad_kernel.core import naming
 
-    shape = _exact_shape(doc_id)
-    table = naming.face_table(shape) if kind == "face" else naming.edge_table(shape)
+    body = _exact_body(doc_id)
+    shape, entities = body.shape, body.entities
+    table = (naming.face_table(shape, entities) if kind == "face"
+             else naming.edge_table(shape, entities))
     by_id = {d["id"]: d for d in table}
 
     if isinstance(ids, str) and ids.strip().lower() == "all":
@@ -874,6 +885,86 @@ def _shell_faces(doc_id, args):
                  f"a {thickness * 1000:g} mm shell through {len(references)} face(s)")
     return {"message": f"shelled to {thickness * 1000:g} mm through {len(references)} face(s)",
             "feature_id": node["id"], "faces": [r["id"] for r in references]}
+
+
+# Features that hold references to named topology, and so can lose one.
+_ADDRESSES_TOPOLOGY = {"EdgeFilletFeature", "EdgeChamferFeature", "FaceShellFeature"}
+
+
+def _lost_references(doc_id: str, doc=None) -> int:
+    """How many stored face/edge selections stopped resolving, on a body that built.
+
+    Gated on the tree actually containing a feature that holds references — a
+    dict walk — because `get_exact_body` is an OpenCascade build and the vast
+    majority of edits are to documents with nothing selectable in them. Where the
+    gate does open, the document already needs the exact kernel to evaluate at
+    all, and the build is cached for the `check_references` or `list_edges` call
+    that usually follows.
+    """
+    from app.cad_kernel.core.feature_tree import walk_nodes
+    from app.cad_kernel.evaluator import brep
+
+    doc = doc or document_service.get_document(doc_id)
+    if not brep.AVAILABLE or doc is None:
+        return 0
+    if not any(n.get("type") in _ADDRESSES_TOPOLOGY for n in walk_nodes(doc.feature_tree)):
+        return 0
+
+    body = document_service.get_exact_body(doc_id)
+    if body is None:
+        return 0
+    return sum(1 for report in body.references for entry in report["references"]
+               if entry["status"] in ("deleted", "unresolved"))
+
+
+_REFERENCE_STATUS = {
+    "matched": "still names exactly one entity",
+    "split": "an upstream edit divided it; the reference now names every piece",
+    "deleted": "an upstream edit destroyed it — reselect and reapply",
+    "unresolved": "nothing on the current body matches it within tolerance",
+}
+
+
+@operation("check_references", "query",
+           "Report whether the faces and edges the body's fillets, chamfers and shells "
+           "were placed on still exist. An upstream dimension change can split an entity "
+           "in two (the reference then names both) or destroy it outright — and a "
+           "reference that lost its target is the one failure a geometry check cannot "
+           "see, because the body it leaves behind is perfectly valid, just not what "
+           "was asked for. Requires the exact kernel.",
+           {})
+def _check_references(doc_id, args):
+    from app.cad_kernel.evaluator import brep
+
+    if not brep.AVAILABLE:
+        raise PreconditionFailed(
+            "this deployment has no exact kernel installed (pip install cadquery-ocp), "
+            "so faces and edges are not addressable")
+    _get(doc_id)
+    verdicts, error = document_service.reference_verdicts(doc_id)
+
+    features, lost, split = [], 0, 0
+    for report in verdicts:
+        rows = []
+        for entry in report["references"]:
+            status = entry["status"]
+            if status in ("deleted", "unresolved"):
+                lost += 1
+            elif status == "split":
+                split += 1
+            rows.append({**entry, "meaning": _REFERENCE_STATUS.get(status, status)})
+        features.append({**report, "references": rows})
+
+    if not features and error:
+        # No feature got as far as resolving anything, so the build failed for an
+        # unrelated reason and there is nothing here to report on.
+        raise PreconditionFailed(f"this body has no exact form: {error}")
+    return {"features": features, "lost": lost, "split": split,
+            "ok": lost == 0 and not error,
+            **({"error": error} if error else {}),
+            "message": (f"{lost} reference(s) no longer resolve" if lost
+                        else f"every reference resolves ({split} split by a later edit)"
+                        if split else "every reference resolves")}
 
 
 @operation("check_geometry", "query", "Validate the body as a solid: non-empty, watertight, consistent winding, "
@@ -1384,6 +1475,18 @@ def execute(
                 f"{eval_error} (the edit was rolled back)").to_dict()
         else:
             envelope["warnings"].append({"code": EvaluationFailed.code, "message": eval_error})
+
+    if mutates and after_doc is not None and not after_doc.derived.error:
+        lost = _lost_references(doc_id, after_doc)
+        if lost:
+            # The body built, so nothing else here will notice — but a fillet that
+            # was placed on four edges and now reaches three is a part that
+            # quietly stopped matching what was asked for, which is exactly the
+            # silent success this catalog is not allowed to contain.
+            envelope["warnings"].append({
+                "code": PreconditionFailed.code,
+                "message": f"{lost} face/edge selection(s) no longer resolve after this "
+                           f"edit; call check_references to see which"})
 
     if after_doc is not None:
         envelope["delta"] = observation.delta(before, observation.snapshot(after_doc))

@@ -17,7 +17,7 @@ import logging
 import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from app.cad_kernel.core.feature_tree import FeatureTree, walk_nodes
 from app.cad_kernel.core.topology import Solid
@@ -89,7 +89,8 @@ _BREP_CACHE_SIZE = 64
 
 _SOLID_CACHE: Dict[str, Solid] = _LruCache(_SOLID_CACHE_SIZE)
 
-# Exact bodies, keyed by the hash of the *resolved* tree rather than the
+# Exact bodies (an `ExactBody`: shape, entity tags, reference verdicts), keyed by
+# the hash of the *resolved* tree rather than the
 # document id. Resolving suppression, datums and parameters is milliseconds;
 # building the OpenCascade solid is not, and every topology-addressing
 # operation — list_faces, list_edges, fillet_edges, mass_properties, dfm,
@@ -271,6 +272,27 @@ def get_exact_shape(doc_id: str):
     than raising: whether that is a precondition failure or a fallback to the
     faceted path is the caller's decision, not this function's.
     """
+    body = get_exact_body(doc_id)
+    return body.shape if body else None
+
+
+class ExactBody(NamedTuple):
+    """An exact build and everything about it that is only knowable while it runs.
+
+    ``entities`` is the tag map from `core.history` — which face and edge of the
+    finished body came from which feature — and ``references`` is what each
+    topology-addressing feature's stored selections resolved to on the way up.
+    Neither can be recovered from the finished shape, so they are cached with it
+    rather than recomputed.
+    """
+
+    shape: Any
+    entities: Any
+    references: List[Dict[str, Any]]
+
+
+def get_exact_body(doc_id: str) -> Optional[ExactBody]:
+    """The exact build for a document — shape, entity tags and reference verdicts."""
     from app.cad_kernel.core.feature_tree import FeatureTree
     from app.cad_kernel.evaluator import brep
 
@@ -285,13 +307,41 @@ def get_exact_shape(doc_id: str):
     if key in _BREP_CACHE:
         return _BREP_CACHE[key]
 
-    shape = brep.brep_from_feature(FeatureTree.from_dict(active).root)
-    if shape is not None:
+    shape, history = brep.build_with_history(FeatureTree.from_dict(active).root)
+    if shape is None:
         # Only successes are cached. A None means "no exact form", which is
         # cheap to re-derive and would otherwise pin a negative result across a
         # code change that makes the feature representable.
-        _BREP_CACHE[key] = shape
-    return shape
+        return None
+    body = ExactBody(shape, (history or {}).get("entities"),
+                     (history or {}).get("references") or [])
+    _BREP_CACHE[key] = body
+    return body
+
+
+def reference_verdicts(doc_id: str):
+    """``(verdicts, error)`` — what each stored face/edge selection resolved to.
+
+    Deliberately survives a failed build. A fillet whose edges an upstream edit
+    destroyed leaves the document unevaluatable, and that is precisely when a
+    caller most needs to be told *which* references were lost — so the cheap
+    cached path is used when the body built, and a fresh build is run only when
+    it did not, purely to collect the verdicts on the way to the same failure.
+    """
+    from app.cad_kernel.core.feature_tree import FeatureTree
+    from app.cad_kernel.evaluator import brep
+
+    if not brep.AVAILABLE:
+        return [], None
+    body = get_exact_body(doc_id)
+    if body is not None:
+        return body.references, None
+
+    doc = get_document(doc_id)
+    if doc is None:
+        return [], None
+    _, history = brep.build_with_history(FeatureTree.from_dict(resolved_tree(doc)).root)
+    return (history or {}).get("references") or [], (history or {}).get("error")
 
 
 def get_solid(doc_id: str, resolution: int = 128) -> Solid:
