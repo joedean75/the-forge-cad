@@ -290,3 +290,20 @@ def test_sketch_consumers_finds_the_features_reading_a_sketch():
     tree = docs.get_document(doc_id).feature_tree
     assert [n["type"] for n in feature_ops.sketch_consumers(tree, sketch_id)] == ["ExtrudeFeature"]
     assert feature_ops.sketch_consumers(tree, "nope") == []
+
+
+def test_the_observation_reports_reference_ids_not_whole_descriptors():
+    """An agent reading state back wants the id it would pass; the descriptor is
+    what has to be *stored*, and ten fields apiece buries the dimensions."""
+    from app.services import observation
+
+    trimmed = observation.trim_params({
+        "radius": 0.002,
+        "edges": [{"id": "E1", "kind": "line", "length": 0.08, "at": [0, 0, 0]},
+                  {"id": "E2", "kind": "line", "length": 0.06, "at": [0, 1, 0]}],
+        "on_face": {"feature_id": "f1", "face_id": "F9",
+                    "face_ref": {"id": "F9", "kind": "plane", "area": 0.0048}},
+        "sketch": {"points": []},
+    })
+    assert trimmed == {"radius": 0.002, "edges": ["E1", "E2"],
+                       "on_face": {"feature_id": "f1", "face_id": "F9"}}

@@ -22,10 +22,27 @@ MM = 1000.0
 # its children array or a 400-point traced polygon.
 _SKIP_PARAM_KEYS = {"children", "profile", "sketch"}
 
+# Params holding stored topology references. What is *stored* is the whole
+# descriptor — an id alone is a hash of the entity's current measurements and
+# breaks the moment an upstream dimension moves it — but what an agent needs to
+# read back is the id, and ten fields apiece across a dozen edges buries the
+# dimensions it came for.
+_REFERENCE_KEYS = {"edges", "faces"}
+
+
+def _summarize_value(key: str, value: Any) -> Any:
+    if key in _REFERENCE_KEYS and isinstance(value, list):
+        ids = [r.get("id") for r in value if isinstance(r, dict) and r.get("id")]
+        return ids or value
+    if key == "on_face" and isinstance(value, dict):
+        return {k: v for k, v in value.items() if k != "face_ref"}
+    return value
+
 
 def trim_params(params: Optional[dict]) -> dict:
     """Feature params minus heavy/structural keys — enough to edit from."""
-    return {k: v for k, v in (params or {}).items() if k not in _SKIP_PARAM_KEYS}
+    return {k: _summarize_value(k, v) for k, v in (params or {}).items()
+            if k not in _SKIP_PARAM_KEYS}
 
 
 def _bbox_mm(bbox) -> Optional[Dict[str, float]]:
