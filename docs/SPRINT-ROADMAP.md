@@ -1,7 +1,7 @@
 # Sprint roadmap — closing out the exact-kernel programme
 
-Sprints 1–9 are on `main` (638 tests). **One sprint remains: 10**, plus four
-honourable mentions.
+Sprints 1–10 are on `main` (641 tests). **The programme is done**; what is left
+is the four honourable mentions.
 
 [PRODUCT-ROADMAP.md](../PRODUCT-ROADMAP.md) is the product-level document. This
 one is narrower and concrete: what is left in the work that turned the SDF
@@ -25,6 +25,7 @@ Worth stating, because the remaining sprints only make sense on top of it.
 | True ruled loft (`RuledLoftFeature`) | Frustum volumes exact to 1e-6 |
 | Sprint 9: B-rep cache, bounded LRUs, `rollout.py` | 4 ops → 1 OCC build; reproducible rollouts |
 | Sprint 8: generative history (`core/history.py`) | A reference follows the topology instead of re-measuring it |
+| Sprint 10: five panels under `frontend/src/features/*` | Every capability above is reachable without the API |
 
 Deliberately unchanged: `LoftFeature`, `FilletFeature`/`ChamferFeature` and
 `ShellFeature` keep their distance-field meaning, because changing what an
@@ -137,7 +138,48 @@ metering off and pins resolution for a training loop; pinning is the half that
 matters, because the plan cap otherwise makes the same document evaluate
 differently for different callers. Neither switch touches access control.
 
-## Sprint 10 — surface the new capabilities in the UI
+## Sprint 10 — surface the new capabilities in the UI  ✅ *shipped*
+
+All five panels landed, in the order below. What the plan did not anticipate:
+
+* **A face picker cannot be a 3D overlay here.** `list_faces` returns ids, but
+  the display mesh is one welded triangle soup — `Kernel.from_mesh` makes a
+  single `Face` with `surface=None` — so a click on it can say *where* you
+  clicked, never *which face*. Inventing a nearest-entity mapping would be right
+  most of the time, which is the worst available accuracy for a selection. The
+  picker is therefore the list, with the measurements that tell entities apart,
+  and the viewport marks the selection so the two are tied together. Marking
+  every *listed* entity was tried and dropped: big enough to see is clutter, and
+  small enough not to be clutter is invisible.
+* **`DfmReport.process` is a display label, not the requested id.** It reads
+  `LPBF` for additive and `MILLING` for milling, so `report.process === process`
+  never matches and a stale report reads as current on every tab. The store
+  records what was *asked for* (`dfmProcess`) instead. Two labels in the report
+  header had the same bug and are keyed the same way now.
+* **`shared/types.ts` declared `DesignSpec` twice** — the generative-optimization
+  spec and the requirements spec — and TypeScript *merges* same-named interfaces
+  rather than complaining, so a single type demanded `name`, `design_space` and
+  `requirements` at once. The requirements one is `PartSpec` now, which is also
+  what `DesignDocument.spec` actually holds.
+* **The FEA panel immediately exposed a backend hole**, which is what a UI that
+  shows `estimate_only` prominently is for: `fea.solve` rasterised through the
+  SDF, so *every* part with a real edge fillet, chamfer, face shell or imported
+  STEP solid — the whole point of the exact kernel — silently got the
+  closed-form estimate. `fea._occupancy_field` now asks the B-rep directly via
+  `BRepClass3d_SolidClassifier` when there is no field. It agrees with the
+  analytic path to 0.003% on a body that has both, at about 30 µs a point.
+  Voxelising the tessellation was tried first, following `drawing._field`'s
+  precedent, and is wrong here: `trimesh.voxelized().fill()` dilates the body by
+  a voxel all over (4% heavy at the element pitch, 11% at four times finer,
+  because the shell stays one voxel thick), and mass feeds straight into stress.
+
+The acceptance bar below was driven end to end in a real browser: model a
+bracket, fillet a picked edge, set a spec, verify it, run a milling DFM and
+generate a sectioned drawing, without touching the API — with no console or HTTP
+errors.
+
+Original plan follows.
+
 
 **Why now.** Six sprints of capability are reachable only through the operation
 API. A human driving the editor cannot select a face, cannot choose a
@@ -220,11 +262,11 @@ training-data half of this project, and nobody has looked at it.
 every later iteration faster, which is exactly why it was pulled forward, and 8
 was the hardest thing left and wanted that fast rebuild loop.
 
-Sprint 10 is what remains, and it was right to leave it last: it has to be built
-against a settled backend, and a face picker written before references gained
-history would need revisiting. It does now — the picker should surface the
-`split` and `deleted` states `check_references` reports, because a selection that
-lost its target is invisible in the viewport.
+Sprint 10 went last, which was right: it had to be built against a settled
+backend, and a face picker written before references gained history would have
+needed revisiting. It surfaces the `split` and `deleted` states
+`check_references` reports, because a selection that lost its target is
+invisible in the viewport and leaves a body that `check_geometry` passes.
 
 The honourable mentions are all independent of both and can be picked up at any
 time. The cheapest with real value is the DXF path out of `drawing.py`.

@@ -2,14 +2,18 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Play, Pause, RotateCcw, PlayCircle } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
 import { api } from '../../api/client'
+import { SpecPanel } from './SpecPanel'
 import type { MachineSpec, SliceResponse } from '../../../../shared/types'
 
 /**
- * Validate — watch the job run before it touches metal.
+ * Validate — is this the right part, and will the machine make it?
  *
- * Replays the program prepared in Make on the selected machine: an FDM print
- * builds up layer by layer, a laser/plasma job traces its cut paths in order.
- * Scrub or play it through to confirm the machine will make the right part.
+ * Two questions, in that order. The spec panel answers the first: measurable
+ * requirements scored against the body, which is the only check here that can
+ * fail on a part that is perfectly well formed. The build replay answers the
+ * second, by running the program prepared in Make on the selected machine — an
+ * FDM print builds up layer by layer, a laser/plasma job traces its cut paths in
+ * order.
  */
 
 type Frame = { label: string; paths: number[][][]; solid?: number[][][] }
@@ -73,6 +77,11 @@ export function ValidatePanel() {
   const frame = frames?.[idx]
   return (
     <div className="space-y-4">
+      <SpecPanel />
+
+      <div className="pt-3 border-t border-cad-border" />
+
+      <h3 className="sec-head">Build replay</h3>
       <p className="text-xs text-cad-text leading-relaxed">
         Replay the job prepared in Make on{' '}
         <span className="text-cad-text-heading">{machine ? `${machine.vendor} ${machine.name}` : 'the selected machine'}</span>{' '}

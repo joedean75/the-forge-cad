@@ -182,6 +182,46 @@ function ProxyMesh({ px, fit }: { px: FeatureProxy; fit: NonNullable<ReturnType<
   return null
 }
 
+/**
+ * Where the picked faces and edges are on the body.
+ *
+ * The list in the Model panel is the picker — the display mesh is one welded
+ * triangle soup with no face ids in it, so it cannot be clicked to select. What
+ * it *can* do is show you where a listed entity sits, which is the half of
+ * picking that a table of numbers does badly. Markers sit at the face centre or
+ * edge midpoint the listing itself reports, so the two views cannot disagree.
+ *
+ * Only the *selected* entities are marked. Dotting every listed one was tried
+ * and is worse twice over: at a size that does not bury the part they are
+ * clutter, and at a size that is not clutter they are invisible — a 12-edge box
+ * showed nine dots that could not be seen at all.
+ *
+ * `depthTest` is off deliberately. A marker on the far side of the body then
+ * reads as being on the near face, which is a real ambiguity, but the
+ * alternative is a selection you cannot see without orbiting to find it — and
+ * "I selected something and nothing happened" is the worse failure.
+ */
+function TopologyMarkers({ fit }: { fit: NonNullable<ReturnType<typeof useFit>> }) {
+  const topo = useDocumentStore((s) => s.topo)
+  const entities = (topo.kind === 'face' ? topo.faces : topo.edges)
+    .filter((e) => topo.selected.includes(e.id))
+  return (
+    <>
+      {entities.map((e) => {
+        const at = 'area_mm2' in e ? e.center_mm : e.midpoint_mm
+        // The listing is in mm; the fit transform works in the kernel's metres.
+        const pos = fit.toDisplay({ x: at[0] / 1000, y: at[1] / 1000, z: at[2] / 1000 })
+        return (
+          <mesh key={e.id} position={pos} renderOrder={2}>
+            <sphereGeometry args={[0.022, 14, 12]} />
+            <meshBasicMaterial color={HIGHLIGHT} depthTest={false} />
+          </mesh>
+        )
+      })}
+    </>
+  )
+}
+
 function SelectionHighlight({ node, fit }: { node: FeatureNode; fit: NonNullable<ReturnType<typeof useFit>> }) {
   const proxies = useMemo(() => collectProxies(node), [node])
   return (
@@ -342,6 +382,7 @@ export function DocumentViewport() {
             />
           )}
           {fit && selectedNode && <SelectionHighlight node={selectedNode} fit={fit} />}
+          {fit && <TopologyMarkers fit={fit} />}
           {showDims && bbox && fit && <DimensionOverlay bbox={bbox} fit={fit} />}
       {fit && dims.length > 0 && <DimensionLines dims={dims} fit={fit} onRemove={removeDimension} />}
 

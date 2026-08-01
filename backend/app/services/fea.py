@@ -40,6 +40,7 @@ import numpy as np
 from scipy.sparse import coo_matrix, diags
 from scipy.sparse.linalg import LinearOperator, cg, spsolve
 
+from app.cad_kernel.evaluator.sdf import Bounds
 from app.services.simp_optimizer import _compute_ke, _edof_mat, _hex_shape_deriv
 
 # Void elements keep a token stiffness so the system stays non-singular, exactly
@@ -187,6 +188,84 @@ def _solve_system(stiffness, load):
     return solution, "conjugate-gradient"
 
 
+class _BrepOccupancy:
+    """Inside/outside for a body that has no analytic field, from the B-rep itself.
+
+    Not a distance field and not pretending to be: `solve` only ever asks
+    `field(centres) <= 0`, so what is needed is an inside test — and a body that
+    has no field has one *because* it is exact geometry, which can answer that
+    question exactly. `BRepClass3d_SolidClassifier` costs about 30 µs a point,
+    so a 60k-element grid is a couple of seconds beside a CG solve.
+
+    Voxelising the tessellation was tried first, following `drawing._field`'s
+    precedent, and is wrong for this. `trimesh.voxelized().fill()` marks every
+    voxel the surface passes through, so the body comes back dilated by one voxel
+    all over: a 200×20×20 beam solved 4% heavy at the element pitch and 11% heavy
+    at four times finer, because the shell stays one voxel thick however small
+    the voxel is. Drawing can absorb that — it only traces an outline — but mass
+    feeds straight into stress here. Ray-casting the mesh with `trimesh.contains`
+    is exact but wants `rtree`, and a new hard dependency to answer a question
+    OCC already answers is the wrong trade.
+    """
+
+    def __init__(self, shape):
+        from OCP.Bnd import Bnd_Box
+        from OCP.BRepBndLib import BRepBndLib
+        from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+
+        self._classifier = BRepClass3d_SolidClassifier(shape)
+        box = Bnd_Box()
+        BRepBndLib.Add_s(shape, box)
+        xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+        self._bounds = Bounds(np.array([xmin, ymin, zmin], dtype=float),
+                              np.array([xmax, ymax, zmax], dtype=float))
+
+    def bounds(self) -> "Bounds":
+        return self._bounds
+
+    def __call__(self, points: np.ndarray) -> np.ndarray:
+        from OCP.gp import gp_Pnt
+        from OCP.TopAbs import TopAbs_State
+
+        # Metres throughout, so Precision::Confusion (1e-7) is 0.1 µm here —
+        # four orders below the thinnest feature the kernel deals with.
+        classifier, inward = self._classifier, TopAbs_State.TopAbs_IN
+        points = np.asarray(points, dtype=float)
+        out = np.ones(len(points), dtype=float)
+        for i, (x, y, z) in enumerate(points):
+            classifier.Perform(gp_Pnt(float(x), float(y), float(z)), 1e-7)
+            if classifier.State() == inward:
+                out[i] = -1.0
+        return out
+
+
+def _occupancy_field(body_feature):
+    """Something that answers "is this point inside the body?" for any body.
+
+    Analytic where there is a field, and the exact kernel otherwise. Without the
+    second path every part carrying a real edge fillet, chamfer, face shell or
+    imported STEP solid — the whole point of the exact kernel — fell through to
+    `document_analysis`'s closed-form estimate, which cannot tell a cube from a
+    cantilever. A meaningless number reaching a caller that asked for an analysis
+    is the one failure this module exists to prevent.
+    """
+    from app.cad_kernel.evaluator.sdf import sdf_from_feature
+
+    try:
+        return sdf_from_feature(body_feature)
+    except ValueError as exc:
+        reason = str(exc)
+
+    from app.cad_kernel.evaluator import brep
+
+    if not brep.AVAILABLE:
+        # Unreachable in practice — the features with no field are exactly the
+        # ones OCC has to build — but a clear reason beats an AttributeError.
+        raise FeaError(reason)
+    shape = brep.build_strict(body_feature)
+    return _BrepOccupancy(shape)
+
+
 def solve(body_feature, *, youngs_pa: float, yield_mpa: float, density: float,
           loads: List[Any], constraints: List[Any],
           target_elements: int = _DEFAULT_ELEMENTS) -> Dict[str, Any]:
@@ -197,15 +276,13 @@ def solve(body_feature, *, youngs_pa: float, yield_mpa: float, density: float,
     grounded, which is `run_simp`'s convention and the only assumption that
     makes an under-specified model solvable rather than singular.
     """
-    from app.cad_kernel.evaluator.sdf import sdf_from_feature
-
     if not loads:
         raise FeaError(
             "a static analysis needs at least one load case — with no force "
             "applied, every stress and displacement is zero by definition")
 
     target_elements = int(np.clip(target_elements, 200, _MAX_ELEMENTS))
-    field = sdf_from_feature(body_feature)
+    field = _occupancy_field(body_feature)
     bounds = field.bounds()
     nelx, nely, nelz, span = _grid_for(bounds, target_elements)
     lo = bounds.min

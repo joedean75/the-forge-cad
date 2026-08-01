@@ -1,13 +1,18 @@
 import { create } from 'zustand'
 import type {
+  AnalysisReport,
   DesignDocument,
+  EdgeRef,
   EditorMode,
+  FaceRef,
   FeatureTreeDict,
   OptimizeJob,
   OptimizationSetup,
   LoadCase,
   Objective,
-  SimulationResult,
+  ReferenceReport,
+  SpecReport,
+  SpecRequirement,
   DfmProcess,
   DfmReport,
   CamResult,
@@ -28,6 +33,24 @@ export interface SketchSpec {
   constraints?: Record<string, unknown>[]
 }
 
+/**
+ * Face/edge selection state.
+ *
+ * `kind` is what the body is currently being listed as, and it is exclusive:
+ * every operation that consumes a selection takes faces *or* edges, never both,
+ * so keeping one list avoids a UI that lets you build a selection no operation
+ * can accept. `error` holds the PRECONDITION a body with no exact form returns —
+ * a state to explain, not a failure to swallow.
+ */
+export interface TopologyState {
+  kind: 'face' | 'edge'
+  faces: FaceRef[]
+  edges: EdgeRef[]
+  selected: string[]
+  loading: boolean
+  error: string | null
+}
+
 interface DocumentState {
   doc: DesignDocument | null
   mode: EditorMode
@@ -35,8 +58,13 @@ interface DocumentState {
   busy: boolean
   error: string | null
   optimizeJob: OptimizeJob | null
-  sim: SimulationResult | null
+  sim: AnalysisReport | null
   dfm: DfmReport | null
+  /** Which process `dfm` was asked for. The report's own `process` is a display
+   *  label ('LPBF', 'MILLING'), so it cannot answer "is this report about the
+   *  process now selected?" — and a stale report read as a current one is the
+   *  whole problem. */
+  dfmProcess: DfmProcess | null
   cam: CamResult | null
   past: FeatureTreeDict[]
   future: FeatureTreeDict[]
@@ -58,6 +86,24 @@ interface DocumentState {
   /** Open a new sketch on a base datum plane (xy/xz/yz). */
   pickSketchPlane: (plane: string) => void
 
+  /** Faces/edges the body currently offers, and which of them are picked. */
+  topo: TopologyState
+  /** List the body's faces or edges (clears the selection when the kind changes). */
+  loadTopology: (kind: 'face' | 'edge') => Promise<void>
+  toggleTopoSelection: (id: string) => void
+  /** Select every listed entity, or none. */
+  setTopoSelection: (ids: string[]) => void
+  /** Apply a treatment to the current selection and re-list the new body. */
+  applyTopology: (op: 'fillet' | 'chamfer' | 'shell', sizeMm: number) => Promise<void>
+  /** Which stored selections still resolve — see `check_references`. */
+  refs: ReferenceReport | null
+  checkReferences: () => Promise<void>
+
+  /** The design spec and the last score against it. */
+  specReport: SpecReport | null
+  saveSpec: (requirements: SpecRequirement[], goal?: string) => Promise<void>
+  verifySpec: () => Promise<void>
+
   setMode: (mode: EditorMode) => void
   select: (id: string | null) => void
   clearError: () => void
@@ -67,7 +113,8 @@ interface DocumentState {
     resolution?: number
     load_cases?: LoadCase[]
   }) => Promise<void>
-  runSimulate: () => Promise<void>
+  /** Linear-static FEA. `elements` raises the mesh budget: slower, finer stress. */
+  runSimulate: (elements?: number) => Promise<void>
   runDfm: (buildAxis?: string, process?: DfmProcess) => Promise<void>
   runCam: (tool: { diameter_mm: number; stepdown_mm: number; stepover_mm: number; feed_mm_min: number }) => Promise<void>
   exportStep: () => Promise<void>
@@ -107,6 +154,23 @@ function withIds(doc: DesignDocument): DesignDocument {
   return { ...doc, feature_tree: ensureIds(doc.feature_tree) }
 }
 
+const BLANK_TOPOLOGY: TopologyState = {
+  kind: 'edge', faces: [], edges: [], selected: [], loading: false, error: null,
+}
+
+/**
+ * Everything measured *from* the geometry, cleared the moment the geometry moves.
+ *
+ * A stale reading is worse than a missing one — a safety factor from before the
+ * wall was thinned still looks like an answer. The face and edge listings belong
+ * here too: their ids are derived from what the entities currently measure, so
+ * after an edit they name a body that no longer exists.
+ */
+const STALE = {
+  sim: null, dfm: null, dfmProcess: null, cam: null, specReport: null,
+  refs: null, topo: BLANK_TOPOLOGY,
+} as const
+
 export const useDocumentStore = create<DocumentState>((set, get) => ({
   doc: null,
   mode: 'model',
@@ -116,6 +180,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   optimizeJob: null,
   sim: null,
   dfm: null,
+  dfmProcess: null,
   cam: null,
   past: [],
   future: [],
@@ -131,6 +196,116 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     set({ sketchPick: false, sketchOpen: true, sketchEdit: null, sketchPreset: { onFace: { featureId, face } } }),
   pickSketchPlane: (plane) =>
     set({ sketchPick: false, sketchOpen: true, sketchEdit: null, sketchPreset: { plane } }),
+
+  topo: BLANK_TOPOLOGY,
+  refs: null,
+  specReport: null,
+
+  loadTopology: async (kind) => {
+    const { doc, topo } = get()
+    if (!doc) return
+    // A selection of faces means nothing to fillet_edges, so switching kind
+    // drops it rather than carrying ids across into an operation that will
+    // reject them one at a time.
+    set({ topo: { ...topo, kind, loading: true, error: null, selected: kind === topo.kind ? topo.selected : [] } })
+    try {
+      const env = kind === 'face' ? await api.listFaces(doc.id) : await api.listEdges(doc.id)
+      if (!env.ok) {
+        set({ topo: { ...get().topo, loading: false, error: env.error?.message ?? 'Unavailable' } })
+        return
+      }
+      const faces = kind === 'face' ? (env.result as { faces: FaceRef[] }).faces : get().topo.faces
+      const edges = kind === 'edge' ? (env.result as { edges: EdgeRef[] }).edges : get().topo.edges
+      // Anything that vanished from the new listing can no longer be operated on.
+      const live = new Set((kind === 'face' ? faces : edges).map((e) => e.id))
+      set({
+        topo: {
+          ...get().topo, kind, faces, edges, loading: false, error: null,
+          selected: get().topo.selected.filter((id) => live.has(id)),
+        },
+      })
+    } catch (e) {
+      set({ topo: { ...get().topo, loading: false, error: e instanceof Error ? e.message : 'Unavailable' } })
+    }
+  },
+
+  toggleTopoSelection: (id) => {
+    const { topo } = get()
+    set({
+      topo: {
+        ...topo,
+        selected: topo.selected.includes(id)
+          ? topo.selected.filter((s) => s !== id)
+          : [...topo.selected, id],
+      },
+    })
+  },
+
+  setTopoSelection: (ids) => set({ topo: { ...get().topo, selected: ids } }),
+
+  applyTopology: async (op, sizeMm) => {
+    const { doc, topo, past } = get()
+    if (!doc || topo.selected.length === 0) return
+    set({ past: [...past, doc.feature_tree].slice(-50), future: [], busy: true, error: null })
+    try {
+      const call = op === 'fillet' ? api.filletEdges : op === 'chamfer' ? api.chamferEdges : api.shellFaces
+      const env = await call(doc.id, topo.selected, sizeMm)
+      if (!env.ok) {
+        // These operations roll their edit back, so the document is unchanged
+        // and the message names the reason — a radius the geometry cannot carry.
+        set({ error: env.error?.message ?? `${op} failed` })
+        return
+      }
+      const updated = withIds(await api.getDocument(doc.id))
+      set({ doc: updated, error: updated.derived.error ?? null, ...STALE })
+      await get().loadTopology(topo.kind)
+      await get().checkReferences()
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : `${op} failed` })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  checkReferences: async () => {
+    const { doc } = get()
+    if (!doc) return
+    try {
+      const env = await api.checkReferences(doc.id)
+      // A PRECONDITION here just means the body has no exact form; there is
+      // nothing to report and nothing wrong.
+      set({ refs: env.ok ? env.result : null })
+    } catch {
+      set({ refs: null })
+    }
+  },
+
+  saveSpec: async (requirements, goal) => {
+    const { doc } = get()
+    if (!doc) return
+    set({ busy: true, error: null })
+    try {
+      const env = await api.setSpec(doc.id, requirements, goal)
+      if (!env.ok) { set({ error: env.error?.message ?? 'Could not save the spec' }); return }
+      set({ doc: { ...doc, spec: { goal, requirements } }, specReport: null })
+      await get().verifySpec()
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Could not save the spec' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  verifySpec: async () => {
+    const { doc } = get()
+    if (!doc) return
+    try {
+      const env = await api.verifyAgainstSpec(doc.id)
+      set({ specReport: env.ok ? env.result : null, error: env.ok ? null : env.error?.message ?? null })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Could not verify the spec' })
+    }
+  },
 
   setMode: (mode) => set({ mode }),
   select: (selectedFeatureId) => set({ selectedFeatureId }),
@@ -187,7 +362,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       const res = await api.runOperation(doc.id, op, args)
       if (res.document) {
         const updated = withIds(res.document)
-        set({ doc: updated, error: updated.derived.error ?? null, sim: null, dfm: null, cam: null })
+        set({ doc: updated, error: updated.derived.error ?? null, ...STALE })
       }
       return res.result
     } catch (e) {
@@ -221,7 +396,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     set({ past: [...past, doc.feature_tree].slice(-50), future: [], busy: true, error: null })
     try {
       const updated = withIds(await api.setParameters(doc.id, parameters))
-      set({ doc: updated, error: updated.derived.error ?? null, sim: null, dfm: null, cam: null })
+      set({ doc: updated, error: updated.derived.error ?? null, ...STALE })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Could not set parameters' })
     } finally {
@@ -261,7 +436,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
           doc: updated,
           selectedFeatureId: updated.feature_tree.root?.id ?? null,
           error: updated.derived.error ?? null,
-          sim: null, dfm: null, cam: null,
+          ...STALE,
         })
       }
       return res
@@ -273,13 +448,17 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }
   },
 
-  runSimulate: async () => {
+  runSimulate: async (elements) => {
     const { doc } = get()
     if (!doc) return
     set({ busy: true, error: null })
     try {
-      const sim = await api.simulateDocument(doc.id, 96)
-      set({ sim })
+      // Through the operation, not `POST /simulate`: that endpoint's response
+      // model drops `solver` and `estimate_only`, so a closed-form guess would
+      // reach the panel looking exactly like a real solve.
+      const env = await api.analyse(doc.id, elements)
+      if (!env.ok) { set({ error: env.error?.message ?? 'Simulation failed' }); return }
+      set({ sim: env.result })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Simulation failed' })
     } finally {
@@ -293,7 +472,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     set({ busy: true, error: null })
     try {
       const dfm = await api.dfmDocument(doc.id, buildAxis, 96, process)
-      set({ dfm })
+      set({ dfm, dfmProcess: process })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'DFM analysis failed' })
     } finally {
@@ -396,7 +575,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     set({ busy: true, error: null })
     try {
       const doc = withIds(await api.createDocument({ prompt, resolution: DEFAULT_RESOLUTION }))
-      set({ doc, selectedFeatureId: doc.feature_tree.root?.id ?? null, mode: 'model', sim: null, dfm: null, cam: null, past: [], future: [] })
+      set({ doc, selectedFeatureId: doc.feature_tree.root?.id ?? null, mode: 'model', ...STALE, past: [], future: [] })
       if (doc.derived.error) set({ error: doc.derived.error })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Failed to generate part' })
@@ -409,7 +588,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     set({ busy: true, error: null })
     try {
       const doc = withIds(await api.createDocumentFromImage(file, prompt))
-      set({ doc, selectedFeatureId: doc.feature_tree.root?.id ?? null, mode: 'model', sim: null, dfm: null, cam: null, past: [], future: [] })
+      set({ doc, selectedFeatureId: doc.feature_tree.root?.id ?? null, mode: 'model', ...STALE, past: [], future: [] })
       if (doc.derived.error) set({ error: doc.derived.error })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Failed to build a part from that image' })
@@ -422,7 +601,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     set({ busy: true, error: null })
     try {
       const doc = withIds(await api.createDocument({ resolution: DEFAULT_RESOLUTION }))
-      set({ doc, selectedFeatureId: doc.feature_tree.root?.id ?? null, mode: 'model', sim: null, dfm: null, cam: null, past: [], future: [] })
+      set({ doc, selectedFeatureId: doc.feature_tree.root?.id ?? null, mode: 'model', ...STALE, past: [], future: [] })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Failed to create document' })
     } finally {
@@ -434,7 +613,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     set({ busy: true, error: null })
     try {
       const doc = withIds(await api.getDocument(id))
-      set({ doc, selectedFeatureId: doc.feature_tree.root?.id ?? null, sim: null, dfm: null, cam: null, past: [], future: [] })
+      set({ doc, selectedFeatureId: doc.feature_tree.root?.id ?? null, ...STALE, past: [], future: [] })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Failed to open document' })
     } finally {
@@ -462,7 +641,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       const updated = withIds(
         await api.updateDocument(doc.id, { feature_tree: tree, resolution: DEFAULT_RESOLUTION }),
       )
-      set({ doc: updated, error: updated.derived.error ?? null, sim: null, dfm: null, cam: null })
+      set({ doc: updated, error: updated.derived.error ?? null, ...STALE })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Failed to evaluate edit' })
     } finally {
@@ -477,7 +656,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     set({ past: past.slice(0, -1), future: [...future, doc.feature_tree], busy: true, error: null, doc: { ...doc, feature_tree: prev } })
     try {
       const updated = withIds(await api.updateDocument(doc.id, { feature_tree: prev, resolution: DEFAULT_RESOLUTION }))
-      set({ doc: updated, error: updated.derived.error ?? null, sim: null, dfm: null, cam: null })
+      set({ doc: updated, error: updated.derived.error ?? null, ...STALE })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Undo failed' })
     } finally {
@@ -492,7 +671,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     set({ future: future.slice(0, -1), past: [...past, doc.feature_tree], busy: true, error: null, doc: { ...doc, feature_tree: next } })
     try {
       const updated = withIds(await api.updateDocument(doc.id, { feature_tree: next, resolution: DEFAULT_RESOLUTION }))
-      set({ doc: updated, error: updated.derived.error ?? null, sim: null, dfm: null, cam: null })
+      set({ doc: updated, error: updated.derived.error ?? null, ...STALE })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Redo failed' })
     } finally {

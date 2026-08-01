@@ -3,6 +3,7 @@ import { Wand2, Loader2, ArrowUp, Plus, Trash2, Scale } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
 import { findNode, isBoolean } from '../../util/featureTree'
 import { api } from '../../api/client'
+import { TopologyPicker } from './TopologyPicker'
 import type { CatalogMaterial, DocumentParameter, MassProperties, MaterialCategory } from '../../../../shared/types'
 
 type Vec = { x: number; y: number; z: number }
@@ -86,6 +87,7 @@ export function ModelInspector() {
       {selectedFeatureId ? <FeatureFields /> : (
         <p className="text-[11px] text-cad-text/60">Select a feature in the tree to edit its parameters.</p>
       )}
+      <TopologyPicker />
       <MaterialPicker />
       <ParametersEditor />
       <MassPropertiesPanel />

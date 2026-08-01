@@ -198,3 +198,87 @@ def test_the_rest_simulation_endpoint_still_returns_its_own_shape():
 
     assert result.max_stress > 0
     assert result.safety_factor > 0
+
+
+# ------------------------------------------- bodies with no distance field --
+
+# An edge fillet, a face shell and an imported STEP solid have no SDF form at
+# all — they are the features the exact kernel exists to provide. Until the
+# occupancy field could come from the B-rep, every one of them fell straight
+# through to the closed-form estimate: the parts most worth analysing were
+# exactly the parts that could not be.
+
+exact_only = pytest.mark.skipif(
+    not __import__("app.cad_kernel.evaluator.brep", fromlist=["brep"]).AVAILABLE,
+    reason="OCP (OpenCascade) not installed")
+
+
+def _filleted(size, radius=0.005):
+    doc_id = _doc(size)
+    edges = ops.execute("list_edges", doc_id, {"kind": "line"})["result"]["edges"]
+    height = size["z"] * 1000
+    picked = [e["id"] for e in edges if abs(e["length_mm"] - height) < .01]
+    env = ops.execute("fillet_edges", doc_id, {"edges": picked, "radius": radius})
+    assert env["ok"], env.get("error")
+    return doc_id
+
+
+@exact_only
+def test_a_filleted_part_gets_a_real_solve_not_the_estimate():
+    result = ops.dispatch("simulate", _filleted({"x": .1, "y": .06, "z": .02}), {"elements": 4000})
+
+    assert "hex8-linear-static" in result["solver"]
+    assert result.get("estimate_only") is not True
+
+
+@exact_only
+def test_the_brep_occupancy_agrees_with_the_distance_field_it_replaces():
+    """The two paths have to describe the same body, or the fallback is a lie.
+
+    Solved on a plain beam, which has both an analytic field and an exact form,
+    with the field path suppressed for the second run. They differ only where an
+    element centre lands within OCC's confusion tolerance of the surface.
+    """
+    from app.cad_kernel.evaluator import sdf as sdf_module
+
+    beam = _beam()
+    kwargs = dict(youngs_pa=_E, yield_mpa=_YIELD, density=7850.0,
+                  loads=[_Load(_P(.1, 0, 0), _P(0, 0, -500))],
+                  constraints=[_Fix(_P(-.1, 0, 0))], target_elements=4000)
+
+    analytic = fea.solve(beam, **kwargs)
+    original = sdf_module.sdf_from_feature
+    try:
+        sdf_module.sdf_from_feature = lambda f: (_ for _ in ()).throw(ValueError("no field"))
+        exact = fea.solve(beam, **kwargs)
+    finally:
+        sdf_module.sdf_from_feature = original
+
+    for key in ("mass", "max_displacement", "stress_p99", "max_stress"):
+        assert exact[key] == pytest.approx(analytic[key], rel=1e-3), key
+
+
+@exact_only
+def test_hollowing_a_part_moves_the_answer_the_way_physics_does():
+    """The point of solving these bodies at all: the shell has to change the result.
+
+    A 3 mm wall through the top face removes about seventy per cent of the
+    material, so the section is far less stiff and the stress rises several-fold.
+    The old estimate could not see the difference — `volume^(2/3)` moves the
+    wrong way, making the *lighter* part look stronger per unit load.
+    """
+    size = {"x": .1, "y": .06, "z": .03}
+    solid_id = _doc(size)
+    shell_id = _doc(size)
+    faces = ops.execute("list_faces", shell_id, {})["result"]["faces"]
+    top = max((f for f in faces if f.get("normal") == [0., 0., 1.]),
+              key=lambda f: f["center_mm"][2])
+    assert ops.execute("shell_faces", shell_id, {"faces": [top["id"]], "thickness": .003})["ok"]
+
+    solid = ops.dispatch("simulate", solid_id, {"elements": 4000})
+    shell = ops.dispatch("simulate", shell_id, {"elements": 4000})
+
+    assert shell.get("estimate_only") is not True
+    assert shell["mass"] < 0.5 * solid["mass"]
+    assert shell["stress_p99"] > 2 * solid["stress_p99"]
+    assert shell["safety_factor"] < solid["safety_factor"]

@@ -2,11 +2,16 @@ import { useEffect, useState } from 'react'
 import { Loader2, Factory, Download, Check, AlertTriangle, X, Route, FileText, GitBranch, Tag, Scissors, Grid2x2, FileCog, Layers } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
 import { api } from '../../api/client'
-import type { DfmCheck, DrawingResult, DocumentRevisionMeta, MachineSpec, NestResult, SliceResponse } from '../../../../shared/types'
+import type { DfmCheck, DfmProcess, DrawingResult, DocumentRevisionMeta, MachineSpec, NestResult, SliceResponse } from '../../../../shared/types'
 
 const LIFECYCLE_LABEL: Record<string, string> = {
   draft: 'Draft', in_review: 'In review', released: 'Released', obsolete: 'Obsolete',
 }
+
+const ALL_VIEWS = ['front', 'top', 'right', 'left', 'back', 'bottom'] as const
+type ViewName = (typeof ALL_VIEWS)[number]
+const SECTION_PLANES = ['xz', 'xy', 'yz'] as const
+const SHEETS = ['auto', 'a4', 'a3', 'a2', 'a1', 'a0'] as const
 
 function Documentation({ docId, docName }: { docId: string; docName: string }) {
   const { doc } = useDocumentStore()
@@ -15,13 +20,32 @@ function Documentation({ docId, docName }: { docId: string; docName: string }) {
   const [revs, setRevs] = useState<DocumentRevisionMeta[]>([])
   const [notes, setNotes] = useState('')
   const [err, setErr] = useState<string | null>(null)
+  // The drawing spec: every field here is a drafting decision, which is exactly
+  // why the engine takes them from the caller rather than hardcoding front/top/
+  // right and a section pinned to mid-Y. The UI used to send one boolean.
+  const [views, setViews] = useState<ViewName[]>(['front', 'top', 'right'])
+  const [section, setSection] = useState<'none' | (typeof SECTION_PLANES)[number]>('xz')
+  const [projection, setProjection] = useState<'first' | 'third'>('third')
+  const [sheet, setSheet] = useState<(typeof SHEETS)[number]>('auto')
+  const [hidden, setHidden] = useState(true)
   const state = doc?.lifecycle_state ?? 'draft'
 
   useEffect(() => { api.listRevisions(docId).then(setRevs).catch(() => {}) }, [docId])
 
+  const toggleView = (v: ViewName) =>
+    setViews((cur) => (cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v]))
+
   const gen = async () => {
     setLoading(true); setErr(null)
-    try { setDrawing(await api.drawing(docId)) }
+    try {
+      setDrawing(await api.drawingFromSpec(docId, {
+        views: views.length ? views : ['front'],
+        sections: section === 'none' ? [] : [{ plane: section, label: 'A-A' }],
+        projection,
+        sheet,
+        show_hidden: hidden,
+      }))
+    }
     catch (e) { setErr(e instanceof Error ? e.message : 'Drawing failed') }
     finally { setLoading(false) }
   }
@@ -50,6 +74,34 @@ function Documentation({ docId, docName }: { docId: string; docName: string }) {
         </span>
       </div>
 
+      <div>
+        <label className="eyebrow text-cad-text/60 block mb-1">Views</label>
+        <div className="grid grid-cols-3 gap-px rounded-sm overflow-hidden border border-cad-border">
+          {ALL_VIEWS.map((v) => (
+            <button key={v} onClick={() => toggleView(v)}
+              className={`py-1 text-[10px] capitalize transition-colors ${
+                views.includes(v) ? 'bg-cad-accent text-cad-bg' : 'bg-cad-bg text-cad-text hover:text-cad-text-heading'}`}>
+              {v}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <Choice label="Section" value={section} options={['none', ...SECTION_PLANES]}
+          onChange={(v) => setSection(v as typeof section)} />
+        <Choice label="Projection" value={projection} options={['third', 'first']}
+          onChange={(v) => setProjection(v as typeof projection)} />
+        <Choice label="Sheet" value={sheet} options={[...SHEETS]}
+          onChange={(v) => setSheet(v as typeof sheet)} />
+      </div>
+
+      <label className="flex items-center gap-1.5 text-[10px] text-cad-text cursor-pointer">
+        <input type="checkbox" checked={hidden} onChange={(e) => setHidden(e.target.checked)}
+          className="accent-[var(--color-cad-accent)]" />
+        Hidden lines
+      </label>
+
       <div className="flex gap-2">
         <button onClick={gen} disabled={loading}
           className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-sm bg-cad-accent text-cad-bg text-xs font-semibold hover:bg-cad-accent-hot transition-colors disabled:opacity-50">
@@ -64,8 +116,19 @@ function Documentation({ docId, docName }: { docId: string; docName: string }) {
       </div>
       {err && <p className="text-[10px] text-cad-danger">{err}</p>}
       {drawing && (
-        <div className="rounded-sm border border-cad-border bg-white p-1 overflow-hidden"
-          dangerouslySetInnerHTML={{ __html: drawing.svg }} />
+        <>
+          <div className="rounded-sm border border-cad-border bg-white p-1 overflow-hidden"
+            dangerouslySetInnerHTML={{ __html: drawing.svg }} />
+          <div className="tabular text-[10px] text-cad-text/60 flex flex-wrap gap-x-3">
+            <span>{drawing.drawn_views.join(', ')}</span>
+            <span>{drawing.scale_text}</span>
+            <span>{drawing.sheet_mm.width}×{drawing.sheet_mm.height} mm</span>
+            <span>{drawing.projection} angle</span>
+            {drawing.sections.map((s) => (
+              <span key={s.label}>{s.label} at {s.cut_at_mm.toFixed(1)} mm</span>
+            ))}
+          </div>
+        </>
       )}
 
       {/* lifecycle + revisions */}
@@ -105,6 +168,151 @@ function Documentation({ docId, docName }: { docId: string; docName: string }) {
 
 const STATUS_ICON = { pass: Check, warn: AlertTriangle, fail: X }
 const STATUS_TONE = { pass: 'text-cad-success', warn: 'text-cad-warning', fail: 'text-cad-danger' }
+
+const PROCESSES: Array<{ id: DfmProcess; label: string; blurb: string }> = [
+  { id: 'additive', label: 'Print', blurb: 'LPBF metal — overhang, supports, printability and a quote.' },
+  { id: 'milling', label: 'Mill', blurb: '3-axis tool access, wall thickness, smallest bore, trapped voids.' },
+  { id: 'molding', label: 'Mould', blurb: 'Draft, undercuts against the pull direction, wall thickness.' },
+  { id: 'casting', label: 'Cast', blurb: 'Draft, undercuts, wall thickness and trapped voids.' },
+]
+
+const AXES = ['auto', 'x', 'y', 'z'] as const
+
+/**
+ * Manufacturability, per process.
+ *
+ * The choice of process is not cosmetic: `additive` reports overhang, support
+ * volume and a quote, and the other three report what needs real topology —
+ * wall thickness, draft, undercuts, 3-axis tool access — measured on the exact
+ * B-rep, so those figures do not move with meshing resolution.
+ *
+ * The missing quote on the non-additive processes is deliberate and is said so
+ * in words. There is no cost model for milling, moulding or casting here, and an
+ * invented number is worse than none: it is a signal that reads as real and
+ * would be optimised against.
+ */
+function DfmSection() {
+  const { busy, dfm, dfmProcess, runDfm } = useDocumentStore()
+  const [process, setProcess] = useState<DfmProcess>('additive')
+  const [axis, setAxis] = useState<(typeof AXES)[number]>('auto')
+  const chosen = PROCESSES.find((p) => p.id === process)!
+  // Matched on what was *asked for*, not on the report's `process` field —
+  // that is a display label ('LPBF' for additive), so comparing it to the
+  // selection would never match and a milling report would read as current
+  // whichever tab you were on.
+  const current = dfm && dfmProcess === process ? dfm : null
+
+  return (
+    <div className="space-y-3">
+      <h3 className="sec-head">Manufacturability</h3>
+
+      <div className="flex gap-px rounded-sm overflow-hidden border border-cad-border">
+        {PROCESSES.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => setProcess(p.id)}
+            className={`flex-1 py-1 text-[10px] transition-colors ${
+              process === p.id ? 'bg-cad-accent text-cad-bg' : 'bg-cad-bg text-cad-text hover:text-cad-text-heading'
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <p className="text-[10px] text-cad-text/60 leading-snug">{chosen.blurb}</p>
+
+      <div className="flex items-center gap-2">
+        <label className="text-[10px] text-cad-text flex items-center gap-1">
+          {process === 'additive' ? 'build' : process === 'milling' ? 'tool' : 'pull'}
+          <select
+            value={axis}
+            onChange={(e) => setAxis(e.target.value as (typeof AXES)[number])}
+            className="px-1.5 py-1 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-[11px] outline-none focus:border-cad-accent"
+          >
+            {AXES.map((a) => <option key={a} value={a}>{a === 'auto' ? 'auto' : `+${a.toUpperCase()}`}</option>)}
+          </select>
+        </label>
+        <button
+          onClick={() => runDfm(axis, process)}
+          disabled={busy}
+          className="flex-1 flex items-center justify-center gap-2 py-2 rounded-sm bg-cad-accent text-cad-bg text-xs font-semibold hover:bg-cad-accent-hot transition-colors disabled:opacity-50"
+        >
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Factory size={14} />}
+          {busy ? 'Analyzing…' : `Check for ${chosen.label.toLowerCase()}`}
+        </button>
+      </div>
+
+      {dfm && !current && (
+        <p className="text-[10px] text-cad-text/50">
+          Showing nothing — the last report was for{' '}
+          <span className="text-cad-text">{PROCESSES.find((p) => p.id === dfmProcess)?.label.toLowerCase() ?? dfm.process}</span>.
+          Run the check again for {chosen.label.toLowerCase()}.
+        </p>
+      )}
+
+      {current && (
+        <>
+          <div className="flex items-center justify-between p-2.5 rounded-sm border border-cad-border bg-cad-bg/50">
+            <div>
+              {/* Keyed on the request, not on `current.process` — that reads
+                  'LPBF' for additive, so comparing it to 'additive' is always
+                  false and every report claimed to be about an axis. */}
+              <div className="eyebrow text-cad-text/60">
+                {dfmProcess === 'additive' ? 'Printability' : 'Manufacturability'}
+              </div>
+              <div className="tabular text-[10px] text-cad-text mt-1">
+                {current.process}
+                {current.build_orientation
+                  ? ` · ${dfmProcess === 'additive' ? 'build' : 'pull'} ${current.build_orientation}`
+                  : ''}
+              </div>
+            </div>
+            <span className="font-display text-2xl font-semibold text-cad-accent-hot">
+              {current.printability_score}
+            </span>
+          </div>
+
+          <ul className="space-y-1.5">
+            {current.checks.map((c: DfmCheck) => {
+              const Icon = STATUS_ICON[c.status]
+              return (
+                <li key={c.id} className="flex items-start gap-2 text-[11px]">
+                  <Icon size={13} className={`${STATUS_TONE[c.status]} mt-px shrink-0`} />
+                  <span className="text-cad-text-heading shrink-0">{c.label}</span>
+                  <span className="tabular text-cad-text/70 flex-1 text-right leading-snug">{c.detail}</span>
+                </li>
+              )
+            })}
+          </ul>
+
+          {current.quote ? (
+            <div className="pt-3 border-t border-cad-border">
+              <h3 className="sec-head mb-2">Quote</h3>
+              <dl className="space-y-1 text-[11px] text-cad-text">
+                <Row label="Material" value={`$${current.quote.material_cost.toFixed(2)}`} />
+                <Row label="Machine time" value={`$${current.quote.machine_cost.toFixed(2)}`} />
+                <Row label="Setup" value={`$${current.quote.setup_cost.toFixed(2)}`} />
+                <div className="flex items-center justify-between pt-1.5 mt-1 border-t border-cad-border">
+                  <dt className="text-cad-text-heading font-medium">Total</dt>
+                  <dd className="tabular text-cad-accent-hot font-semibold">${current.quote.total.toFixed(2)}</dd>
+                </div>
+                {current.quote.lead_time_days != null && (
+                  <Row label="Lead time" value={`${current.quote.lead_time_days} days`} />
+                )}
+              </dl>
+            </div>
+          ) : (
+            <p className="pt-3 border-t border-cad-border text-[10px] leading-snug text-cad-text/60">
+              <span className="text-cad-text-heading">No quote for {chosen.label.toLowerCase()}.</span>{' '}
+              There is no cost model for this process here, and a made-up figure would look exactly like
+              a real one. The checks above are measured on the exact body.
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
 
 function LaserCut({ docId, docName }: { docId: string; docName: string }) {
   const [kerf, setKerf] = useState(0.2)
@@ -261,6 +469,20 @@ function NestView({ nest }: { nest: NestResult }) {
         {nest.sheets_needed > 1 && <span>{nest.sheets_needed} sheets</span>}
       </div>
     </div>
+  )
+}
+
+function Choice({ label, value, options, onChange }: {
+  label: string; value: string; options: readonly string[]; onChange: (v: string) => void
+}) {
+  return (
+    <label className="text-[10px] text-cad-text flex flex-col gap-1">
+      <span className="eyebrow text-cad-text/60">{label}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)}
+        className="px-1.5 py-1 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading text-[11px] outline-none focus:border-cad-accent">
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </label>
   )
 }
 
@@ -424,7 +646,7 @@ function SlicerSection() {
 }
 
 export function MakePanel() {
-  const { doc, busy, dfm, cam, runDfm, runCam, exportStep, downloadGcode } = useDocumentStore()
+  const { doc, busy, cam, runCam, exportStep, downloadGcode } = useDocumentStore()
   const [diameter, setDiameter] = useState(3)
   const [stepdown, setStepdown] = useState(1)
   const [stepover, setStepover] = useState(1.2)
@@ -444,78 +666,17 @@ export function MakePanel() {
 
       <div className="pt-3 border-t border-cad-border" />
 
-      <p className="text-xs text-cad-text leading-relaxed">
-        Manufacturability checks and an instant quote for LPBF metal printing, plus a STEP export for
-        any downstream CAM. Toolpath generation lands in the CAM step.
-      </p>
+      <DfmSection />
 
-      <div className="flex gap-2">
-        <button
-          onClick={() => runDfm('auto')}
-          disabled={busy}
-          className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-sm bg-cad-accent text-cad-bg text-xs font-semibold hover:bg-cad-accent-hot transition-colors disabled:opacity-50"
-        >
-          {busy ? <Loader2 size={14} className="animate-spin" /> : <Factory size={14} />}
-          {busy ? 'Analyzing…' : 'Run DFM + quote'}
-        </button>
+      <div className="flex justify-end">
         <button
           onClick={exportStep}
           title="Export STEP"
-          className="flex items-center justify-center px-3 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void transition"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void transition text-[11px]"
         >
-          <Download size={15} />
+          <Download size={13} /> STEP
         </button>
       </div>
-
-      {dfm && (
-        <>
-          <div className="flex items-center justify-between p-2.5 rounded-sm border border-cad-border bg-cad-bg/50">
-            <div>
-              <div className="eyebrow text-cad-text/60">Printability</div>
-              <div className="tabular text-[10px] text-cad-text mt-1">
-                {dfm.process} · build {dfm.build_orientation ?? '—'}
-              </div>
-            </div>
-            <span className="font-display text-2xl font-semibold text-cad-accent-hot">
-              {dfm.printability_score}
-            </span>
-          </div>
-
-          <div>
-            <h3 className="sec-head mb-2">Checks</h3>
-            <ul className="space-y-1.5">
-              {dfm.checks.map((c: DfmCheck) => {
-                const Icon = STATUS_ICON[c.status]
-                return (
-                  <li key={c.id} className="flex items-center gap-2 text-[11px]">
-                    <Icon size={13} className={STATUS_TONE[c.status]} />
-                    <span className="text-cad-text-heading flex-1">{c.label}</span>
-                    <span className="tabular text-cad-text/70">{c.detail}</span>
-                  </li>
-                )
-              })}
-            </ul>
-          </div>
-
-          {dfm.quote && (
-            <div className="pt-3 border-t border-cad-border">
-              <h3 className="sec-head mb-2">Quote</h3>
-              <dl className="space-y-1 text-[11px] text-cad-text">
-                <Row label="Material" value={`$${dfm.quote.material_cost.toFixed(2)}`} />
-                <Row label="Machine time" value={`$${dfm.quote.machine_cost.toFixed(2)}`} />
-                <Row label="Setup" value={`$${dfm.quote.setup_cost.toFixed(2)}`} />
-                <div className="flex items-center justify-between pt-1.5 mt-1 border-t border-cad-border">
-                  <dt className="text-cad-text-heading font-medium">Total</dt>
-                  <dd className="tabular text-cad-accent-hot font-semibold">${dfm.quote.total.toFixed(2)}</dd>
-                </div>
-                {dfm.quote.lead_time_days != null && (
-                  <Row label="Lead time" value={`${dfm.quote.lead_time_days} days`} />
-                )}
-              </dl>
-            </div>
-          )}
-        </>
-      )}
 
       <JobPrep docId={doc.id} docName={doc.name} />
 

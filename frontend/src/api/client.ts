@@ -1,6 +1,13 @@
 import type {
+  AnalysisReport,
+  EdgeRef,
+  FaceRef,
   OptimizeJob,
+  PartSpec,
+  ReferenceReport,
   SimulationResult,
+  SpecReport,
+  SpecRequirement,
   DfmProcess,
   DfmReport,
   CamResult,
@@ -103,6 +110,22 @@ export interface PlanSummary {
   features: string[]
 }
 
+/** What every operation returns: did it work, why not, and what changed. */
+export interface OperationEnvelope<T = Record<string, unknown>> {
+  ok: boolean
+  op: string
+  result: T
+  /** Typed failure: MISSING_ARG | BAD_ARG | NO_SUCH_FEATURE | PRECONDITION | … */
+  error?: { code: string; message: string; arg?: string } | null
+  /** What the operation changed, including the ids added and removed. */
+  delta?: Record<string, unknown> | null
+  /** Compact document observation: features with their current params, size, mass. */
+  state?: Record<string, unknown> | null
+  /** Non-fatal conditions — EVAL_FAILED, and selections that stopped resolving. */
+  warnings?: Array<{ code: string; message: string }>
+  document?: DesignDocument
+}
+
 export const api = {
   health: () => fetchJson<{ status: string }>('/health'),
   getLlmConfig: () => fetchJson<LlmConfig>('/llm/config'),
@@ -202,21 +225,50 @@ export const api = {
   wsTicket: (id: string) =>
     fetchJson<{ ticket: string; expires_in: number }>(`/documents/${id}/ws-ticket`, { method: 'POST' }),
   /** The single mutation path shared by the UI and AI agents. */
-  runOperation: (id: string, op: string, args?: Record<string, unknown>) =>
-    fetchJson<{
-      ok: boolean
-      op: string
-      result: Record<string, unknown>
-      /** Typed failure: MISSING_ARG | BAD_ARG | NO_SUCH_FEATURE | PRECONDITION | … */
-      error?: { code: string; message: string; arg?: string } | null
-      /** What the operation changed, including the ids added and removed. */
-      delta?: Record<string, unknown> | null
-      /** Compact document observation: features with their current params, size, mass. */
-      state?: Record<string, unknown> | null
-      /** Non-fatal conditions, chiefly EVAL_FAILED. */
-      warnings?: Array<{ code: string; message: string }>
-      document?: DesignDocument
-    }>(`/documents/${id}/op`, { method: 'POST', body: JSON.stringify({ op, args: args ?? {} }) }),
+  runOperation: <T = Record<string, unknown>>(id: string, op: string, args?: Record<string, unknown>) =>
+    fetchJson<OperationEnvelope<T>>(`/documents/${id}/op`, {
+      method: 'POST',
+      body: JSON.stringify({ op, args: args ?? {} }),
+    }),
+
+  // ── Addressable topology (the exact kernel) ──
+  // These go through the operation catalog rather than bespoke endpoints,
+  // because that catalog *is* the API: the same call an agent makes.
+
+  /** Selectable faces, largest first. PRECONDITION when the body has no exact form. */
+  listFaces: (id: string) =>
+    api.runOperation<{ faces: FaceRef[]; count: number }>(id, 'list_faces'),
+  listEdges: (id: string, filter?: { kind?: 'all' | 'line' | 'circle'; min_length_mm?: number }) =>
+    api.runOperation<{ edges: EdgeRef[]; count: number }>(id, 'list_edges', filter),
+  /** `edges` accepts the string "all" in place of an id list. */
+  filletEdges: (id: string, edges: string[] | 'all', radiusMm: number) =>
+    api.runOperation<{ message: string; feature_id: string; edges: string[] }>(
+      id, 'fillet_edges', { edges, radius: radiusMm / 1000 }),
+  chamferEdges: (id: string, edges: string[] | 'all', distanceMm: number) =>
+    api.runOperation<{ message: string; feature_id: string; edges: string[] }>(
+      id, 'chamfer_edges', { edges, distance: distanceMm / 1000 }),
+  shellFaces: (id: string, faces: string[] | 'all', thicknessMm: number) =>
+    api.runOperation<{ message: string; feature_id: string; faces: string[] }>(
+      id, 'shell_faces', { faces, thickness: thicknessMm / 1000 }),
+  /** Did any stored selection stop resolving? See ReferenceReport. */
+  checkReferences: (id: string) => api.runOperation<ReferenceReport>(id, 'check_references'),
+
+  // ── Design spec (what the part is *supposed* to be) ──
+  getSpec: (id: string) => api.runOperation<PartSpec>(id, 'get_spec'),
+  setSpec: (id: string, requirements: SpecRequirement[], goal?: string) =>
+    api.runOperation<{ message: string; requirements: number }>(
+      id, 'set_spec', goal ? { requirements, goal } : { requirements }),
+  verifyAgainstSpec: (id: string) => api.runOperation<SpecReport>(id, 'verify_against_spec'),
+
+  /**
+   * The full FEA report, via the operation rather than `POST /simulate`.
+   *
+   * That endpoint's `SimulationResult` drops `solver` and `estimate_only`, so a
+   * closed-form guess arrives looking exactly like a solve. The operation
+   * returns the whole report and the panel can say which one ran.
+   */
+  analyse: (id: string, elements?: number) =>
+    api.runOperation<AnalysisReport>(id, 'simulate', elements ? { elements } : {}),
   optimizeDocument: (id: string, body: { setup?: OptimizationSetup; resolution?: number }) =>
     fetchJson<OptimizeJob>(`/documents/${id}/optimize`, { method: 'POST', body: JSON.stringify(body) }),
   getOptimizeJob: (id: string, jobId: string) =>

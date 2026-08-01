@@ -100,6 +100,28 @@ export interface SimulationResult {
   stress_field_url?: string
 }
 
+/**
+ * Everything the `simulate` operation returns — a superset of `SimulationResult`,
+ * which is what the older `POST /simulate` endpoint narrows it down to.
+ *
+ * `solver` and `estimate_only` are the fields that matter and the reason the UI
+ * calls the operation instead: the closed-form fallback is `total_force /
+ * volume^(2/3)` clamped to a range, which cannot tell a cube from a cantilever.
+ * Presented as an analysis it is worse than no analysis at all.
+ */
+export interface AnalysisReport extends SimulationResult {
+  solver: string
+  estimate_only?: boolean
+  /** Why the real solve did not run, when it did not. */
+  reason?: string
+  material?: string
+  /** The stable percentile figure — context, not the number to size a part from. */
+  stress_p99?: number
+  mesh?: { elements: number; grid: [number, number, number]; element_size_mm: number }
+  grounded_on?: string
+  notes?: string[]
+}
+
 export interface LlmConfig {
   configured: boolean
   provider: string
@@ -237,7 +259,7 @@ export interface DesignDocument {
   /** The recorded operation sequence that produced it (copilot run, replay). */
   trajectory_id?: string | null
   /** Measurable requirements the body is scored against (services/design_spec). */
-  spec?: DesignSpec | null
+  spec?: PartSpec | null
   created_at: string
   updated_at: string
   version_history: DocumentVersion[]
@@ -277,9 +299,72 @@ export interface SpecRequirement {
   count?: number
 }
 
-export interface DesignSpec {
+/**
+ * What the part is supposed to be, stored on `DesignDocument.spec`.
+ *
+ * Named `PartSpec` rather than `DesignSpec` because that name is already taken
+ * by the generative-optimization spec above, and TypeScript *merges* two
+ * interfaces of the same name rather than complaining — so declaring both left a
+ * single type demanding `name`, `design_space` and `requirements` at once, which
+ * nothing on either side of the wire ever sends.
+ */
+export interface PartSpec {
   goal?: string
   requirements: SpecRequirement[]
+}
+
+// ---------------------------------------------------------------------------
+// Addressable topology (the exact kernel). `list_faces` / `list_edges` rows.
+// ---------------------------------------------------------------------------
+
+/** A selectable face. `id` is stable across rebuilds — see cad_kernel/core/naming. */
+export interface FaceRef {
+  id: string
+  kind: 'plane' | 'cylinder' | 'cone' | 'sphere' | 'torus' | 'bspline' | 'bezier' | 'other'
+  area_mm2: number
+  center_mm: [number, number, number]
+  radius_mm?: number
+  normal?: [number, number, number]
+}
+
+export interface EdgeRef {
+  id: string
+  kind: 'line' | 'circle' | 'ellipse' | 'bspline' | 'bezier' | 'other'
+  length_mm: number
+  midpoint_mm: [number, number, number]
+  radius_mm?: number
+}
+
+/**
+ * What became of a stored selection after an upstream edit.
+ *
+ * `split` is not a failure — a cut that divides an edge leaves the reference
+ * naming both halves, and the fillet is applied to both. `deleted` and
+ * `unresolved` are: the body still builds, and is simply no longer the part that
+ * was asked for.
+ */
+export type ReferenceStatus = 'matched' | 'split' | 'deleted' | 'unresolved'
+
+export interface ReferenceRow {
+  id: string
+  status: ReferenceStatus
+  resolves_to: number
+  meaning: string
+}
+
+export interface ReferenceReport {
+  features: Array<{
+    feature_id: string | null
+    feature: string
+    operation: string
+    kind: 'face' | 'edge'
+    references: ReferenceRow[]
+  }>
+  lost: number
+  split: number
+  ok: boolean
+  error?: string
+  message: string
 }
 
 export interface SpecReport {
