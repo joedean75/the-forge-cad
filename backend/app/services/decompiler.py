@@ -145,6 +145,30 @@ _SKETCH_ARGS: Dict[str, Dict[str, Tuple[str, str]]] = {
 _CREATE_SKETCH_KEYS = ("sketch", "plane", "offset", "on_face")
 
 
+class _Emit:
+    """Accumulator for one decompilation.
+
+    Three things travel together and every emitter needs at least two of them:
+    the steps so far, which step created each sketch, and which step created each
+    *feature* — the last because a sketch placed on a face names the feature it
+    sits on, and that name is a deterministic id which only holds if the op order
+    is the same. Emission order is not the tree order, so the reference is turned
+    into a `{"$step": i}` and resolved at replay.
+    """
+
+    def __init__(self) -> None:
+        self.steps: List[dict] = []
+        self.sketches: Dict[str, int] = {}
+        self.made: Dict[str, int] = {}
+
+    def push(self, op: str, args: dict, node: Optional[dict] = None) -> int:
+        self.steps.append({"op": op, "args": args})
+        index = len(self.steps) - 1
+        if node is not None and node.get("id"):
+            self.made[node["id"]] = index
+        return index
+
+
 def decompile(tree: Dict[str, Any]) -> List[dict]:
     """The operation sequence that builds `tree`.
 
@@ -156,28 +180,51 @@ def decompile(tree: Dict[str, Any]) -> List[dict]:
     if not root:
         raise Unsupported("tree has no root")
 
-    steps: List[dict] = []
-    sketches = _emit_sketches(root, steps)
-    _emit_body(root, steps, sketches)
-    return steps
+    ctx = _Emit()
+    _emit_body(root, ctx)
+    return ctx.steps
 
 
-def _emit_sketches(root: dict, steps: List[dict]) -> Dict[str, int]:
-    """Every sketch in the tree, created up front. Returns ``{sketch id: step}``."""
+def _emit_sketch(node: dict, ctx: _Emit) -> int:
+    """`create_sketch` for one sketch, once, at the point it is first needed.
+
+    Emitted lazily rather than up front so it lands *after* whatever its
+    `on_face` names: a sketch on the top of a plate cannot be created before the
+    plate exists. Lazily also means once — a sketch two features read is one
+    `create_sketch` and two references, which is both the truth and the only way
+    the replayed tree hash-matches.
+    """
+    sketch_id = node.get("id")
+    if sketch_id in ctx.sketches:
+        return ctx.sketches[sketch_id]
+    params = node.get("params") or {}
+    if not params.get("sketch"):
+        raise Unsupported("SketchFeature with no sketch spec to re-solve", _SKETCH)
+    args = _pick(params, _CREATE_SKETCH_KEYS)
+    if node.get("name"):
+        args["name"] = node["name"]
+    on_face = args.get("on_face")
+    if isinstance(on_face, dict) and on_face.get("feature_id"):
+        host = ctx.made.get(on_face["feature_id"])
+        if host is None:
+            raise Unsupported(
+                f"sketch {sketch_id} is placed on {on_face['feature_id']}, which "
+                "nothing in this sequence has created yet", _SKETCH)
+        # Drop the stored descriptor: the body is rebuilt identically on replay,
+        # so the id it produces is the same one, and re-passing a descriptor
+        # measured against the *old* body would be the stale half of a pair.
+        args["on_face"] = {k: v for k, v in on_face.items() if k != "face_ref"}
+        args["on_face"]["feature_id"] = {"$step": host}
+    return ctx.sketches.setdefault(sketch_id, ctx.push("create_sketch", args, node))
+
+
+def _sketch_of(tree_node: dict, sketch_id: str) -> Optional[dict]:
     from app.cad_kernel.core.feature_tree import walk_nodes
 
-    out: Dict[str, int] = {}
-    for node in walk_nodes(root):
-        if node.get("type") != _SKETCH or not node.get("id"):
-            continue
-        params = node.get("params") or {}
-        if not params.get("sketch"):
-            raise Unsupported("SketchFeature with no sketch spec to re-solve", _SKETCH)
-        args = _pick(params, _CREATE_SKETCH_KEYS)
-        if node.get("name"):
-            args["name"] = node["name"]
-        out[node["id"]] = _push(steps, "create_sketch", args)
-    return out
+    for node in walk_nodes(tree_node):
+        if node.get("type") == _SKETCH and node.get("id") == sketch_id:
+            return node
+    return None
 
 
 def _body_children(node: dict) -> List[dict]:
@@ -185,15 +232,16 @@ def _body_children(node: dict) -> List[dict]:
     return [c for c in node_children(node) if c.get("type") != _SKETCH]
 
 
-def _emit_body(node: dict, steps: List[dict], sketches: Dict[str, int]) -> int:
+def _emit_body(node: dict, ctx: _Emit, root: Optional[dict] = None) -> int:
     """Emit ops building `node` as the whole body. Returns its step index."""
+    root = root if root is not None else node
     node_type = node.get("type")
 
     if node_type == _SKETCH:
         # A document that is only a sketch has no body yet — a legitimate state
         # halfway through drawing one, and `resolve_sketches` gives it the same
         # placeholder an all-suppressed tree gets.
-        return sketches[node["id"]]
+        return _emit_sketch(node, ctx)
 
     if node_type in _OPAQUE:
         raise Unsupported(
@@ -205,47 +253,52 @@ def _emit_body(node: dict, steps: List[dict], sketches: Dict[str, int]) -> int:
         if not children:
             raise Unsupported("BooleanFeature with no children", "BooleanFeature")
         operation = (node.get("params") or {}).get("operation", "union")
-        index = _emit_body(children[0], steps, sketches)          # the base body
+        index = _emit_body(children[0], ctx, root)             # the base body
         for child in children[1:]:
-            index = _emit_onto(child, operation, steps, sketches)  # combined onto it
+            index = _emit_onto(child, operation, ctx, root)     # combined onto it
+        # A sketch nobody reads still has to be created, or the replayed tree is
+        # missing a feature the original has.
+        for child in node_children(node):
+            if child.get("type") == _SKETCH:
+                _emit_sketch(child, ctx)
         return index
 
     if node_type == "MirrorFeature":
         children = _body_children(node)
         if not children:
             raise Unsupported("MirrorFeature with no children", "MirrorFeature")
-        _emit_body(children[0], steps, sketches)
+        _emit_body(children[0], ctx, root)
         params = node.get("params") or {}
-        return _push(steps, "add_mirror", _pick(params, ("plane", "offset")))
+        return ctx.push("add_mirror", _pick(params, ("plane", "offset")), node)
 
     if node_type in _TOPOLOGY_OPS:
         children = _body_children(node)
         if not children:
             raise Unsupported(f"{node_type} with no children", node_type)
-        _emit_body(children[0], steps, sketches)
+        _emit_body(children[0], ctx, root)
         op_name, args = _topology_args(node)
-        return _push(steps, op_name, args)
+        return ctx.push(op_name, args, node)
 
     if node_type in _BLENDS:
         passthrough = _blend_passthrough(node)
         if passthrough is None:
             raise Unsupported(
                 f"{node_type} blends two bodies; no operation builds that", node_type)
-        return _emit_body(passthrough, steps, sketches)
+        return _emit_body(passthrough, ctx, root)
 
     if node_type in _MODIFIERS:
         children = _body_children(node)
         if not children:
             raise Unsupported(f"{node_type} with no children", node_type)
-        _emit_body(children[0], steps, sketches)
+        _emit_body(children[0], ctx, root)
         # No target: wrapping the whole body, which is add_modifier's default.
-        return _push(steps, "add_modifier", _modifier_args(node))
+        return ctx.push("add_modifier", _modifier_args(node), node)
 
-    return _emit_leaf(node, "union", steps, sketches)
+    return _emit_leaf(node, "union", ctx, root)
 
 
-def _emit_onto(node: dict, operation: str, steps: List[dict],
-               sketches: Dict[str, int], target: Optional[dict] = None) -> int:
+def _emit_onto(node: dict, operation: str, ctx: _Emit, root: dict,
+               target: Optional[dict] = None) -> int:
     """Emit ops adding `node` with `operation` — onto the body, or onto `target`.
 
     ``target`` is a ``{"$step": i}`` / ``{"$group": i}`` reference, resolved at
@@ -263,7 +316,7 @@ def _emit_onto(node: dict, operation: str, steps: List[dict],
         if passthrough is None:
             raise Unsupported(
                 f"{node_type} blends two bodies; no operation builds that", node_type)
-        return _emit_onto(passthrough, operation, steps, sketches, target)
+        return _emit_onto(passthrough, operation, ctx, root, target)
 
     if node_type in _MODIFIERS or node_type == "MirrorFeature":
         # A modifier sitting under a boolean was applied to that one feature, not
@@ -271,14 +324,14 @@ def _emit_onto(node: dict, operation: str, steps: List[dict],
         children = _body_children(node)
         if not children:
             raise Unsupported(f"{node_type} with no children", node_type)
-        inner = _emit_onto(children[0], operation, steps, sketches, target)
+        inner = _emit_onto(children[0], operation, ctx, root, target)
         if node_type == "MirrorFeature":
             args = _pick(node.get("params") or {}, ("plane", "offset"))
             args["target"] = {"$step": inner}
-            return _push(steps, "add_mirror", args)
+            return ctx.push("add_mirror", args, node)
         args = _modifier_args(node)
         args["target"] = {"$step": inner}
-        return _push(steps, "add_modifier", args)
+        return ctx.push("add_modifier", args, node)
 
     if node_type == "BooleanFeature":
         # `union(plate, subtract(boss, bore))` — a hole through a boss that must
@@ -291,7 +344,7 @@ def _emit_onto(node: dict, operation: str, steps: List[dict],
         if not children:
             raise Unsupported("BooleanFeature with no children", "BooleanFeature")
         inner = (node.get("params") or {}).get("operation", "union")
-        base = _emit_onto(children[0], operation, steps, sketches, target)
+        base = _emit_onto(children[0], operation, ctx, root, target)
 
         # The second child targets the first *feature*, which wraps the two in a
         # new boolean. Every child after that targets the boolean itself — hence
@@ -300,14 +353,17 @@ def _emit_onto(node: dict, operation: str, steps: List[dict],
         # tree, and the tree is what gets compared.
         reference: dict = {"$step": base}
         for child in children[1:]:
-            reference = {"$group": _emit_onto(child, inner, steps, sketches, reference)}
+            reference = {"$group": _emit_onto(child, inner, ctx, root, reference)}
+        for child in node_children(node):
+            if child.get("type") == _SKETCH:
+                _emit_sketch(child, ctx)
         return base
 
-    return _emit_leaf(node, operation, steps, sketches, target)
+    return _emit_leaf(node, operation, ctx, root, target)
 
 
-def _emit_leaf(node: dict, operation: str, steps: List[dict],
-               sketches: Dict[str, int], target: Optional[dict] = None) -> int:
+def _emit_leaf(node: dict, operation: str, ctx: _Emit, root: dict,
+               target: Optional[dict] = None) -> int:
     node_type = node.get("type")
     params = node.get("params") or {}
 
@@ -318,7 +374,7 @@ def _emit_leaf(node: dict, operation: str, steps: List[dict],
             args["operation"] = operation
         if target is not None:
             args["target"] = target
-        return _push(steps, "add_primitive", args)
+        return ctx.push("add_primitive", args, node)
 
     if node_type in _BUILDERS:
         op_name, keys = _BUILDERS[node_type]
@@ -327,17 +383,18 @@ def _emit_leaf(node: dict, operation: str, steps: List[dict],
             sketch_id = params.get(ref_key)
             if sketch_id is None:
                 continue
-            if sketch_id not in sketches:
+            sketch = _sketch_of(root, sketch_id)
+            if sketch is None:
                 raise Unsupported(
                     f"{node_type} reads sketch {sketch_id!r}, which is not in this tree",
                     node_type)
             args.pop(profile_key, None)
-            args[arg_key] = {"$step": sketches[sketch_id]}
+            args[arg_key] = {"$step": _emit_sketch(sketch, ctx)}
         if operation != "union":
             args["operation"] = operation
         if target is not None:
             args["target"] = target
-        return _push(steps, op_name, args)
+        return ctx.push(op_name, args, node)
 
     raise Unsupported(f"no operation builds {node_type}", node_type)
 
@@ -359,11 +416,6 @@ def _modifier_args(node: dict) -> dict:
     return {"modifier": modifier, "params": _pick(node.get("params") or {}, keys)}
 
 
-def _push(steps: List[dict], op: str, args: dict) -> int:
-    steps.append({"op": op, "args": args})
-    return len(steps) - 1
-
-
 # ------------------------------------------------------------------ replay --
 
 def resolve_refs(args: dict, created: List[Optional[str]],
@@ -375,22 +427,25 @@ def resolve_refs(args: dict, created: List[Optional[str]],
     third body joining an existing group has to target the group, while a
     modifier acting on one body has to target the body.
     """
-    out = {}
-    for key, value in (args or {}).items():
-        if isinstance(value, dict) and "$step" in value:
+    def substitute(value):
+        if not isinstance(value, dict):
+            return value
+        if "$step" in value:
             resolved = created[value["$step"]]
             if resolved is None:
                 raise Unsupported(f"step {value['$step']} created no feature to target")
-            out[key] = resolved
-        elif isinstance(value, dict) and "$group" in value:
+            return resolved
+        if "$group" in value:
             index = value["$group"]
             resolved = (groups or [])[index] if groups and index < len(groups) else None
             if resolved is None:
                 raise Unsupported(f"step {index} created no group to target")
-            out[key] = resolved
-        else:
-            out[key] = value
-    return out
+            return resolved
+        # Nested: `on_face.feature_id` names a feature an earlier step created,
+        # and a sketch is not always emitted after that step in tree order.
+        return {k: substitute(v) for k, v in value.items()}
+
+    return {key: substitute(value) for key, value in (args or {}).items()}
 
 
 def replay(steps: List[dict], doc_id: str) -> List[dict]:

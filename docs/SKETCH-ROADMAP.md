@@ -321,9 +321,16 @@ Three differences from the plan:
   feature is also what keeps a sketch's own extrusion out of the datum it sits
   on.
 
-The decompiler emits sketches up front, once each, with consumers referencing
-the step, so a shared sketch survives into the corpus as one `create_sketch` and
-two references.
+The decompiler emits each sketch once, at the point it is first needed, with
+consumers referencing the step. "Up front" was the obvious reading of the plan
+and was wrong: a sketch placed on the top face of a plate cannot be created
+before the plate exists, and `corpus_report` caught it — one document in seven,
+`replay failed at create_sketch: 'referenced feature f2 not found'`. Emission
+order is not tree order, so `on_face.feature_id` is emitted as a `{"$step": i}`
+too, and `resolve_refs` reaches one level into a nested dict to substitute it.
+A sketch-heavy corpus of seven documents — plain box, sketch extrude, arc
+extrude, shared sketch, sketch on a named face, filleted box, unread sketch —
+recovers at **100%**.
 
 On the canvas: a status/DOF chip in the header, the eight new constraints as
 buttons, dimensions drawn *on* the sketch with click-to-edit figures,

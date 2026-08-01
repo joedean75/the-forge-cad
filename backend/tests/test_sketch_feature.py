@@ -268,6 +268,34 @@ def test_a_shared_sketch_decompiles_to_one_create_and_two_references():
     assert "profile" not in steps[1]["args"], "the sketch supplies it"
 
 
+@exact_only
+def test_a_sketch_on_a_face_is_created_after_the_face_exists():
+    """Emitted up front, `create_sketch` referenced a plate the replay had not
+    built yet — the reason sketches are emitted at first use rather than first."""
+    doc_id, box_id, sketch_id, _ = _plate_with_sketch_on_top()
+    ops.execute("add_extrude", doc_id, {"sketch": sketch_id, "depth": 0.01})
+
+    steps = decompiler.decompile(docs.get_document(doc_id).feature_tree)
+    assert [s["op"] for s in steps] == ["add_primitive", "create_sketch", "add_extrude"]
+    # The plate's id depends on the emission order, so the reference is a step.
+    assert steps[1]["args"]["on_face"]["feature_id"] == {"$step": 0}
+    assert "face_ref" not in steps[1]["args"]["on_face"], "stale against the new body"
+
+    result = decompiler.decompile_document(doc_id, record=False)
+    assert result["ok"], f"{result.get('cause')}: {result.get('reason')}"
+
+
+def test_a_sketch_nobody_reads_is_still_created_on_replay():
+    """Otherwise the replayed tree is missing a feature the original has."""
+    doc_id = _doc()
+    ops.execute("add_primitive", doc_id, {"shape": "box"})
+    ops.execute("create_sketch", doc_id, {"sketch": CIRCLE})
+
+    steps = decompiler.decompile(docs.get_document(doc_id).feature_tree)
+    assert [s["op"] for s in steps] == ["add_primitive", "create_sketch"]
+    assert decompiler.decompile_document(doc_id, record=False)["ok"]
+
+
 @pytest.mark.parametrize("build", [
     lambda d: (ops.execute("add_extrude", d, {"sketch": _sid(d, CIRCLE), "depth": 0.01}),),
     lambda d: (ops.execute("add_revolve", d, {"sketch": _sid(d, RING_PROFILE), "axis": "z"}),),
