@@ -464,9 +464,51 @@ def _resolve_on_face(tree, args, params):
         pass  # fall back to explicit plane/offset already in params
 
 
+_SKETCH_ARG = {
+    "type": "object", "required": True,
+    "description": "{points, lines, arcs, circles, constraints}. Constraints: fixed, "
+                   "coincident, horizontal, vertical, distance, parallel, perpendicular, "
+                   "equal_length, radius, point_on_line, arc_radius, tangent, concentric, "
+                   "symmetric, angle, midpoint, equal_radius, point_on_circle",
+}
+
+
+def _solved_sketch(spec: dict) -> dict:
+    """Solve, and refuse only the one state that is genuinely broken.
+
+    `under_constrained` is the normal state of a sketch someone is still drawing,
+    and `over_constrained` is consistent — refusing either would make the canvas
+    unusable. `conflicting` means the constraints cannot all hold, so whatever
+    body came out would be a quietly wrong one; that is a typed failure naming
+    the constraints that are fighting.
+    """
+    from app.services import sketch_solver
+
+    solved = sketch_solver.solve_sketch(spec)
+    if solved["status"] == "conflicting":
+        raise BadArgument(solved["message"], arg="sketch")
+    return solved
+
+
+def _sketch_result(solved: dict) -> dict:
+    """The solver facts an operation reports back.
+
+    `converged`/`residual` are kept because callers read them, but they are not
+    the answer on their own — an unconstrained sketch converges trivially.
+    """
+    return {"converged": solved["converged"], "residual": solved["residual"],
+            "status": solved["status"], "dof": solved["dof"],
+            "redundant": solved["redundant"],
+            "redundant_groups": solved["redundant_groups"],
+            "solver_message": solved["message"]}
+
+
 @operation("add_sketch", "mutate", "Solve a constrained 2D sketch (points/lines/arcs/circles + constraints) and extrude the profile. "
+           "Arcs and circles reach the kernel as curves, so a sketched bore is a real cylindrical face. "
+           "Reports status (well_constrained|under_constrained|over_constrained) and remaining dof; "
+           "constraints that cannot all hold are refused as BAD_ARG naming them. "
            "Pass on_face to place the sketch on another feature's face so it follows that feature through edits.",
-           {"sketch": {"type": "object", "required": True, "description": "{points, lines, arcs, circles, constraints}"},
+           {"sketch": _SKETCH_ARG,
            "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
            "depth": {"type": "number"}, "offset": {"type": "number"},
            "on_face": {"type": "object",
@@ -478,7 +520,7 @@ def _add_sketch(doc_id, args):
 
     doc = _get(doc_id)
     spec = require(args, "sketch")
-    solved = sketch_solver.solve_sketch(spec)
+    solved = _solved_sketch(spec)
     # Loops of typed curves, not a ring of points: an arc that reaches the kernel
     # as an arc becomes a cylindrical face, which is what makes a sketched bore
     # visible to the hole spec, DFM and edge selection.
@@ -496,12 +538,12 @@ def _add_sketch(doc_id, args):
                                      target_id=args.get("target"))
     document_service.update_document(doc_id, feature_tree=tree)
     return {"message": "added sketch extrude", "feature_id": node["id"],
-            "converged": solved["converged"], "residual": solved["residual"]}
+            **_sketch_result(solved)}
 
 
 @operation("update_sketch", "mutate", "Re-solve an existing sketch extrude with an edited sketch spec (and optional plane/offset/depth/on_face).",
            {"feature_id": {"type": "string", "required": True},
-           "sketch": {"type": "object", "required": True},
+           "sketch": _SKETCH_ARG,
            "plane": {"enum": ["xy", "xz", "yz"]}, "depth": {"type": "number"}, "offset": {"type": "number"},
            "on_face": {"type": "object", "description": "{feature_id, face} — see add_sketch"}})
 def _update_sketch(doc_id, args):
@@ -513,7 +555,7 @@ def _update_sketch(doc_id, args):
     if node is None or node.get("type") != "ExtrudeFeature":
         raise NoSuchFeature(f"no ExtrudeFeature {fid!r}", arg="feature_id")
     spec = require(args, "sketch")
-    solved = sketch_solver.solve_sketch(spec)
+    solved = _solved_sketch(spec)
     params = {"profile": sketch_solver.sketch_to_loops(spec, solved), "sketch": spec}
     for key in ("plane", "offset", "depth"):
         if key in args:
@@ -521,7 +563,34 @@ def _update_sketch(doc_id, args):
     _resolve_on_face(doc.feature_tree, args, params)
     tree = feature_ops.set_params(doc.feature_tree, fid, params)
     document_service.update_document(doc_id, feature_tree=tree)
-    return {"message": "updated sketch", "converged": solved["converged"], "residual": solved["residual"]}
+    return {"message": "updated sketch", **_sketch_result(solved)}
+
+
+@operation("check_sketch", "query", "Re-solve a sketch and report what it establishes — status, remaining "
+           "degrees of freedom, conflicting or redundant constraints — without changing anything. "
+           "Pass feature_id to check the sketch stored on a feature, or sketch to check one you have not saved.",
+           {"feature_id": {"type": "string", "description": "a feature carrying a sketch (add_sketch made it)"},
+           "sketch": {"type": "object", "description": "an unsaved sketch spec, in place of feature_id"}})
+def _check_sketch(doc_id, args):
+    from app.services import sketch_solver
+
+    spec = args.get("sketch")
+    if spec is None:
+        fid = require(args, "feature_id")
+        node = feature_ops.find_node(_get(doc_id).feature_tree, fid)
+        if node is None:
+            raise NoSuchFeature(f"no feature {fid!r}", arg="feature_id")
+        spec = (node.get("params") or {}).get("sketch")
+        if not spec:
+            raise PreconditionFailed(
+                f"feature {fid!r} carries no sketch — only features made by add_sketch do",
+                arg="feature_id")
+    solved = sketch_solver.solve_sketch(spec)
+    return {"points": solved["points"], "radii": solved["radii"],
+            "conflicts": solved["conflicts"],
+            "rank": solved["rank"], "variables": solved["variables"],
+            "equations": solved["equations"],
+            **_sketch_result(solved)}
 
 
 @operation("add_modifier", "mutate", "Apply a modifier: fillet/chamfer/shell/hole/pattern/transform. By default it wraps the "
