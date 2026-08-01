@@ -101,11 +101,32 @@ def set_params(tree: Dict[str, Any], node_id: str, params: Dict[str, Any]) -> Di
     return t
 
 
-def add_primitive(tree: Dict[str, Any], primitive: Dict[str, Any], operation: str = "union") -> Dict[str, Any]:
+def add_primitive(tree: Dict[str, Any], primitive: Dict[str, Any], operation: str = "union",
+                  target_id: str | None = None) -> Dict[str, Any]:
+    """Combine a new body with the part — the whole of it, or one feature of it.
+
+    Without ``target_id`` the primitive joins the root, which is the ordinary
+    "add a boss" / "cut a hole" edit. With it, the primitive is combined with
+    *that feature alone*, in place — the same "act on one feature rather than the
+    body" idiom `add_modifier` already has.
+
+    That is not a convenience. ``union(plate, subtract(boss, bore))`` — a boss
+    with a hole through it, where the hole must not also cut the plate — cannot
+    be expressed by appending to the root at all, and it is a shape whole-tree
+    generation produces routinely. Until this existed those documents were
+    unrecoverable by `decompiler`, and an agent could not build one.
+    """
     t = copy.deepcopy(tree)
     root = t["root"]
     ids = IdAllocator(t)
     ids.ensure(primitive)
+
+    if target_id is not None and target_id != root.get("id"):
+        if find_node(t, target_id) is None:
+            raise KeyError(f"feature {target_id} not found")
+        _combine_with(t["root"], primitive, operation, target_id, ids)
+        return t
+
     # First real feature on a blank doc replaces the placeholder base (a subtract
     # still needs stock, so it falls through and cuts the placeholder instead).
     if root.get("placeholder") and operation != "subtract":
@@ -121,6 +142,43 @@ def add_primitive(tree: Dict[str, Any], primitive: Dict[str, Any], operation: st
         "params": {"operation": operation, "children": [root, primitive]},
     }
     return t
+
+
+def _combine_with(node: Dict[str, Any], primitive: Dict[str, Any], operation: str,
+                  target_id: str, ids: "IdAllocator") -> bool:
+    """Wrap the target in a boolean with ``primitive``, in place. True if found.
+
+    Appending to a target that is *already* a boolean of the same operation
+    mirrors what the root path does, and is what makes a third and fourth child
+    land in one group rather than in a right-leaning chain of nested pairs — two
+    shapes that evaluate the same but decompile and read differently.
+    """
+    kids = children_of(node)
+    for i, child in enumerate(kids):
+        if child.get("id") == target_id:
+            if (child.get("type") == "BooleanFeature"
+                    and (child.get("params") or {}).get("operation") == operation):
+                child["params"].setdefault("children", []).append(primitive)
+            else:
+                kids[i] = {
+                    "type": "BooleanFeature",
+                    "id": ids.alloc(),
+                    "name": operation.capitalize(),
+                    "params": {"operation": operation, "children": [child, primitive]},
+                }
+            node["params"]["children"] = kids
+            return True
+        if _combine_with(child, primitive, operation, target_id, ids):
+            return True
+    return False
+
+
+def parent_of(tree: Dict[str, Any], node_id: str) -> Optional[Dict[str, Any]]:
+    """The node whose children contain ``node_id``, or None for the root."""
+    for node in walk_nodes(tree):
+        if any(c.get("id") == node_id for c in children_of(node)):
+            return node
+    return None
 
 
 def add_modifier(tree: Dict[str, Any], modifier: Dict[str, Any],

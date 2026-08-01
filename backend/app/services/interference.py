@@ -46,12 +46,18 @@ def _surface_samples(mesh) -> np.ndarray:
 
 
 class _Placed:
-    """A component's SDF + world-space surface samples + placement frame."""
+    """A component's SDF + world-space surface samples + placement frame.
+
+    ``shape`` is the same body as exact OpenCascade geometry, when there is one.
+    That is what turns "these parts clash" into "these parts clash by 0.4 mm³" —
+    see `_overlap_volume`.
+    """
 
     def __init__(self, comp):
         doc = document_service.get_document(comp.part_id)
         active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
-        self.sdf = sdf_from_feature(FeatureTree.from_dict(active).root)
+        root = FeatureTree.from_dict(active).root
+        self.sdf = sdf_from_feature(root)
 
         from app.cad_kernel.kernel import Kernel
         mesh = Kernel.tessellate(document_service.get_solid(comp.part_id))
@@ -70,11 +76,67 @@ class _Placed:
         self.aabb_min = self.world_verts.min(axis=0)
         self.aabb_max = self.world_verts.max(axis=0)
         self.name = comp.name
+        self.shape = _world_shape(root, self.R, self.scale, self.t)
 
     def signed_distance_at(self, world_pts: np.ndarray) -> np.ndarray:
         """Signed distance (world units) from this part's surface to given points."""
         local = ((self.R.T @ (world_pts - self.t).T).T) / self.scale
         return self.sdf(local) * self.scale
+
+
+def _world_shape(root, rotation: np.ndarray, scale: float, translation: np.ndarray):
+    """The part as an exact solid, placed in world coordinates, or None.
+
+    The same scale-then-rotate-then-translate order the sampled path uses, so the
+    two descriptions of a component cannot end up in different places.
+    """
+    from app.cad_kernel.evaluator import brep
+
+    if not brep.AVAILABLE:
+        return None
+    shape = brep.brep_from_feature(root)
+    if shape is None:
+        return None
+    try:
+        from OCP.gp import gp_Pnt, gp_Trsf, gp_Vec
+
+        sizing = gp_Trsf()
+        sizing.SetScale(gp_Pnt(0.0, 0.0, 0.0), max(scale, 1e-9))
+        turning = gp_Trsf()
+        turning.SetValues(*(float(v) for row in range(3)
+                            for v in (*rotation[row], 0.0)))
+        moving = gp_Trsf()
+        moving.SetTranslation(gp_Vec(*(float(v) for v in translation)))
+        return brep._transformed(shape, moving.Multiplied(turning.Multiplied(sizing)))
+    except Exception:  # noqa: BLE001 — OCC raises many types; the sampler still works
+        return None
+
+
+def _overlap_volume(a: "_Placed", b: "_Placed") -> Optional[float]:
+    """The volume two placed solids actually share, in m³, or None.
+
+    The sampled check answers *whether* two parts collide and by how deep at the
+    worst sampled point. It cannot answer how much material is in the way, which
+    is the question that decides whether a clash is a 0.4 mm³ nick to be relieved
+    or half a boss in the wrong place. `BRepAlgoAPI_Common` answers it exactly.
+
+    Returns None rather than 0.0 when either body has no exact form, because
+    "they do not overlap" and "I could not compute an overlap" are different
+    answers and the caller reports them differently.
+    """
+    if a.shape is None or b.shape is None:
+        return None
+    try:
+        from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
+
+        from app.cad_kernel.evaluator import brep
+
+        builder = BRepAlgoAPI_Common(a.shape, b.shape)
+        if not builder.IsDone():
+            return None
+        return float(brep.volume(builder.Shape()))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _aabb_gap(a: _Placed, b: _Placed) -> float:
@@ -116,13 +178,25 @@ def check_assembly(asm_id: str, clearance_mm: float = 1.0) -> Dict:
                 warnings += 1
             else:
                 continue
-            pairs.append({
+            row = {
                 "a": a.name, "b": b.name, "status": status,
                 "gap_mm": round(gap * MM, 3),
                 "penetration_mm": round(-gap * MM, 3) if gap < 0 else 0.0,
-            })
+            }
+            if status == "interference":
+                # How much material is actually in the way. Only asked of a real
+                # clash: `Common` on two parts that merely sit close is an OCC
+                # boolean returning nothing, which is a lot of work for a zero.
+                shared = _overlap_volume(a, b)
+                row["overlap_mm3"] = (round(shared * MM ** 3, 4) if shared is not None
+                                      else None)
+                if shared is None:
+                    row["overlap_note"] = ("one of these bodies has no exact form, so the "
+                                           "clash is measured by surface sampling only")
+            pairs.append(row)
 
     pairs.sort(key=lambda p: p["gap_mm"])
+    measured = [p["overlap_mm3"] for p in pairs if p.get("overlap_mm3") is not None]
     return {
         "assembly_id": asm_id,
         "components_checked": len(placed),
@@ -130,5 +204,6 @@ def check_assembly(asm_id: str, clearance_mm: float = 1.0) -> Dict:
         "clearance_warnings": warnings,
         "clearance_threshold_mm": clearance_mm,
         "pairs": pairs,
+        "overlap_mm3": round(sum(measured), 4) if measured else None,
         "clear": interferences == 0 and warnings == 0,
     }

@@ -76,8 +76,15 @@ _TOPOLOGY_OPS = {
     "FaceShellFeature": ("shell_faces", "faces", "thickness"),
 }
 
-# Bodies whose geometry lives in a cached voxel grid, not in parameters.
-_OPAQUE = {"ImportFeature", "OptimizeFeature"}
+# Bodies whose geometry is carried as data rather than parameters, so no
+# sequence of operations reconstructs them: a voxel grid for the first two, a
+# serialized OCC payload for the third. The import operations that produce them
+# take a *file*, which is not something a replay has.
+_OPAQUE = {
+    "ImportFeature": "a cached voxel grid",
+    "OptimizeFeature": "a cached voxel grid",
+    "BrepBodyFeature": "a serialized B-rep payload",
+}
 
 # Smooth booleans between bodies. With one child they are inert — a smooth union
 # of a single body is that body, which is exactly what the evaluator's
@@ -93,7 +100,17 @@ def _blend_passthrough(node: dict) -> Optional[dict]:
 
 
 class Unsupported(Exception):
-    """This tree cannot be expressed as a sequence of catalog operations."""
+    """This tree cannot be expressed as a sequence of catalog operations.
+
+    ``feature`` names the type that could not be emitted, when one is to blame.
+    Aggregated across a corpus that is the difference between "8% of our
+    documents are unrecoverable" and "fix `OptimizeFeature` first" — see
+    `corpus_report`.
+    """
+
+    def __init__(self, message: str, feature: Optional[str] = None):
+        super().__init__(message)
+        self.feature = feature
 
 
 def _pick(params: Optional[dict], keys: Tuple[str, ...]) -> dict:
@@ -127,12 +144,14 @@ def _emit_body(node: dict, steps: List[dict]) -> int:
     node_type = node.get("type")
 
     if node_type in _OPAQUE:
-        raise Unsupported(f"{node_type} holds a cached voxel grid no operation can rebuild")
+        raise Unsupported(
+            f"{node_type} carries {_OPAQUE[node_type]}, which no operation can rebuild "
+            f"— it was imported or solved, not modelled", node_type)
 
     if node_type == "BooleanFeature":
         children = node_children(node)
         if not children:
-            raise Unsupported("BooleanFeature with no children")
+            raise Unsupported("BooleanFeature with no children", "BooleanFeature")
         operation = (node.get("params") or {}).get("operation", "union")
         index = _emit_body(children[0], steps)          # the base body
         for child in children[1:]:
@@ -142,7 +161,7 @@ def _emit_body(node: dict, steps: List[dict]) -> int:
     if node_type == "MirrorFeature":
         children = node_children(node)
         if not children:
-            raise Unsupported("MirrorFeature with no children")
+            raise Unsupported("MirrorFeature with no children", "MirrorFeature")
         _emit_body(children[0], steps)
         params = node.get("params") or {}
         return _push(steps, "add_mirror", _pick(params, ("plane", "offset")))
@@ -150,7 +169,7 @@ def _emit_body(node: dict, steps: List[dict]) -> int:
     if node_type in _TOPOLOGY_OPS:
         children = node_children(node)
         if not children:
-            raise Unsupported(f"{node_type} with no children")
+            raise Unsupported(f"{node_type} with no children", node_type)
         _emit_body(children[0], steps)
         op_name, args = _topology_args(node)
         return _push(steps, op_name, args)
@@ -159,13 +178,13 @@ def _emit_body(node: dict, steps: List[dict]) -> int:
         passthrough = _blend_passthrough(node)
         if passthrough is None:
             raise Unsupported(
-                f"{node_type} blends two bodies; no operation builds that")
+                f"{node_type} blends two bodies; no operation builds that", node_type)
         return _emit_body(passthrough, steps)
 
     if node_type in _MODIFIERS:
         children = node_children(node)
         if not children:
-            raise Unsupported(f"{node_type} with no children")
+            raise Unsupported(f"{node_type} with no children", node_type)
         _emit_body(children[0], steps)
         # No target: wrapping the whole body, which is add_modifier's default.
         return _push(steps, "add_modifier", _modifier_args(node))
@@ -173,27 +192,34 @@ def _emit_body(node: dict, steps: List[dict]) -> int:
     return _emit_leaf(node, "union", steps)
 
 
-def _emit_onto(node: dict, operation: str, steps: List[dict]) -> int:
-    """Emit ops adding `node` onto the existing body with `operation`."""
+def _emit_onto(node: dict, operation: str, steps: List[dict],
+               target: Optional[dict] = None) -> int:
+    """Emit ops adding `node` with `operation` — onto the body, or onto `target`.
+
+    ``target`` is a ``{"$step": i}`` / ``{"$group": i}`` reference, resolved at
+    replay time because the id a feature gets is only known once it is created.
+    """
     node_type = node.get("type")
 
     if node_type in _OPAQUE:
-        raise Unsupported(f"{node_type} holds a cached voxel grid no operation can rebuild")
+        raise Unsupported(
+            f"{node_type} carries {_OPAQUE[node_type]}, which no operation can rebuild "
+            f"— it was imported or solved, not modelled", node_type)
 
     if node_type in _BLENDS:
         passthrough = _blend_passthrough(node)
         if passthrough is None:
             raise Unsupported(
-                f"{node_type} blends two bodies; no operation builds that")
-        return _emit_onto(passthrough, operation, steps)
+                f"{node_type} blends two bodies; no operation builds that", node_type)
+        return _emit_onto(passthrough, operation, steps, target)
 
     if node_type in _MODIFIERS or node_type == "MirrorFeature":
         # A modifier sitting under a boolean was applied to that one feature, not
         # to the whole body — so it replays as a targeted add_modifier.
         children = node_children(node)
         if not children:
-            raise Unsupported(f"{node_type} with no children")
-        inner = _emit_onto(children[0], operation, steps)
+            raise Unsupported(f"{node_type} with no children", node_type)
+        inner = _emit_onto(children[0], operation, steps, target)
         if node_type == "MirrorFeature":
             args = _pick(node.get("params") or {}, ("plane", "offset"))
             args["target"] = {"$step": inner}
@@ -203,15 +229,33 @@ def _emit_onto(node: dict, operation: str, steps: List[dict]) -> int:
         return _push(steps, "add_modifier", args)
 
     if node_type == "BooleanFeature":
-        # add_primitive appends one feature at a time, so a whole nested boolean
-        # cannot be attached in a single call. Trees built through the operation
-        # API never take this shape; hand-authored and LLM trees occasionally do.
-        raise Unsupported("a nested BooleanFeature cannot be added in one operation")
+        # `union(plate, subtract(boss, bore))` — a hole through a boss that must
+        # not cut the plate under it. The first child joins the body with the
+        # *outer* operation; the rest are then combined with that child alone,
+        # using the inner one. That needs `target`, which is why the builders
+        # grew it: without it this whole shape was unrecoverable, and it is one
+        # whole-tree generation produces routinely.
+        children = node_children(node)
+        if not children:
+            raise Unsupported("BooleanFeature with no children", "BooleanFeature")
+        inner = (node.get("params") or {}).get("operation", "union")
+        base = _emit_onto(children[0], operation, steps, target)
 
-    return _emit_leaf(node, operation, steps)
+        # The second child targets the first *feature*, which wraps the two in a
+        # new boolean. Every child after that targets the boolean itself — hence
+        # `$group` — so a third and fourth join that group instead of nesting a
+        # fresh pair around the previous one. Same body either way; different
+        # tree, and the tree is what gets compared.
+        reference: dict = {"$step": base}
+        for child in children[1:]:
+            reference = {"$group": _emit_onto(child, inner, steps, reference)}
+        return base
+
+    return _emit_leaf(node, operation, steps, target)
 
 
-def _emit_leaf(node: dict, operation: str, steps: List[dict]) -> int:
+def _emit_leaf(node: dict, operation: str, steps: List[dict],
+               target: Optional[dict] = None) -> int:
     node_type = node.get("type")
     params = node.get("params") or {}
 
@@ -220,6 +264,8 @@ def _emit_leaf(node: dict, operation: str, steps: List[dict]) -> int:
         args: Dict[str, Any] = {"shape": shape, "params": _pick(params, keys)}
         if operation != "union":
             args["operation"] = operation
+        if target is not None:
+            args["target"] = target
         return _push(steps, "add_primitive", args)
 
     if node_type in _BUILDERS:
@@ -227,9 +273,11 @@ def _emit_leaf(node: dict, operation: str, steps: List[dict]) -> int:
         args = _pick(params, keys)
         if operation != "union":
             args["operation"] = operation
+        if target is not None:
+            args["target"] = target
         return _push(steps, op_name, args)
 
-    raise Unsupported(f"no operation builds {node_type}")
+    raise Unsupported(f"no operation builds {node_type}", node_type)
 
 
 def _topology_args(node: dict):
@@ -239,7 +287,8 @@ def _topology_args(node: dict):
     references = params.get(selection_key) or []
     ids = [r.get("id") for r in references if isinstance(r, dict) and r.get("id")]
     if not ids:
-        raise Unsupported(f"{node['type']} has no resolvable selection to replay")
+        raise Unsupported(f"{node['type']} has no resolvable selection to replay",
+                          str(node["type"]))
     return op_name, {selection_key: ids, size_key: params.get(size_key)}
 
 
@@ -255,14 +304,27 @@ def _push(steps: List[dict], op: str, args: dict) -> int:
 
 # ------------------------------------------------------------------ replay --
 
-def resolve_refs(args: dict, created: List[Optional[str]]) -> dict:
-    """Replace ``{"$step": i}`` placeholders with the id step *i* actually created."""
+def resolve_refs(args: dict, created: List[Optional[str]],
+                 groups: Optional[List[Optional[str]]] = None) -> dict:
+    """Replace ``{"$step": i}`` / ``{"$group": i}`` placeholders with real ids.
+
+    ``$step`` is the feature step *i* created; ``$group`` is the boolean it
+    created or joined. They are different nodes and the distinction matters: a
+    third body joining an existing group has to target the group, while a
+    modifier acting on one body has to target the body.
+    """
     out = {}
     for key, value in (args or {}).items():
         if isinstance(value, dict) and "$step" in value:
             resolved = created[value["$step"]]
             if resolved is None:
                 raise Unsupported(f"step {value['$step']} created no feature to target")
+            out[key] = resolved
+        elif isinstance(value, dict) and "$group" in value:
+            index = value["$group"]
+            resolved = (groups or [])[index] if groups and index < len(groups) else None
+            if resolved is None:
+                raise Unsupported(f"step {index} created no group to target")
             out[key] = resolved
         else:
             out[key] = value
@@ -279,12 +341,15 @@ def replay(steps: List[dict], doc_id: str) -> List[dict]:
     from app.services import cad_operations
 
     created: List[Optional[str]] = []
+    groups: List[Optional[str]] = []
     envelopes: List[dict] = []
     for step in steps:
-        args = resolve_refs(step["args"], created)
+        args = resolve_refs(step["args"], created, groups)
         env = cad_operations.execute(step["op"], doc_id, args)
         envelopes.append(env)
-        created.append((env.get("result") or {}).get("feature_id"))
+        result = env.get("result") or {}
+        created.append(result.get("feature_id"))
+        groups.append(result.get("group_id"))
         if not env["ok"]:
             break
     return envelopes
@@ -318,14 +383,17 @@ def decompile_document(
 
     source = docs.get_document(doc_id)
     if source is None:
-        return {"ok": False, "reason": f"no document {doc_id!r}", "steps": []}
+        return {"ok": False, "reason": f"no document {doc_id!r}",
+                "cause": "no_such_document", "steps": []}
 
     try:
         steps = decompile(source.feature_tree)
     except Unsupported as exc:
-        return {"ok": False, "reason": str(exc), "unsupported": True, "steps": []}
+        return {"ok": False, "reason": str(exc), "unsupported": True,
+                "cause": "unsupported", "failed_at": exc.feature, "steps": []}
     if not steps:
-        return {"ok": False, "reason": "tree decompiled to no operations", "steps": []}
+        return {"ok": False, "reason": "tree decompiled to no operations",
+                "cause": "empty", "steps": []}
 
     scratch = docs.create_document(name=f"decompile:{source.name}"[:60],
                                    resolution=resolution, owner_id=source.owner_id)
@@ -343,13 +411,15 @@ def decompile_document(
         failed = next((e for e in envelopes if not e["ok"]), None)
         if failed is not None:
             return _reject(trajectory_id, record, steps,
-                           f"replay failed at {failed['op']}: {failed['error']['message']}")
+                           f"replay failed at {failed['op']}: {failed['error']['message']}",
+                           cause="replay_failed", failed_at=failed["op"])
 
         want = _hash_tree_geometry(source.feature_tree, resolution)
         got = _hash_tree_geometry(docs.get_document(scratch.id).feature_tree, resolution)
         if want != got:
             return _reject(trajectory_id, record, steps,
-                           "replayed geometry differs from the original")
+                           "replayed geometry differs from the original",
+                           cause="geometry_mismatch")
 
         return {"ok": True, "steps": steps, "n_steps": len(steps),
                 "trajectory_id": trajectory_id, "mesh_hash": want}
@@ -357,7 +427,8 @@ def decompile_document(
         docs.delete_document(scratch.id)
 
 
-def _reject(trajectory_id: Optional[str], record: bool, steps: List[dict], reason: str) -> dict:
+def _reject(trajectory_id: Optional[str], record: bool, steps: List[dict], reason: str,
+            *, cause: str = "rejected", failed_at: Optional[str] = None) -> dict:
     """Discard a trajectory that did not reproduce its source.
 
     A demonstration that does not rebuild the part teaches the wrong thing, so it
@@ -368,25 +439,114 @@ def _reject(trajectory_id: Optional[str], record: bool, steps: List[dict], reaso
     if record and trajectory_id:
         trajectories.delete(trajectory_id)
     _LOGGER.info("decompile rejected: %s", reason)
-    return {"ok": False, "reason": reason, "steps": steps, "n_steps": len(steps)}
+    return {"ok": False, "reason": reason, "cause": cause, "failed_at": failed_at,
+            "steps": steps, "n_steps": len(steps)}
 
 
-def decompile_all(*, resolution: int = 48, limit: Optional[int] = None) -> dict:
+def decompile_all(*, resolution: int = 48, limit: Optional[int] = None,
+                  record: bool = True) -> dict:
     """Decompile every stored document. Returns per-document outcomes.
 
-    The bulk path for turning an existing corpus into trajectories.
+    The bulk path for turning an existing corpus into trajectories. The summary
+    counts are `corpus_report`'s job — this stays the raw list so a caller that
+    only wants the trajectories does not pay for the analysis.
     """
     from app.services import document_service as docs
 
     results = []
     for summary in docs.list_documents()[:limit]:
-        outcome = decompile_document(summary.id, resolution=resolution)
+        outcome = decompile_document(summary.id, resolution=resolution, record=record)
         results.append({"doc_id": summary.id, "name": summary.name,
                         "ok": outcome["ok"], "reason": outcome.get("reason"),
+                        "failed_at": outcome.get("failed_at"),
+                        "cause": outcome.get("cause"),
                         "n_steps": outcome.get("n_steps", 0),
                         "trajectory_id": outcome.get("trajectory_id")})
     return {
         "total": len(results),
         "recovered": sum(1 for r in results if r["ok"]),
         "results": results,
+    }
+
+
+# ------------------------------------------------------------- corpus health --
+
+def _feature_types(tree: Dict[str, Any]) -> List[str]:
+    """Every feature type in a tree, deduplicated."""
+    from app.cad_kernel.core.feature_tree import walk_nodes
+
+    return sorted({str(n.get("type")) for n in walk_nodes(tree or {}) if n.get("type")})
+
+
+def corpus_report(*, resolution: int = 48, limit: Optional[int] = None,
+                  doc_ids: Optional[List[str]] = None, record: bool = False) -> dict:
+    """The replay-verification hit rate over the whole corpus, and what fails.
+
+    This is the health metric for the training-data half of the project and the
+    one number nobody had looked at: *what fraction of the documents we already
+    have can be turned into a verified demonstration?* Everything else here
+    exists to make that number actionable rather than merely alarming —
+    ``by_cause`` says whether the losses are unrecoverable geometry or a gap in
+    the emitter, and ``by_feature`` says which feature type to fix first.
+
+    ``by_feature`` counts a *document* against every type it contains, so a type
+    with a 0% rate is either genuinely undecompilable or always keeps company
+    with something that is. The ``blocking`` figure separates those: it counts
+    only the documents where that type is the type the decompiler actually named
+    as the reason.
+
+    ``record`` is off here by default — the point of this call is to measure, and
+    writing a few hundred trajectories as a side effect of asking a question is
+    surprising. `decompile_all` is the one that exists to produce them.
+
+    ``doc_ids`` narrows the population, for measuring one project rather than
+    the whole datastore.
+    """
+    from app.services import document_service as docs
+
+    summaries = [s for s in docs.list_documents()
+                 if doc_ids is None or s.id in set(doc_ids)][:limit]
+    rows: List[dict] = []
+    by_cause: Dict[str, int] = {}
+    by_feature: Dict[str, Dict[str, int]] = {}
+
+    for summary in summaries:
+        document = docs.get_document(summary.id)
+        if document is None:
+            continue
+        types = _feature_types(document.feature_tree)
+        outcome = decompile_document(summary.id, resolution=resolution, record=record)
+        cause = "recovered" if outcome["ok"] else (outcome.get("cause") or "unknown")
+        by_cause[cause] = by_cause.get(cause, 0) + 1
+
+        blamed = outcome.get("failed_at")
+        for feature_type in types:
+            stats = by_feature.setdefault(feature_type, {"documents": 0, "recovered": 0,
+                                                         "blocking": 0})
+            stats["documents"] += 1
+            stats["recovered"] += 1 if outcome["ok"] else 0
+            if not outcome["ok"] and blamed == feature_type:
+                stats["blocking"] += 1
+
+        rows.append({"doc_id": summary.id, "name": summary.name, "ok": outcome["ok"],
+                     "cause": cause, "reason": outcome.get("reason"),
+                     "failed_at": blamed, "n_steps": outcome.get("n_steps", 0),
+                     "features": types})
+
+    total = len(rows)
+    recovered = sum(1 for r in rows if r["ok"])
+    features = [{"feature": name, **stats,
+                 "rate": round(stats["recovered"] / stats["documents"], 4)}
+                for name, stats in by_feature.items()]
+    # Worst first, and within that the ones that block most often — the order you
+    # would work down if you were fixing the emitter.
+    features.sort(key=lambda f: (f["rate"], -f["blocking"], f["feature"]))
+
+    return {
+        "documents": total,
+        "recovered": recovered,
+        "hit_rate": round(recovered / total, 4) if total else 0.0,
+        "by_cause": dict(sorted(by_cause.items(), key=lambda kv: -kv[1])),
+        "by_feature": features,
+        "results": rows,
     }

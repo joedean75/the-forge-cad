@@ -106,6 +106,32 @@ def decompile(
             "results": results}
 
 
+@router.get("/corpus-health")
+def corpus_health(
+    acc: accounts.Account = Depends(current_account),
+    resolution: int = Query(48, ge=16, le=256),
+    limit: Optional[int] = Query(None, ge=1, description="cap the number of documents examined"),
+):
+    """What fraction of this account's documents become verified demonstrations.
+
+    The health metric for the training-data half of the system. ``by_cause``
+    splits the losses into unrecoverable geometry, a replay that errored and a
+    replay that produced a *different* body; ``by_feature`` ranks the feature
+    types worst-first, with ``blocking`` counting only the documents where that
+    type was named as the reason — a `BoxFeature` in a document held back by an
+    `OptimizeFeature` shows a poor rate and zero blocking, and it is the second
+    column that tells you what to fix.
+
+    Read-only: nothing is recorded, because measuring should not also write a
+    few hundred trajectories. `POST /decompile` is the one that produces them.
+    """
+    from app.services import decompiler
+
+    ids = [s.id for s in document_service.list_documents(owner_id=acc.id)]
+    return decompiler.corpus_report(resolution=resolution, limit=limit,
+                                    doc_ids=ids, record=False)
+
+
 @router.get("/{trajectory_id}")
 def get_trajectory(trajectory_id: str, acc: accounts.Account = Depends(current_account)):
     record = trajectories.get(trajectory_id)

@@ -108,10 +108,22 @@ function Documentation({ docId, docName }: { docId: string; docName: string }) {
           {loading ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />} 2D drawing
         </button>
         {drawing && (
-          <button onClick={() => api.downloadDrawing(docId, docName).catch(() => {})}
-            title="Download SVG" className="flex items-center justify-center px-3 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading transition">
-            <Download size={15} />
-          </button>
+          <>
+            <button onClick={() => api.downloadDrawing(docId, docName).catch(() => {})}
+              title="Download SVG — the readable sheet"
+              className="flex items-center justify-center px-2.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading transition text-[10px]">
+              SVG
+            </button>
+            <button onClick={() => api.downloadDrawingDxf(docId, docName, {
+                views: views.length ? views : ['front'],
+                sections: section === 'none' ? [] : [{ plane: section, label: 'A-A' }],
+                projection, sheet, show_hidden: hidden,
+              }).catch((e) => setErr(e instanceof Error ? e.message : 'DXF failed'))}
+              title="Download DXF — layered geometry for CAM"
+              className="flex items-center justify-center px-2.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading transition text-[10px]">
+              <Download size={12} className="mr-1" /> DXF
+            </button>
+          </>
         )}
       </div>
       {err && <p className="text-[10px] text-cad-danger">{err}</p>}

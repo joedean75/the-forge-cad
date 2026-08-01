@@ -26,6 +26,8 @@ import trimesh
 from app.cad_kernel.geom.meshing import solid_to_mesh
 from app.models.schemas import DfmCheck
 
+MM = 1000.0
+
 # Below this a "solid" is a rounding error rather than a part. 1e-12 m³ is a
 # cube 10 µm on a side — far under anything the kernel can resolve.
 _MIN_VOLUME_M3 = 1e-12
@@ -40,8 +42,55 @@ def _as_trimesh(solid) -> trimesh.Trimesh:
     )
 
 
-def check_solid(solid) -> List[DfmCheck]:
-    """Structural validity of an evaluated solid, as DfmCheck rows."""
+def bodies_of(solid) -> List[dict]:
+    """Every disconnected solid in the body, measured separately.
+
+    A document holds one feature tree, but a tree can perfectly well evaluate to
+    several disjoint solids — a pair of brackets machined from one billet, a part
+    that a cut deliberately separated. Volume, mass and the bounding box are all
+    correct for that already, because they are sums and unions; what was missing
+    was any way to *see* the bodies. "2 disconnected bodies" cannot be told apart
+    from "the part fell in half" without knowing how big each one is and where.
+
+    Ordered largest first, so the main body is index 0 and the debris — if it is
+    debris — is at the end.
+    """
+    tm = _as_trimesh(solid)
+    if not len(tm.faces):
+        return []
+    parts = tm.split(only_watertight=False)
+    if len(parts) <= 1:
+        parts = [tm]
+
+    out = []
+    for part in parts:
+        volume = abs(float(part.volume))
+        low, high = (np.asarray(b, dtype=float) * MM for b in part.bounds)
+        centre = (np.asarray(part.centroid, dtype=float) * MM)
+        out.append({
+            "volume_mm3": round(volume * MM ** 3, 4),
+            "area_mm2": round(float(part.area) * MM * MM, 4),
+            "triangles": int(len(part.faces)),
+            "watertight": bool(part.is_watertight),
+            "size_mm": [round(float(v), 4) for v in (high - low)],
+            "center_mm": [round(float(v), 4) for v in centre],
+            "min_mm": [round(float(v), 4) for v in low],
+            "max_mm": [round(float(v), 4) for v in high],
+        })
+    out.sort(key=lambda b: -b["volume_mm3"])
+    return out
+
+
+def check_solid(solid, expect_bodies: int | None = None) -> List[DfmCheck]:
+    """Structural validity of an evaluated solid, as DfmCheck rows.
+
+    ``expect_bodies`` is how many disjoint solids the part is *supposed* to have.
+    Without it, more than one is a warning — the usual cause is a cut that went
+    further than intended. With it, the count is judged against the intent, so a
+    deliberately two-piece part stops being reported as damage. The spec is where
+    that intent already lives (`design_spec`'s ``bodies`` requirement), and
+    `check_document` reads it from there.
+    """
     tm = _as_trimesh(solid)
     checks: List[DfmCheck] = []
 
@@ -100,12 +149,22 @@ def check_solid(solid) -> List[DfmCheck]:
     ))
 
     bodies = int(tm.body_count)
+    wanted = 1 if expect_bodies is None else int(expect_bodies)
+    plural = "body" if bodies == 1 else "bodies"
+    if bodies == wanted:
+        detail = f"{bodies} {plural}" + ("" if wanted == 1 else " — as specified")
+        status = "pass"
+    elif expect_bodies is None:
+        detail = f"{bodies} disconnected bodies — a subtraction may have severed the part"
+        status = "warn"
+    else:
+        detail = f"{bodies} {plural}, the spec asks for {wanted}"
+        status = "warn"
     checks.append(DfmCheck(
         id="connectivity",
-        label="Single connected body",
-        status="pass" if bodies == 1 else "warn",
-        detail=f"{bodies} disconnected {'body' if bodies == 1 else 'bodies'}"
-               + ("" if bodies == 1 else " — a subtraction may have severed the part"),
+        label="Connected bodies" if expect_bodies not in (None, 1) else "Single connected body",
+        status=status,
+        detail=detail,
         value=float(bodies),
     ))
 
@@ -130,8 +189,29 @@ def check_document(doc_id: str, resolution: int = 128) -> dict:
 
     checks = [DfmCheck(id="evaluates", label="Evaluates to geometry",
                        status="pass", detail="body evaluated")]
-    checks.extend(check_solid(solid))
+    checks.extend(check_solid(solid, expect_bodies=_expected_bodies(doc_id)))
     return _report(checks)
+
+
+def _expected_bodies(doc_id: str) -> int | None:
+    """How many disjoint solids the document's spec asks for, if it says.
+
+    Read from the spec rather than added as a separate flag: "what the part is
+    supposed to be" already has a home, and a second place to declare the same
+    thing is a second place for the two to disagree.
+    """
+    from app.services import document_service as docs
+
+    doc = docs.get_document(doc_id)
+    for requirement in ((doc.spec or {}).get("requirements") or []) if doc else []:
+        if requirement.get("kind") == "bodies":
+            for key in ("value", "min", "max"):
+                if requirement.get(key) is not None:
+                    try:
+                        return int(float(requirement[key]))
+                    except (TypeError, ValueError):
+                        return None
+    return None
 
 
 def _report(checks: List[DfmCheck]) -> dict:

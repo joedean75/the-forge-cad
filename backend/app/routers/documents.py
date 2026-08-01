@@ -731,6 +731,28 @@ def drawing_svg(section: bool = True, doc: DesignDocument = Depends(readable_doc
     return Response(out["svg"], media_type="image/svg+xml")
 
 
+@router.post("/{doc_id}/drawing.dxf", response_class=PlainTextResponse)
+def drawing_dxf(spec: Optional[dict] = None,
+                doc: DesignDocument = Depends(readable_document)):
+    """The same drawing as an R12 DXF — geometry on named layers, in paper mm.
+
+    The SVG is a sheet to read; this is the file the next tool measures and
+    edits. Views and section outlines land on VISIBLE/HIDDEN/SECTION, and the
+    cutting-plane lines on CUTPLANE with a dash-dot linetype, so it opens as a
+    drawing rather than as a pile of lines.
+    """
+    from app.services import drawing as drawing_svc
+
+    try:
+        body = drawing_svc.render_dxf(doc.id, spec=spec)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    name = (doc.name[:40].replace(" ", "_") or "part")
+    return PlainTextResponse(body, media_type="application/dxf", headers={
+        "Content-Disposition": f'attachment; filename="{name}_drawing.dxf"'})
+
+
 # ── FDM slicing (3D printing) ──
 
 

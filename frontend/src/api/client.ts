@@ -377,6 +377,21 @@ export const api = {
     a.click()
     URL.revokeObjectURL(a.href)
   },
+  /** The drawing as R12 DXF — layered geometry a CAM package can measure. */
+  downloadDrawingDxf: async (id: string, name = 'part', spec: DrawingSpec = {}) => {
+    const res = await fetch(`${API_BASE}/documents/${id}/drawing.dxf`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(spec),
+    })
+    if (!res.ok) throw new Error(`Drawing unavailable (${res.status})`)
+    const blob = await res.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${name.slice(0, 40).replace(/\s+/g, '_') || 'part'}_drawing.dxf`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  },
   downloadDrawing: async (id: string, name = 'part') => {
     const res = await fetch(`${API_BASE}/documents/${id}/drawing.svg`, { headers: authHeaders() })
     if (!res.ok) throw new Error(`Drawing unavailable (${res.status})`)

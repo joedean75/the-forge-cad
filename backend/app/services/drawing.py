@@ -373,6 +373,67 @@ def _place_items(items: Dict[str, Dict[str, Any]], spec: DrawingSpec) -> None:
             section_x += item["w"] + _GAP
 
 
+# ------------------------------------------------------- cutting planes --
+
+def _cut_marker(items: Dict[str, Dict[str, Any]], plane: str, label: str,
+                cut_at_mm: float, drawn: Sequence[str]) -> Optional[Dict[str, Any]]:
+    """Where to draw a section's cutting-plane line, and which way it looks.
+
+    A section view labelled A-A with nothing on the parent view saying where A-A
+    *is* is not a drawing, it is two pictures. The line goes on a view that sees
+    the cut plane edge-on — the plane's normal has to be one of that view's two
+    drawn axes — and the arrows point along the normal, in the direction the
+    section is viewed from.
+
+    Returns None when no such view was drawn, which is a legitimate state: a
+    front-only drawing with an xz section has nowhere to put the marker, and
+    inventing a place for it would be worse than leaving it off.
+    """
+    normal, _, _ = _SECTION_PLANES[plane]
+    for name in drawn:
+        view = VIEWS.get(name)
+        item = items.get(name)
+        if view is None or item is None:
+            continue
+        if view.ha == normal:
+            axis, flip = "h", view.hflip
+        elif view.va == normal:
+            axis, flip = "v", view.vflip
+        else:
+            continue
+        left, bottom, right, top = item["bounds"]
+        # The line runs across the view at the cut position, overhanging a
+        # little at each end the way a drafted one does.
+        over = 0.08 * max(right - left, top - bottom, 1.0)
+        # The line lies *in* the cut plane, so it runs along the view's other
+        # axis; the arrows point along the normal, which is the axis the cut
+        # position is measured on. Getting those two the same way round draws
+        # arrows along the line, which says nothing about which way you look.
+        if axis == "h":
+            span = ((cut_at_mm, bottom - over), (cut_at_mm, top + over))
+            arrow = (-1.0 if not flip else 1.0, 0.0)
+        else:
+            span = ((left - over, cut_at_mm), (right + over, cut_at_mm))
+            arrow = (0.0, -1.0 if not flip else 1.0)
+        return {"view": name, "span": span, "arrow": arrow, "label": label,
+                "size": over}
+    return None
+
+
+def _arrow_polyline(tip: Tuple[float, float], direction: Tuple[float, float],
+                    size: float) -> Polyline:
+    """A solid-looking arrowhead as a closed triangle, in view coordinates."""
+    dx, dy = direction
+    # Perpendicular, for the barbs.
+    px, py = -dy, dx
+    back = (tip[0] - dx * size, tip[1] - dy * size)
+    half = size * 0.35
+    return [tip,
+            (back[0] + px * half, back[1] + py * half),
+            (back[0] - px * half, back[1] - py * half),
+            tip]
+
+
 # ----------------------------------------------------------------- render --
 
 def _esc(s: str) -> str:
@@ -386,6 +447,10 @@ _STYLE = (
     '.sec{fill:url(#hatch);stroke:#1a1f27;stroke-width:0.5}'
     '.dim{stroke:#c2492a;stroke-width:0.25;fill:none}'
     '.dimt{fill:#c2492a;font-size:3px}.lbl{fill:#5a6472;font-size:3.2px}'
+    # Chain-dash, the drafting convention for a cutting plane — it has to be
+    # distinguishable from a hidden line at a glance or the view reads wrong.
+    '.cutplane{fill:none;stroke:#c2492a;stroke-width:0.45;stroke-dasharray:6 1 1 1}'
+    '.arrow{fill:#c2492a;stroke:none}'
     '.note{fill:#1a1f27;font-size:2.8px}'
     '.frame{fill:#fff;stroke:#1a1f27;stroke-width:0.3}'
     '.lead{stroke:#1a1f27;stroke-width:0.25;fill:none}'
@@ -424,6 +489,79 @@ class _Sheet:
             pts = [self.to_paper(view_name, h, v) for h, v in pl]
             d = "M " + " L ".join(f"{x:.2f},{y:.2f}" for x, y in pts) + " Z"
             self.svg.append(f'<path class="{cls}" d="{d}"/>')
+
+
+def _dxf_layers(sheet: _Sheet, items: Dict[str, Dict[str, Any]], markers: Sequence[dict],
+                paper_h: float) -> Dict[str, List[Polyline]]:
+    """The drawing's geometry in paper millimetres, ready for `io.dxf`.
+
+    Laid out exactly as the SVG — same views, same positions, same scale — so
+    the two are the same drawing rather than two renderings that might disagree.
+    The only change is the Y flip: SVG counts down the page and DXF counts up,
+    and a drawing exported upside down is a drawing nobody trusts again.
+
+    Only geometry crosses over. Dimensions, notes and the title block are text
+    and leaders that R12 would need `TEXT`/`DIMENSION` entities for, and a
+    half-transferred annotation is worse than an honest outline — the DXF is for
+    taking the shape into another tool, and the SVG remains the readable sheet.
+    """
+    from app.cad_kernel.io import dxf as dxf_io
+
+    def place(view: str, polys: Sequence[Polyline]) -> List[Polyline]:
+        out = []
+        for poly in polys:
+            paper = [sheet.to_paper(view, h, v) for h, v in poly]
+            out.append([(round(x, 4), round(paper_h - y, 4)) for x, y in paper])
+        return out
+
+    layers: Dict[str, List[Polyline]] = {
+        dxf_io.VISIBLE_LAYER: [], dxf_io.HIDDEN_LAYER: [],
+        dxf_io.SECTION_LAYER: [], dxf_io.CUTPLANE_LAYER: [],
+    }
+    for key, item in items.items():
+        target = dxf_io.SECTION_LAYER if key.startswith("section:") else dxf_io.VISIBLE_LAYER
+        layers[target].extend(place(key, item["visible"]))
+        layers[dxf_io.HIDDEN_LAYER].extend(place(key, item["hidden"]))
+
+    for marker in markers:
+        layers[dxf_io.CUTPLANE_LAYER].extend(place(marker["view"], [list(marker["span"])]))
+        for tip in marker["span"]:
+            head = _arrow_polyline(tip, marker["arrow"], marker["size"])
+            layers[dxf_io.CUTPLANE_LAYER].extend(place(marker["view"], [head]))
+    return layers
+
+
+def render_dxf(doc_id: str, spec: Optional[dict] = None) -> str:
+    """The same drawing as an R12 DXF — the layered geometry, in paper mm.
+
+    `io/dxf.py` was wired only to sheet-metal flat patterns, so a drawing could
+    be looked at and not much else. A DXF is what makes it manufacturable: the
+    machinist's CAM package, the waterjet, and every drafting tool read it, and
+    they read geometry rather than a picture of geometry.
+    """
+    from app.cad_kernel.io import dxf as dxf_io
+
+    out = generate_drawing(doc_id, spec=spec)
+    return dxf_io.write_layers(out["dxf_layers"],
+                               open_layers=[dxf_io.CUTPLANE_LAYER])
+
+
+def _render_cut_marker(sheet: _Sheet, marker: dict) -> None:
+    """The cutting-plane line, its direction arrows and its letters."""
+    view = marker["view"]
+    (h0, v0), (h1, v1) = marker["span"]
+    a = sheet.to_paper(view, h0, v0)
+    b = sheet.to_paper(view, h1, v1)
+    sheet.svg.append(f'<path class="cutplane" d="M {a[0]:.2f},{a[1]:.2f} L {b[0]:.2f},{b[1]:.2f}"/>')
+
+    label = marker["label"].split("-")[0]
+    for end, (hh, vv) in zip((a, b), marker["span"]):
+        head = _arrow_polyline((hh, vv), marker["arrow"], marker["size"])
+        pts = " ".join(f"{x:.2f},{y:.2f}" for x, y in
+                       (sheet.to_paper(view, ph, pv) for ph, pv in head))
+        sheet.svg.append(f'<polygon class="arrow" points="{pts}"/>')
+        sheet.svg.append(f'<text class="lbl" x="{end[0] + 1.5:.1f}" y="{end[1] - 1.0:.1f}">'
+                         f'{_esc(label)}</text>')
 
 
 def _render_dimension(sheet: _Sheet, dim: dict, items: Dict[str, Dict[str, Any]]) -> str:
@@ -647,6 +785,14 @@ def generate_drawing(doc_id: str, section: bool = True,
 
     _place_items(items, drawing_spec)
 
+    drawn = [v for v in drawing_spec.views if v in items]
+    markers: List[dict] = []
+    for meta in section_meta:
+        marker = _cut_marker(items, meta["plane"], meta["label"], meta["cut_at_mm"], drawn)
+        meta["marked_on"] = marker["view"] if marker else None
+        if marker:
+            markers.append(marker)
+
     content_w = float(max((it["x"] + it["w"] for it in items.values()), default=0.0))
     content_h = float(max((it["y"] + it["h"] for it in items.values()), default=0.0))
 
@@ -679,6 +825,9 @@ def generate_drawing(doc_id: str, section: bool = True,
         lx, ly = sheet.to_paper(key, item["bounds"][0], item["bounds"][1])
         sheet.svg.append(f'<text class="lbl" x="{lx:.1f}" y="{ly + 5:.1f}">{label}</text>')
 
+    for marker in markers:
+        _render_cut_marker(sheet, marker)
+
     dimensions = drawing_spec.dimensions or _auto_dimensions(items, drawing_spec, model_mm)
     for dim in dimensions:
         sheet.svg.append(_render_dimension(sheet, dim, items))
@@ -692,7 +841,11 @@ def generate_drawing(doc_id: str, section: bool = True,
             anchored.add(note["tolerance_label"])
 
     mat = materials.get_material(doc.material_id)
-    tb_w, tb_h = 78.0, _TITLE_H - 4
+    # 78 mm over four columns left 19.5 mm a field, and "Aluminum 6061-T6" is
+    # wider than that — the material printed straight through the mass. Material
+    # names are the longest thing here and they are not abbreviating, so the
+    # block widened rather than the text being cut down to fit.
+    tb_w, tb_h = 124.0, _TITLE_H - 4
     tbx, tby = paper_w - tb_w - _MARGIN / 2, paper_h - tb_h - _MARGIN / 2
     fields = [
         ("PART", doc.name[:28]),
@@ -707,15 +860,27 @@ def generate_drawing(doc_id: str, section: bool = True,
     sheet.svg.append(f'<rect class="tb" x="{tbx:.1f}" y="{tby:.1f}" '
                      f'width="{tb_w:.1f}" height="{tb_h:.1f}"/>')
     col = tb_w / 4
+    # A long value is shrunk to fit its column rather than truncated or left to
+    # print through the next field's. Guessing a character limit needs a
+    # monospace advance that is not the same in every renderer — three attempts
+    # at one all still overlapped — whereas scaling the text down cannot.
+    usable = col - 3.0
     for i, (k, v) in enumerate(fields):
         cx = tbx + (i % 4) * col + 1.5
         cy = tby + (i // 4) * (tb_h / 2)
+        text = str(v)
+        size = min(3.2, usable / max(len(text) * 0.62, 1e-6))
         sheet.svg.append(f'<text class="tbk" x="{cx:.1f}" y="{cy+4:.1f}">{_esc(k)}</text>')
+        # `style`, not the `font-size` attribute: `.tbt` sets font-size in CSS
+        # and a stylesheet declaration beats a presentation attribute, so the
+        # attribute this line used to carry never had any effect at all.
         sheet.svg.append(f'<text class="tbt" x="{cx:.1f}" y="{cy+8.5:.1f}" '
-                         f'font-size="2.8">{_esc(v)}</text>')
+                         f'style="font-size:{size:.2f}px">{_esc(text)}</text>')
 
     sheet.svg.append(_tolerance_block(doc, _MARGIN / 2 + 1, tby, anchored))
     sheet.svg.append("</svg>")
+
+    dxf_layers = _dxf_layers(sheet, items, markers, paper_h)
 
     view_counts = {k: len(v["visible"]) for k, v in items.items() if not k.startswith("section:")}
     hidden_counts = {k: len(v["hidden"]) for k, v in items.items() if not k.startswith("section:")}
@@ -749,6 +914,10 @@ def generate_drawing(doc_id: str, section: bool = True,
         "dimensions": len(dimensions),
         "annotations": len(drawing_spec.annotations),
         "material": mat.name,
+        # Geometry per DXF layer, in paper mm. `render_dxf` writes the file;
+        # this is here so a caller can inspect what would be written without
+        # parsing R12 back out of a string.
+        "dxf_layers": dxf_layers,
     }
 
 

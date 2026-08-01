@@ -215,23 +215,48 @@ def _measure(doc_id, args):
     return {"distance_mm": round(d * 1000, 4)}
 
 
-@operation("add_primitive", "mutate", "Add a box/sphere/cylinder/cone, unioned or subtracted. Lengths in metres.",
+_COMBINE_TARGET = {
+    "type": "string",
+    "description": "combine with this feature alone instead of with the whole body — "
+                   "how you cut a hole through a boss without cutting the plate under it",
+}
+
+
+def _combined(doc_id, node, args, what: str) -> Dict[str, Any]:
+    """Add a body to the part, optionally against one feature, and report both ids.
+
+    ``group_id`` is the boolean the edit created or extended. A caller that wants
+    to keep building on the *combination* — a third body joining the same group,
+    a modifier over the pair — needs that, and it is not the same thing as the
+    id of the body just added.
+    """
+    doc = _get(doc_id)
+    operation = args.get("operation", "union")
+    target = args.get("target")
+    tree = feature_ops.add_primitive(doc.feature_tree, node, operation, target_id=target)
+    document_service.update_document(doc_id, feature_tree=tree)
+    parent = feature_ops.parent_of(tree, node["id"])
+    return {"message": f"added {what} ({operation})", "feature_id": node["id"],
+            **({"group_id": parent["id"]} if parent and parent.get("id") else {})}
+
+
+@operation("add_primitive", "mutate", "Add a box/sphere/cylinder/cone, unioned or subtracted. Lengths in metres. "
+           "Combines with the whole body unless 'target' names one feature to combine with instead.",
            {"shape": {"enum": ["box", "sphere", "cylinder", "cone"], "required": True},
            "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
+           "target": _COMBINE_TARGET,
            "params": _PRIMITIVE_PARAMS})
 def _add_primitive(doc_id, args):
-    doc = _get(doc_id)
     prim = _make_primitive(require(args, "shape"), args.get("params"))
-    tree = feature_ops.add_primitive(doc.feature_tree, prim, args.get("operation", "union"))
-    document_service.update_document(doc_id, feature_tree=tree)
-    return {"message": f"added {args['shape']} ({args.get('operation', 'union')})", "feature_id": prim["id"]}
+    return _combined(doc_id, prim, args, str(args["shape"]))
 
 
 @operation("add_extrude", "mutate", "Sketch a 2D profile on a plane and extrude it into a solid (unioned or subtracted).",
            {"profile": {"type": "object", "description": "{type:rect|circle|polygon, ...} in metres"},
            "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
            "offset": {"type": "number"}, "depth": {"type": "number"},
-           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
+           "target": _COMBINE_TARGET})
 def _add_extrude(doc_id, args):
     doc = _get(doc_id)
     node = {
@@ -243,9 +268,7 @@ def _add_extrude(doc_id, args):
             "depth": args.get("depth", 0.02),
         },
     }
-    tree = feature_ops.add_primitive(doc.feature_tree, node, args.get("operation", "union"))
-    document_service.update_document(doc_id, feature_tree=tree)
-    return {"message": "added extrude", "feature_id": node["id"]}
+    return _combined(doc_id, node, args, "extrude")
 
 
 @operation("add_revolve", "mutate", "Revolve a 2D profile (authored in radius/height, metres) about an axis to make a "
@@ -253,45 +276,42 @@ def _add_extrude(doc_id, args):
            {"profile": {"type": "object", "description": "{type:rect|circle|polygon} in (radius,height)"},
            "axis": {"enum": ["x", "y", "z"], "default": "z"}, "center": _VEC,
            "angle": {"type": "number", "default": 360},
-           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
+           "target": _COMBINE_TARGET})
 def _add_revolve(doc_id, args):
     doc = _get(doc_id)
     node = {"type": "RevolveFeature", "name": "Revolve", "params": {
         "profile": args.get("profile", {"type": "rect", "width": 0.01, "height": 0.03, "cx": 0.02, "cy": 0.0}),
         "axis": args.get("axis", "z"), "center": args.get("center", {"x": 0, "y": 0, "z": 0}),
         "angle": args.get("angle", 360.0)}}
-    tree = feature_ops.add_primitive(doc.feature_tree, node, args.get("operation", "union"))
-    document_service.update_document(doc_id, feature_tree=tree)
-    return {"message": "added revolve", "feature_id": node["id"]}
+    return _combined(doc_id, node, args, "revolve")
 
 
 @operation("add_sweep", "mutate", "Sweep a round profile of 'radius' along a polyline 'path' (metres) — pipe, tube, wire, rail.",
            {"path": {"type": "array", "description": "[[x,y,z], …] in metres"},
            "radius": {"type": "number"},
-           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
+           "target": _COMBINE_TARGET})
 def _add_sweep(doc_id, args):
     doc = _get(doc_id)
     node = {"type": "SweepFeature", "name": "Sweep", "params": {
         "path": args.get("path", [[0, 0, 0], [0, 0, 0.05]]), "radius": args.get("radius", 0.005)}}
-    tree = feature_ops.add_primitive(doc.feature_tree, node, args.get("operation", "union"))
-    document_service.update_document(doc_id, feature_tree=tree)
-    return {"message": "added sweep", "feature_id": node["id"]}
+    return _combined(doc_id, node, args, "sweep")
 
 
 @operation("add_loft", "mutate", "Loft between two profiles at two heights along a plane normal — adapters, tapers, funnels.",
            {"profile_a": {"type": "object"}, "profile_b": {"type": "object"},
            "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
            "offset_a": {"type": "number"}, "offset_b": {"type": "number"},
-           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
+           "target": _COMBINE_TARGET})
 def _add_loft(doc_id, args):
     doc = _get(doc_id)
     node = {"type": "LoftFeature", "name": "Loft", "params": {
         "profile_a": args.get("profile_a", {"type": "rect", "width": 0.04, "height": 0.04, "cx": 0, "cy": 0}),
         "profile_b": args.get("profile_b", {"type": "circle", "radius": 0.015, "cx": 0, "cy": 0}),
         "plane": args.get("plane", "xy"), "offset_a": args.get("offset_a", 0.0), "offset_b": args.get("offset_b", 0.05)}}
-    tree = feature_ops.add_primitive(doc.feature_tree, node, args.get("operation", "union"))
-    document_service.update_document(doc_id, feature_tree=tree)
-    return {"message": "added loft", "feature_id": node["id"]}
+    return _combined(doc_id, node, args, "loft")
 
 
 @operation("add_ruled_loft", "mutate", "Loft between two profiles with a real ruled surface — straight lines between "
@@ -304,7 +324,8 @@ def _add_loft(doc_id, args):
            "offset_a": {"type": "number"}, "offset_b": {"type": "number"},
            "ruled": {"type": "boolean", "default": True,
            "description": "straight rulings between the sections; false blends smoothly"},
-           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
+           "target": _COMBINE_TARGET})
 def _add_ruled_loft(doc_id, args):
     doc = _get(doc_id)
     node = {"type": "RuledLoftFeature", "name": "Ruled loft", "params": {
@@ -314,7 +335,8 @@ def _add_ruled_loft(doc_id, args):
         "offset_a": args.get("offset_a", 0.0), "offset_b": args.get("offset_b", 0.05),
         "ruled": bool(args.get("ruled", True))}}
     previous = doc.feature_tree
-    tree = feature_ops.add_primitive(previous, node, args.get("operation", "union"))
+    tree = feature_ops.add_primitive(previous, node, args.get("operation", "union"),
+                                     target_id=args.get("target"))
     _apply_exact(doc_id, previous, tree, "a ruled loft between those profiles")
     return {"message": "added ruled loft", "feature_id": node["id"]}
 
@@ -330,7 +352,8 @@ def _add_ruled_loft(doc_id, args):
            "k_factor": {"type": "number", "default": 0.44,
            "description": "neutral-axis position, 0.33 hard / 0.44 soft"},
            "flanges": {"type": "array", "description": "[{edge, length, angle, radius}, …]"},
-           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
+           "target": _COMBINE_TARGET})
 def _add_sheet_metal(doc_id, args):
     doc = _get(doc_id)
     node = {"type": "SheetMetalFeature", "name": "Sheet metal", "params": {
@@ -340,9 +363,7 @@ def _add_sheet_metal(doc_id, args):
         "bend_radius": args.get("bend_radius", 0.002),
         "k_factor": args.get("k_factor", 0.44),
         "flanges": args.get("flanges", [])}}
-    tree = feature_ops.add_primitive(doc.feature_tree, node, args.get("operation", "union"))
-    document_service.update_document(doc_id, feature_tree=tree)
-    return {"message": "added sheet metal base flange", "feature_id": node["id"]}
+    return _combined(doc_id, node, args, "sheet metal base flange")
 
 
 @operation("add_flange", "mutate", "Bend a new edge flange off a sheet-metal body. Positive angle bends up, negative down.",
@@ -450,7 +471,8 @@ def _resolve_on_face(tree, args, params):
            "depth": {"type": "number"}, "offset": {"type": "number"},
            "on_face": {"type": "object",
            "description": "{feature_id, face} face in top|bottom|left|right|front|back — overrides plane/offset, resolved live at regen"},
-           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"}})
+           "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
+           "target": _COMBINE_TARGET})
 def _add_sketch(doc_id, args):
     from app.services import sketch_solver
 
@@ -467,7 +489,8 @@ def _add_sketch(doc_id, args):
     }
     _resolve_on_face(doc.feature_tree, args, params)
     node = {"type": "ExtrudeFeature", "name": "Sketch", "params": params}
-    tree = feature_ops.add_primitive(doc.feature_tree, node, args.get("operation", "union"))
+    tree = feature_ops.add_primitive(doc.feature_tree, node, args.get("operation", "union"),
+                                     target_id=args.get("target"))
     document_service.update_document(doc_id, feature_tree=tree)
     return {"message": "added sketch extrude", "feature_id": node["id"],
             "converged": solved["converged"], "residual": solved["residual"]}
@@ -965,6 +988,36 @@ def _check_references(doc_id, args):
             "message": (f"{lost} reference(s) no longer resolve" if lost
                         else f"every reference resolves ({split} split by a later edit)"
                         if split else "every reference resolves")}
+
+
+@operation("bodies", "query",
+           "List the disjoint solids the part evaluates to, largest first, each with its "
+           "own volume, size and position. A document holds one feature tree, but a tree "
+           "can evaluate to several separate solids — deliberately, or because a cut went "
+           "further than intended. Volume and mass are already correct for that; this is "
+           "what tells the two cases apart. Declare the intended count with a 'bodies' "
+           "requirement in set_spec and check_geometry stops reporting it as damage.",
+           {"resolution": {"type": "number", "default": 128,
+           "description": "meshing resolution for the split"}})
+def _bodies(doc_id, args):
+    from app.services import geometry_check
+
+    _get(doc_id)
+    solid = document_service.get_solid(doc_id, resolution=int(args.get("resolution", 128)))
+    found = geometry_check.bodies_of(solid)
+    total = sum(b["volume_mm3"] for b in found)
+    largest = found[0]["volume_mm3"] if found else 0.0
+    return {
+        "count": len(found),
+        "bodies": found,
+        "total_volume_mm3": round(total, 4),
+        # A part severed by accident usually leaves one big piece and slivers;
+        # two intended parts do not. Worth stating rather than making the caller
+        # divide two numbers.
+        "largest_fraction": round(largest / total, 4) if total > 0 else 0.0,
+        "message": (f"{len(found)} separate bodies" if len(found) != 1
+                    else "one connected body"),
+    }
 
 
 @operation("check_geometry", "query", "Validate the body as a solid: non-empty, watertight, consistent winding, "

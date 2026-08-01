@@ -1,7 +1,7 @@
 # Sprint roadmap — closing out the exact-kernel programme
 
-Sprints 1–10 are on `main` (641 tests). **The programme is done**; what is left
-is the four honourable mentions.
+Sprints 1–10 and all four honourable mentions are on `main` (666 tests).
+**The programme is done.**
 
 [PRODUCT-ROADMAP.md](../PRODUCT-ROADMAP.md) is the product-level document. This
 one is narrower and concrete: what is left in the work that turned the SDF
@@ -224,35 +224,84 @@ independently.
 
 ---
 
-## Honourable mentions
+## Honourable mentions  ✅ *all four shipped*
 
 Real work, not filler; they did not make the ten because each is narrower.
 
-**Drawing completeness.** The spec-driven drawing engine has views, sections,
-hidden lines, dimensions and GD&T leaders. Missing: cutting-plane lines with
-direction arrows on the parent view, detail and auxiliary views, PDF output, a
-path from `drawing.py`'s polylines into `io/dxf.py` (which today is wired only
-to sheet-metal flat patterns), and BOM balloons for assemblies. The DXF path is
-the cheapest and the most useful — it makes a drawing manufacturable rather
-than viewable.
+**Drawing completeness.** The DXF path was called the cheapest and most useful
+here, and it was: `io/dxf.py` gained `write_layers`, and `drawing.render_dxf`
+writes the whole sheet as R12 with the geometry on `VISIBLE` / `HIDDEN` /
+`SECTION` / `CUTPLANE`, laid out exactly as the SVG and flipped in Y because DXF
+counts up the page and SVG counts down. `HIDDEN` and `CUTPLANE` carry real
+linetypes; the LTYPE table has to precede the LAYER table or a reader silently
+falls back to continuous, which is how hidden detail ends up looking like an
+outline. Only geometry crosses over — dimensions and notes would need
+`TEXT`/`DIMENSION` entities, and a half-transferred annotation is worse than an
+honest outline.
 
-**Exact assembly interference.** `services/interference.py` samples surface
-points into the other part's SDF. It works, and Sprint 1's exactness already
-forced one fix there (an exact box has 8 vertices, none strictly inside an
-overlapping box — triangle centroids were added). With both bodies exact,
-`BRepAlgoAPI_Common` gives the actual intersection volume instead of a sample
-count, which turns "these parts clash" into "these parts clash by 0.4 mm³".
+Cutting-plane lines landed with it, because a section labelled A-A with nothing
+on the parent view saying where A-A *is* is two pictures rather than a drawing.
+The line goes on a view that sees the plane edge-on and the arrows point along
+the plane's normal — pointing them along the *line* was the first attempt and
+says nothing about which way you look. A drawing with nowhere to put the marker
+(a front-only sheet with an xz section) reports `marked_on: null` rather than
+inventing a place for it.
 
-**Multi-body documents.** The durable unit is one `DesignDocument` with one
-root. Real parts are sometimes several disjoint solids, and
-`geometry_check.check_solid` already counts connected components — it reports
-multi-body as a finding because nothing downstream can represent it.
+Two things found on the way, both in the title block: the material name printed
+straight through the mass, and the `font-size` **attribute** that was supposed to
+prevent it had never had any effect, because `.tbt` sets font-size in CSS and a
+stylesheet declaration beats a presentation attribute. Values are now scaled to
+their column via `style`.
 
-**Trajectory dataset export at volume.** `decompile_all` and `export_jsonl`
-exist and work on single documents. What has not been done is running them over
-a corpus, measuring the replay-verification hit rate, and reporting which
-feature types fail to decompile. That number is the actual health metric for the
-training-data half of this project, and nobody has looked at it.
+Still missing, and still worth doing: detail and auxiliary views, PDF output, and
+BOM balloons for assemblies.
+
+**Exact assembly interference.** `_overlap_volume` runs `BRepAlgoAPI_Common` on
+the two placed solids, so a clash reports `overlap_mm3` alongside the sampled
+penetration depth — two 40 mm cubes 30 mm apart report exactly 16000 mm³, not a
+sample count. Only asked of a real clash: `Common` on two parts that merely sit
+close is an OCC boolean returning a zero. Where either body has no exact form the
+field is `null` rather than `0.0`, because "they do not overlap" and "I could not
+measure the overlap" are different answers.
+
+**Multi-body documents.** Volume, mass and the bounding box were already correct
+across disjoint solids — they are sums and unions. What was missing was any way
+to *see* them, so "2 disconnected bodies" could not be told from "the part fell
+in half". The `bodies` operation lists each solid largest-first with its own
+volume, size and position, plus `largest_fraction`, because an accidental
+severing leaves one big piece and slivers while two intended parts do not.
+
+Intent is declared through the **spec**, not a new flag: `check_geometry` reads
+the existing `bodies` requirement and a part that matches it passes instead of
+warning. Declaring it is not a way to switch the check off — a part that falls
+short of its declared count still warns, and names the number it was asked for.
+
+**Trajectory dataset export at volume.** `decompiler.corpus_report` is the metric
+that nobody had looked at, published at `GET /api/trajectories/corpus-health`.
+Measured against a corpus covering **every feature type the catalog can build**,
+the replay-verification hit rate is **100%** (19 types, all recovered). Measuring
+it against whatever happens to be in the datastore flatters itself: the
+rule-based text-to-CAD parser emits mostly plain boxes, and 15 generated
+documents also scored 100% while saying nothing.
+
+The report exists to be actionable, so it splits losses by `cause`
+(`unsupported` / `replay_failed` / `geometry_mismatch`) and ranks feature types
+worst-first. `blocking` is the column that matters: every type in an
+undecompilable document shows a 0% rate, so a `BoxFeature` sitting next to an
+`OptimizeFeature` gets dragged down with it and the rate alone would send you off
+to fix boxes.
+
+It found two things. `BrepBodyFeature` fell through to "no operation builds
+BrepBodyFeature" — true, but it reads as a missing emitter rather than as a
+serialized payload no replay can hold; it is in `_OPAQUE` now with the honest
+reason. And **nested booleans** were the one genuinely fixable gap:
+`union(plate, subtract(boss, bore))` is a shape whole-tree generation produces
+routinely, and no operation could express it because every builder combined with
+the root. Every builder now takes `target`, so a body can be combined with one
+feature instead — the difference between a hole in the boss and a hole through
+the whole part — and returns `group_id` for the boolean it created, which the
+decompiler references as `{"$group": i}` so a third child joins that group
+rather than nesting a fresh pair around the second.
 
 ---
 
