@@ -367,6 +367,85 @@ export interface ReferenceReport {
   message: string
 }
 
+// ── Sketching ────────────────────────────────────────────────────────────────
+
+/** Mirrors `services/sketch_solver`'s residual table. */
+export type ConstraintType =
+  | 'fixed' | 'coincident' | 'horizontal' | 'vertical' | 'distance'
+  | 'parallel' | 'perpendicular' | 'equal_length' | 'radius' | 'point_on_line'
+  | 'arc_radius' | 'tangent' | 'concentric' | 'symmetric' | 'angle'
+  | 'midpoint' | 'equal_radius' | 'point_on_circle'
+
+export interface SketchPoint { id: string; x: number; y: number }
+export interface SketchLine { id: string; a: string; b: string; construction?: boolean }
+export interface SketchArc {
+  id: string; a: string; b: string; center: string; ccw: boolean; construction?: boolean
+}
+export interface SketchCircle {
+  id: string; center: string; radius: number; construction?: boolean
+}
+export interface SketchConstraint { id?: string; type: ConstraintType; [k: string]: unknown }
+
+export interface SketchSpec {
+  points: SketchPoint[]
+  lines?: SketchLine[]
+  arcs?: SketchArc[]
+  circles?: SketchCircle[]
+  constraints?: SketchConstraint[]
+}
+
+/**
+ * What a solve established, not merely whether it converged.
+ *
+ * `converged` is `residual < 1e-6`, which an *unconstrained* sketch satisfies
+ * trivially — so it is kept for callers that read it but says nothing on its
+ * own. `status` and `dof` are the answer.
+ */
+export type SketchStatus =
+  | 'well_constrained' | 'under_constrained' | 'over_constrained' | 'conflicting'
+
+export interface ConstraintRef {
+  kind: 'constraint' | 'arc'
+  index?: number
+  id?: string | null
+  type?: string
+  label: string
+  residual?: number
+  weight?: number
+}
+
+export interface SketchSolution {
+  points: Record<string, [number, number]>
+  radii: Record<string, number>
+  residual: number
+  converged: boolean
+  status: SketchStatus
+  dof: number
+  redundant: number
+  rank: number
+  variables: number
+  equations: number
+  conflicts: ConstraintRef[]
+  redundant_groups: ConstraintRef[][]
+  message: string
+  loops: { type: 'loops'; loops: unknown[] } | null
+  polygon: [number, number][] | null
+}
+
+/** What `add_sketch` / `create_sketch` / `update_sketch` report back. */
+export interface SketchOpResult {
+  message: string
+  feature_id?: string
+  converged: boolean
+  residual: number
+  status: SketchStatus
+  dof: number
+  redundant: number
+  redundant_groups: ConstraintRef[][]
+  solver_message: string
+  consumers?: string[]
+}
+
 export interface SpecReport {
   goal?: string | null
   checks: DfmCheck[]

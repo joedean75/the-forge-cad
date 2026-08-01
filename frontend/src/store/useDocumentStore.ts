@@ -71,12 +71,16 @@ interface DocumentState {
   undo: () => Promise<void>
   redo: () => Promise<void>
   sketchOpen: boolean
-  sketchEdit: { featureId: string; sketch: SketchSpec; plane: string; depth: number; offset: number } | null
+  sketchEdit: { featureId: string; sketch: SketchSpec; plane: string; depth: number; offset: number;
+      /** A standalone SketchFeature has no depth of its own — the consumer owns it. */
+      standalone?: boolean } | null
   /** True while the user is picking a sketch plane (a face in the viewport or a base plane). */
   sketchPick: boolean
   /** How a new sketch should be seeded once the overlay opens (from the pick step). */
   sketchPreset: { onFace?: { featureId: string; face: string }; plane?: string } | null
-  openSketch: (edit?: { featureId: string; sketch: SketchSpec; plane: string; depth: number; offset: number }) => void
+  openSketch: (edit?: { featureId: string; sketch: SketchSpec; plane: string; depth: number; offset: number;
+      /** A standalone SketchFeature has no depth of its own — the consumer owns it. */
+      standalone?: boolean }) => void
   closeSketch: () => void
   /** Enter face/plane-picking mode (viewport + feature tree) before the sketch opens. */
   startSketchPick: () => void

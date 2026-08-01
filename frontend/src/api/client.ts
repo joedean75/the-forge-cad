@@ -5,6 +5,9 @@ import type {
   OptimizeJob,
   PartSpec,
   ReferenceReport,
+  SketchOpResult,
+  SketchSolution,
+  SketchSpec,
   SimulationResult,
   SpecReport,
   SpecRequirement,
@@ -236,8 +239,10 @@ export const api = {
   // because that catalog *is* the API: the same call an agent makes.
 
   /** Selectable faces, largest first. PRECONDITION when the body has no exact form. */
-  listFaces: (id: string) =>
-    api.runOperation<{ faces: FaceRef[]; count: number }>(id, 'list_faces'),
+  /** Pass `feature` for one feature's own faces — the id space a sketch plane uses. */
+  listFaces: (id: string, feature?: string) =>
+    api.runOperation<{ faces: FaceRef[]; count: number; feature?: string }>(
+      id, 'list_faces', feature ? { feature } : undefined),
   listEdges: (id: string, filter?: { kind?: 'all' | 'line' | 'circle'; min_length_mm?: number }) =>
     api.runOperation<{ edges: EdgeRef[]; count: number }>(id, 'list_edges', filter),
   /** `edges` accepts the string "all" in place of an id list. */
@@ -299,16 +304,23 @@ export const api = {
   solveSketch: (spec: {
     points: unknown[]
     lines?: unknown[]
+    arcs?: unknown[]
     circles?: unknown[]
     constraints?: unknown[]
-  }) =>
-    fetchJson<{
-      points: Record<string, [number, number]>
-      radii: Record<string, number>
-      residual: number
-      converged: boolean
-      polygon: [number, number][] | null
-    }>('/sketch/solve', { method: 'POST', body: JSON.stringify(spec) }),
+  }) => fetchJson<SketchSolution>('/sketch/solve', { method: 'POST', body: JSON.stringify(spec) }),
+
+  /** A sketch as its own feature: shared by every extrude/revolve/loft that reads it. */
+  createSketch: (
+    id: string,
+    sketch: SketchSpec,
+    where: { plane?: string; offset?: number; on_face?: unknown; name?: string } = {},
+  ) => api.runOperation<SketchOpResult>(id, 'create_sketch', { sketch, ...where }),
+  /** Re-solve a sketch feature or an add_sketch extrude; reports which features moved. */
+  updateSketch: (id: string, featureId: string, sketch: SketchSpec, rest: Record<string, unknown> = {}) =>
+    api.runOperation<SketchOpResult>(id, 'update_sketch', { feature_id: featureId, sketch, ...rest }),
+  /** Re-solve without changing anything — status, dof, conflicting constraints. */
+  checkSketch: (id: string, what: { feature_id?: string; sketch?: SketchSpec }) =>
+    api.runOperation<SketchSolution & SketchOpResult>(id, 'check_sketch', what),
 
   // ── Materials, parameters, mass properties ──
   listMaterials: () =>

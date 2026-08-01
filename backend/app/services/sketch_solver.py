@@ -13,6 +13,10 @@ concentric, symmetric, angle, midpoint, equal_radius, point_on_circle. Arcs
 carry an implicit equal-radius residual (both endpoints equidistant from the
 center) so they stay circular without an explicit constraint.
 
+A line, arc or circle marked ``construction: true`` is solved and constrained
+like any other, and left out of the profile: a centreline or a bolt circle is
+there to measure from, not to extrude.
+
 **The solver says what is wrong, not just whether it converged.** `converged`
 was `residual < 1e-6`, which an *unconstrained* sketch satisfies trivially — the
 same class of bug as the hardcoded `ok: True` the operation envelope was built
@@ -526,11 +530,21 @@ def _arc_points(
 
 
 def _edges_of(spec: dict) -> List[dict]:
-    """Lines and arcs as a uniform edge list, in spec order."""
+    """Lines and arcs as a uniform edge list, in spec order.
+
+    Construction geometry is left out. A centreline, a bolt-circle or a mirror
+    axis is there to be constrained *against* — it drives the solve like any
+    other entity — but it is not part of the outline, and a profile that
+    included it would not close.
+    """
     edges: List[dict] = []
     for line in spec.get("lines", []):
+        if line.get("construction"):
+            continue
         edges.append({"a": line["a"], "b": line["b"], "kind": "line"})
     for arc in spec.get("arcs", []):
+        if arc.get("construction"):
+            continue
         edges.append({
             "a": arc["a"],
             "b": arc["b"],
@@ -643,7 +657,7 @@ def sketch_to_loops(spec: dict, solved: dict) -> dict:
 
     for circle in spec.get("circles", []):
         radius = float(radii.get(circle["id"], circle.get("radius", 0.01)))
-        if radius <= 0:
+        if radius <= 0 or circle.get("construction"):
             continue
         loops.append({"curves": [{"kind": "circle",
                                   "center": list(pts[circle["center"]]),

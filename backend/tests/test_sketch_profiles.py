@@ -175,6 +175,29 @@ def test_area_subtracts_holes_and_adds_islands_back():
         0.06 * 0.04 - math.pi * 0.015 ** 2 + math.pi * 0.005 ** 2, rel=3e-3)
 
 
+def test_construction_geometry_constrains_but_is_not_extruded():
+    """A centreline or a bolt circle is there to measure from, not to extrude."""
+    with_axis = _with(RECT,
+                      points=[{"id": "m1", "x": 0.0, "y": -0.02},
+                              {"id": "m2", "x": 0.0, "y": 0.02}],
+                      lines=[{"id": "axis", "a": "m1", "b": "m2", "construction": True}])
+    with_axis["constraints"] = [{"type": "vertical", "line": "axis"}]
+
+    profile = _profile(with_axis)
+    assert len(profile["loops"]) == 1, "the construction line is not a second loop"
+    assert profile2d.curve_count(profile) == 4
+    # It still took part in the solve — an unknown line would have raised.
+    assert sketch_solver.solve_sketch(with_axis)["status"] == "under_constrained"
+
+
+def test_a_construction_circle_is_not_a_hole():
+    bolt_circle = _with(RECT, points=[{"id": "c", "x": 0.0, "y": 0.0}],
+                        circles=[{"id": "bc", "center": "c", "radius": 0.015,
+                                  "construction": True}])
+    profile = _profile(bolt_circle)
+    assert profile2d.kinds(profile) == ["line"] * 4
+
+
 # ------------------------------------------------------------ back-compat --
 
 def test_a_persisted_polygon_profile_still_means_what_it_meant():

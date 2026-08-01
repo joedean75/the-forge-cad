@@ -1,5 +1,12 @@
 # Sketch roadmap — three sprints
 
+> **Status: all three landed.** S1 in `Sketch S1: stop flattening a sketch
+> before the kernel sees it`, S2 in `Sketch S2: a solver that says what is
+> wrong`, S3 across the backend and UI commits that follow. What each one
+> actually shipped, and where it differed from the plan, is recorded at the end
+> of its section. The tests are `backend/tests/test_sketch_profiles.py`,
+> `test_sketch_solver_diagnosis.py` and `test_sketch_feature.py`.
+
 The exact-kernel programme is finished (`SPRINT-ROADMAP.md`). Sketching is the
 part of the modelling surface it did not touch, and it is now the weakest link:
 the kernel underneath can hold exact arcs, addressable bores and real STEP, and
@@ -20,6 +27,9 @@ trap that will actually bite. Every claim below was measured against the code on
 | Sketch-on-face that follows an upstream resize | `services/datum.py` |
 | `add_sketch` / `update_sketch`, with the editable spec kept on the feature | `cad_operations` |
 | A drawing canvas with line/rect/circle/arc, point snapping and 10 constraint buttons | `frontend/src/features/sketch/SketchCanvas.tsx` |
+
+*(That table is the state before these three sprints. What each added is in its
+"What landed" section.)*
 
 That is a real sketcher's skeleton. What follows is what it cannot do.
 
@@ -101,6 +111,31 @@ every other feature.
 
 **Size.** Large. Three representations have to agree — solver output, SDF, B-rep.
 
+### What landed
+
+As planned, plus two things the plan did not anticipate.
+
+Containment turned out to want a module of its own — `cad_kernel/geom/profile2d.py`
+— rather than a branch in each evaluator. Even-odd parity is computed *there and
+only there*, and both `evaluator/sdf.profile_sdf_2d` and `evaluator/brep._loops_faces`
+read it, because two implementations of "which loop is a hole" is exactly the
+divergence the sprint was meant to prevent. Nesting therefore works to any depth
+and an island inside a bore falls out as its own face.
+
+`_loop_wire` takes a *placement function* rather than a plane name, so revolve
+and ruled loft build from loops too — the plan only covered extrude, and leaving
+revolve behind would have made S3's "hand a sketch to any of them" impossible.
+
+Measured across four profiles (circle-only, plate + bore, island-in-bore, rounded
+corner): the exact kernel matches the closed-form volume to **1e-9 relative** and
+the distance field to **2e-4**. A rounded corner is 6 planes and 1 cylinder, not
+29 planes. A sketched Ø20 bore satisfies a `hole` requirement and its two rims
+fillet by name.
+
+One bug found on the way that the plan had no reason to predict: `/api/sketch/solve`
+declared no `arcs` field, so a sketch containing an arc solved over HTTP as if
+the arc were not there.
+
 ---
 
 ## Sprint S2 — a solver that says what is wrong
@@ -167,6 +202,41 @@ works rather than merely existing.
 
 **Size.** Medium. The constraints are small; the diagnosis is the work.
 
+### What landed
+
+All four items, and the three reference sketches report exactly what the plan
+predicted: `well_constrained, dof 0`; `under_constrained, dof 2`; and
+`over_constrained` naming both diagonals. The rounded slot solves to residual
+**0.0** with all four tangencies satisfied.
+
+Two corrections to the plan's design:
+
+- **Redundancy names a group, not a culprit.** The plan said "report the ones
+  spanning the Jacobian's null space", which it does — but the honest reading of
+  that answer is "these five constraints carry four constraints' worth of
+  information", not "constraint #7 is the extra one". Every member of a
+  dependent cycle is individually removable, so nominating one would be an
+  invention. The group is ordered by null-space weight and the constraint that
+  created the cycle leads it, which is as close to naming a culprit as the maths
+  allows. A *conflict* is different and is named exactly, by residual.
+- **The rank tolerance is applied to a row-normalised Jacobian.** Scaling it
+  "relative to the sketch" is not enough on its own: residual rows are not
+  commensurate (`parallel` is a cross product, `distance` is a length, `angle`
+  is radians), so a metre-to-millimetre rescale moves them by different factors.
+  Row normalisation removes that and cannot change the row space. Metres,
+  millimetres and micrometres now diagnose identically, by test.
+
+Two things fixed along the way. `fixed` defaulted a missing axis to the point's
+*live* coordinate, giving a residual that is identically zero with a zero
+derivative — it pinned nothing and still counted as an equation, so pinning only
+`y` reported a phantom redundancy. And `least_squares` ran at its default 1e-8
+tolerances, which left an under-constrained solve sitting around 5e-9 — an order
+of magnitude from the 1e-6 `converged` claims. These systems are a few dozen
+unknowns, so 1e-14 costs nothing.
+
+Extra: a `check_sketch` query re-solves a saved or unsaved sketch and changes
+nothing, so an agent can ask "is this sketch sound?" without committing an edit.
+
 ---
 
 ## Sprint S3 — a sketch that is a thing, not an argument
@@ -225,6 +295,48 @@ touching the API by hand.
 
 **Size.** Large, but genuinely incremental — the feature, the consumers, the face
 binding and the canvas each ship on their own.
+
+### What landed
+
+All four items. `SketchFeature` is in the tree and is *substituted and pruned*
+before evaluation (`feature_ops.resolve_sketches`), which is what let every
+downstream consumer — booleans, the mesher, the bounding box, DFM, the drawing
+projector — go on seeing exactly the tree shape it always saw. The trap the plan
+flagged about `resolve_suppressed` and single-child collapse was real, and the
+answer was to reuse the same prune-and-collapse walk rather than teach every
+consumer about a bodiless node.
+
+Three differences from the plan:
+
+- **`add_sweep` was left out.** It has no profile to give it — `SweepSDF` is a
+  union of capsules along a 3D path, so `sketch:` would have nothing to bind to.
+- **The face reference stores the whole descriptor, not the id.** The plan said
+  "`on_face` accepts a face id from `list_faces`", and the first version did
+  exactly that — and lost the face on every resize, because an id is a hash of
+  the face's current measurements. `_selected` had already learned this for
+  fillet edges; the sketch datum now stores what that stores.
+- **`list_faces` grew a `feature` argument.** A sketch is placed on a face of
+  *the feature it names*, matching the symbolic path's scoping, and a sub-body's
+  face ids are its own — so there had to be a way to list them. Scoping it to a
+  feature is also what keeps a sketch's own extrusion out of the datum it sits
+  on.
+
+The decompiler emits sketches up front, once each, with consumers referencing
+the step, so a shared sketch survives into the corpus as one `create_sketch` and
+two references.
+
+On the canvas: a status/DOF chip in the header, the eight new constraints as
+buttons, dimensions drawn *on* the sketch with click-to-edit figures,
+construction geometry (dashed, solved, excluded from the profile), and
+trim/extend/offset/mirror. A "Sketch only" toggle saves a reusable
+`SketchFeature` instead of extruding, and with one selected the Extrude/Revolve/
+Loft tools build from it. Verified end to end in a browser: one sketch driving an
+extrude *and* a revolve, then one dimension changed on the canvas moving both.
+
+Trim and extend edit the *drawing*, not the constraint system — a constraint
+naming an entity a trim replaced is dropped rather than left to fail in the
+solver. Re-anchoring constraints through a trim needs the solver to own the
+geometry rather than the canvas, and that is a larger change than this sprint.
 
 ---
 

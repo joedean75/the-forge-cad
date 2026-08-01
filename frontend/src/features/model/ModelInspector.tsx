@@ -387,6 +387,40 @@ function FeatureFields() {
         </>
       )}
 
+      {/* A sketch as its own feature: no body, and every extrude/revolve/loft
+          reading it moves when it is edited. */}
+      {node.type === 'SketchFeature' && (
+        <>
+          <button
+            onClick={() =>
+              openSketch({
+                featureId: node.id!,
+                sketch: p.sketch as never,
+                plane: String(p.plane ?? 'xy'),
+                depth: 0,
+                offset: Number(p.offset ?? 0),
+                standalone: true,
+              })
+            }
+            className="w-full flex items-center justify-center gap-1.5 py-2 rounded-sm bg-cad-accent text-cad-bg text-xs font-semibold hover:bg-cad-accent-hot transition-colors"
+          >
+            Edit sketch
+          </button>
+          <div className="text-[11px] text-cad-text/70 leading-relaxed">
+            {(() => {
+              const solved = (p.solved ?? {}) as Record<string, unknown>
+              const status = String(solved.status ?? 'unsolved').replace(/_/g, '-')
+              const dof = Number(solved.dof ?? 0)
+              return `${status}${dof > 0 ? ` · ${dof} degree(s) of freedom` : ''}`
+            })()}
+          </div>
+          <div className="text-[11px] text-cad-text/50 leading-relaxed">
+            This sketch builds no body of its own. Give its id to an extrude, revolve
+            or loft; editing it moves every one of them.
+          </div>
+        </>
+      )}
+
       {node.type === 'ExtrudeFeature' && p.sketch == null && (() => {
         const profile = (p.profile ?? {}) as Record<string, number | string>
         const ptype = String(profile.type ?? 'rect')
