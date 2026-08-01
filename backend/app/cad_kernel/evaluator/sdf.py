@@ -843,6 +843,10 @@ def _sdf_needs_exact_kernel(f):
     )
 
 
+def _sdf_sketch(f):
+    return f.evaluate()          # raises SketchNotConsumed, naming the sketch
+
+
 def _sdf_import(f):
     if f.cache and f.cache.get("density_packed"):
         return _cached_import_grid_sdf(f.cache)
@@ -881,6 +885,11 @@ _SDF_BUILDERS = {
     "FaceShellFeature": _sdf_needs_exact_kernel,
     "BrepBodyFeature": _sdf_needs_exact_kernel,
     "RuledLoftFeature": _sdf_needs_exact_kernel,
+    # A sketch is geometry other features consume; `feature_ops.resolve_sketches`
+    # substitutes it and takes it out of the tree before anything evaluates.
+    # Registered so reaching here says that, rather than producing a plausible
+    # empty solid that would quietly delete the body it was meant to describe.
+    "SketchFeature": _sdf_sketch,
 }
 
 

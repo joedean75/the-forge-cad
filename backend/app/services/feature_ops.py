@@ -337,6 +337,107 @@ def resolve_suppressed(tree: Dict[str, Any]) -> Dict[str, Any]:
     return {"version": t.get("version", "brep-v1"), "root": root}
 
 
+# Which params a consumer takes from the sketch it references. Keyed by the
+# reference param, because a loft references two.
+#
+# An extrude adopts the sketch's *placement* as well as its outline — the sketch
+# is where the outline lives, and a second extrude of it at another height would
+# otherwise silently disagree with the sketch the canvas draws. A revolve reads
+# the profile in (radius, height) and has an axis of its own, so a plane would
+# mean nothing to it.
+_SKETCH_CONSUMERS: Dict[str, Dict[str, Dict[str, str]]] = {
+    "ExtrudeFeature": {"sketch_ref": {"profile": "profile", "plane": "plane",
+                                      "offset": "offset", "plane_origin": "plane_origin",
+                                      "on_face": "on_face"}},
+    "RevolveFeature": {"sketch_ref": {"profile": "profile"}},
+    "LoftFeature": {"sketch_ref_a": {"profile": "profile_a"},
+                    "sketch_ref_b": {"profile": "profile_b"}},
+    "RuledLoftFeature": {"sketch_ref_a": {"profile": "profile_a"},
+                         "sketch_ref_b": {"profile": "profile_b"}},
+}
+
+SKETCH_TYPE = "SketchFeature"
+
+# Feature types that can carry an ``on_face`` datum. A SketchFeature is here
+# because that is where the placement belongs once the sketch is its own thing —
+# an extrude consuming it inherits the reference through `resolve_sketches`, so
+# it is still the extrude that gets resolved, from one code path.
+_DATUM_HOSTS = ("ExtrudeFeature",)
+
+
+def sketch_consumers(tree: Dict[str, Any], sketch_id: str) -> List[Dict[str, Any]]:
+    """Every feature that reads ``sketch_id``. Empty is fine — a sketch may wait."""
+    out = []
+    for node in walk_nodes(tree):
+        refs = _SKETCH_CONSUMERS.get(node.get("type")) or {}
+        params = node.get("params") or {}
+        if any(params.get(key) == sketch_id for key in refs):
+            out.append(node)
+    return out
+
+
+def resolve_sketches(tree: Dict[str, Any]) -> Dict[str, Any]:
+    """Substitute each sketch into the features that read it, then remove it.
+
+    A `SketchFeature` is geometry other features consume and has no body of its
+    own, so it must not reach an evaluator: nothing downstream — booleans, the
+    mesher, the bounding box, DFM — has a sensible answer for a node that is not
+    a solid. Substituting and pruning here means every one of them goes on seeing
+    exactly the tree shape it always saw, and the sharing is real rather than a
+    copy: two features reading one sketch get the same outline, and editing the
+    sketch moves both.
+
+    A sketch nobody reads simply disappears from the evaluation tree, which is
+    what "it contributes nothing" has to mean. A reference to a sketch that is
+    gone (deleted, or suppressed before this runs) leaves the consumer's last
+    substituted profile in place — the same fallback `resolve_datums` uses.
+    """
+    sketches = {node["id"]: (node.get("params") or {})
+                for node in walk_nodes(tree)
+                if node.get("type") == SKETCH_TYPE and node.get("id")}
+    if not sketches:
+        return copy.deepcopy(tree)
+
+    t = copy.deepcopy(tree)
+
+    for node in walk_nodes(t):
+        refs = _SKETCH_CONSUMERS.get(node.get("type"))
+        if not refs:
+            continue
+        params = node.setdefault("params", {})
+        for ref_key, mapping in refs.items():
+            source = sketches.get(params.get(ref_key))
+            if source is None:
+                continue
+            for from_key, to_key in mapping.items():
+                if from_key in source:
+                    params[to_key] = copy.deepcopy(source[from_key])
+
+    def prune(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if node.get("type") == SKETCH_TYPE:
+            return None
+        kids = children_of(node)
+        if kids:
+            kept = [r for r in (prune(c) for c in kids) if r is not None]
+            node["params"]["children"] = kept
+            if is_boolean(node):
+                if not kept:
+                    return None
+                if len(kept) == 1:
+                    return kept[0]
+        return node
+
+    root = prune(t["root"]) if t.get("root") else None
+    if root is None:
+        # Same stand-in `resolve_suppressed` uses for "nothing is left": a
+        # document holding only sketches has no body yet, which is a legitimate
+        # state to be in halfway through drawing one.
+        root = {"type": "BoxFeature", "id": "f_empty", "name": "Empty",
+                "params": {"size": {"x": 0.001, "y": 0.001, "z": 0.001},
+                           "center": {"x": 0, "y": 0, "z": 0}}}
+    return {"version": t.get("version", "brep-v1"), "root": root}
+
+
 def resolve_datums(tree: Dict[str, Any]) -> Dict[str, Any]:
     """Bake symbolic ``on_face`` references into concrete plane/offset params.
 
@@ -362,7 +463,7 @@ def resolve_datums(tree: Dict[str, Any]) -> Dict[str, Any]:
     def walk(node: Dict[str, Any]) -> None:
         params = node.get("params", {})
         ref = params.get("on_face")
-        if node.get("type") == "ExtrudeFeature" and isinstance(ref, dict):
+        if node.get("type") in _DATUM_HOSTS and isinstance(ref, dict):
             fid = ref.get("feature_id")
             face = ref.get("face")
             if fid and fid != node.get("id"):
@@ -375,12 +476,23 @@ def resolve_datums(tree: Dict[str, Any]) -> Dict[str, Any]:
                 is_ancestor = target is not None and node.get("id") in _subtree_ids(target)
                 if not is_ancestor:
                     try:
-                        plane, offset, origin_uv = datum.resolve_face_frame(t, fid, face)
+                        if ref.get("face_id"):
+                            plane, offset, origin_uv, status = datum.resolve_face_id_frame(
+                                t, fid, ref.get("face_ref") or ref["face_id"])
+                            params["on_face_status"] = status
+                        else:
+                            plane, offset, origin_uv = datum.resolve_face_frame(t, fid, face)
                         params["plane"] = plane
                         params["offset"] = offset
                         params["plane_origin"] = list(origin_uv)  # zero the sketch on the face
-                    except (KeyError, ValueError):
-                        pass  # keep the baked-in fallback plane/offset
+                    except (KeyError, ValueError) as exc:
+                        # Keep the baked-in fallback plane/offset, but say why —
+                        # `check_references` reads this back, and "the face you
+                        # sketched on is gone" is the only useful thing to report
+                        # when an upstream edit destroyed it.
+                        if ref.get("face_id"):
+                            params["on_face_status"] = "unresolved"
+                            params["on_face_detail"] = str(exc)
         for c in children_of(node):
             walk(c)
 

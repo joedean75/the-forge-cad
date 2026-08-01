@@ -181,23 +181,23 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
     _ensure_feature_ids(doc.feature_tree)
     tree_hash = _hash_tree(doc.feature_tree)
     try:
-        from app.services import feature_ops
-
-        from app.services import parameters
-
-        active = feature_ops.resolve_suppressed(doc.feature_tree)
-        active = feature_ops.resolve_datums(active)  # bake sketch-on-face refs from live geometry
         if doc.parameters:
+            # Evaluating is also when a driving parameter's computed value is
+            # refreshed on the document. The *tree* resolution is `resolved_tree`
+            # and only `resolved_tree` — five copies of that sequence had grown,
+            # and the sixth is how a document evaluates to one body here and a
+            # different one in the slicer.
+            from app.services import parameters
+
             overrides = {}
             if doc.active_configuration:
                 cfg = next((c for c in doc.configurations if c.name == doc.active_configuration), None)
                 if cfg:
                     overrides = cfg.overrides
-            scope, resolved = parameters.resolve_values(doc.parameters, overrides)
+            _, resolved = parameters.resolve_values(doc.parameters, overrides)
             for p, rd in zip(doc.parameters, resolved):
                 p.value = rd.get("value")
-            active = parameters.resolve_tree(active, scope)  # bake driving params
-        tree = FeatureTree.from_dict(active)
+        tree = FeatureTree.from_dict(resolved_tree(doc))
         sampler = Kernel.sampler_for(tree.root)
         solid = Kernel.evaluate_tree(tree, resolution=resolution)
         mesh = Kernel.tessellate(solid)
@@ -250,7 +250,12 @@ def resolved_tree(doc: DesignDocument) -> dict:
     """
     from app.services import feature_ops
 
-    active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
+    # Sketches are substituted before datums, so an extrude that adopted its
+    # sketch's `on_face` is resolved by the one datum path rather than a second
+    # copy of it.
+    active = feature_ops.resolve_datums(
+        feature_ops.resolve_sketches(
+            feature_ops.resolve_suppressed(doc.feature_tree)))
     if doc.parameters:
         from app.services import parameters
 

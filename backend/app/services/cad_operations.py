@@ -251,39 +251,66 @@ def _add_primitive(doc_id, args):
     return _combined(doc_id, prim, args, str(args["shape"]))
 
 
-@operation("add_extrude", "mutate", "Sketch a 2D profile on a plane and extrude it into a solid (unioned or subtracted).",
+_SKETCH_REF = {"type": "string",
+               "description": "a SketchFeature id from create_sketch, in place of 'profile'. "
+                              "Several features can read one sketch; editing it moves all of them"}
+
+
+def _sketch_reference(doc_id: str, args: dict, params: dict, ref_key: str,
+                      arg_key: str = "sketch") -> None:
+    """Bind a consumer to a sketch feature, if one was named.
+
+    The profile is substituted at evaluation time (`feature_ops.resolve_sketches`)
+    rather than copied here, which is what makes the sharing real: a copy would
+    drift the moment the sketch was edited, and nothing would notice.
+    """
+    sketch_id = args.get(arg_key)
+    if not sketch_id:
+        return
+    node = feature_ops.find_node(_get(doc_id).feature_tree, sketch_id)
+    if node is None or node.get("type") != feature_ops.SKETCH_TYPE:
+        raise NoSuchFeature(f"no sketch feature {sketch_id!r} — create_sketch makes one",
+                            arg=arg_key)
+    params[ref_key] = sketch_id
+
+
+@operation("add_extrude", "mutate", "Sketch a 2D profile on a plane and extrude it into a solid (unioned or subtracted). "
+           "Pass 'sketch' with a create_sketch feature id instead of 'profile' to extrude a shared, constrained sketch.",
            {"profile": {"type": "object", "description": "{type:rect|circle|polygon|loops, ...} in metres. 'loops' is the sketch form: {loops:[{curves:[{kind:line|arc|circle, ...}]}]}, nested loops read even-odd so an inner loop is a hole"},
+           "sketch": _SKETCH_REF,
            "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
            "offset": {"type": "number"}, "depth": {"type": "number"},
            "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
            "target": _COMBINE_TARGET})
 def _add_extrude(doc_id, args):
     doc = _get(doc_id)
-    node = {
-        "type": "ExtrudeFeature", "name": "Extrude",
-        "params": {
-            "profile": args.get("profile", {"type": "rect", "width": 0.05, "height": 0.03, "cx": 0.0, "cy": 0.0}),
-            "plane": args.get("plane", "xy"),
-            "offset": args.get("offset", 0.0),
-            "depth": args.get("depth", 0.02),
-        },
+    params = {
+        "profile": args.get("profile", {"type": "rect", "width": 0.05, "height": 0.03, "cx": 0.0, "cy": 0.0}),
+        "plane": args.get("plane", "xy"),
+        "offset": args.get("offset", 0.0),
+        "depth": args.get("depth", 0.02),
     }
+    _sketch_reference(doc_id, args, params, "sketch_ref")
+    node = {"type": "ExtrudeFeature", "name": "Extrude", "params": params}
     return _combined(doc_id, node, args, "extrude")
 
 
 @operation("add_revolve", "mutate", "Revolve a 2D profile (authored in radius/height, metres) about an axis to make a "
            "turned part — shaft, wheel, pulley, bottle. angle<360 = partial revolve.",
            {"profile": {"type": "object", "description": "{type:rect|circle|polygon|loops} in (radius,height)"},
+           "sketch": _SKETCH_REF,
            "axis": {"enum": ["x", "y", "z"], "default": "z"}, "center": _VEC,
            "angle": {"type": "number", "default": 360},
            "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
            "target": _COMBINE_TARGET})
 def _add_revolve(doc_id, args):
     doc = _get(doc_id)
-    node = {"type": "RevolveFeature", "name": "Revolve", "params": {
+    params = {
         "profile": args.get("profile", {"type": "rect", "width": 0.01, "height": 0.03, "cx": 0.02, "cy": 0.0}),
         "axis": args.get("axis", "z"), "center": args.get("center", {"x": 0, "y": 0, "z": 0}),
-        "angle": args.get("angle", 360.0)}}
+        "angle": args.get("angle", 360.0)}
+    _sketch_reference(doc_id, args, params, "sketch_ref")
+    node = {"type": "RevolveFeature", "name": "Revolve", "params": params}
     return _combined(doc_id, node, args, "revolve")
 
 
@@ -301,16 +328,21 @@ def _add_sweep(doc_id, args):
 
 @operation("add_loft", "mutate", "Loft between two profiles at two heights along a plane normal — adapters, tapers, funnels.",
            {"profile_a": {"type": "object"}, "profile_b": {"type": "object"},
+           "sketch_a": _SKETCH_REF, "sketch_b": _SKETCH_REF,
            "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
            "offset_a": {"type": "number"}, "offset_b": {"type": "number"},
            "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
            "target": _COMBINE_TARGET})
 def _add_loft(doc_id, args):
     doc = _get(doc_id)
-    node = {"type": "LoftFeature", "name": "Loft", "params": {
+    params = {
         "profile_a": args.get("profile_a", {"type": "rect", "width": 0.04, "height": 0.04, "cx": 0, "cy": 0}),
         "profile_b": args.get("profile_b", {"type": "circle", "radius": 0.015, "cx": 0, "cy": 0}),
-        "plane": args.get("plane", "xy"), "offset_a": args.get("offset_a", 0.0), "offset_b": args.get("offset_b", 0.05)}}
+        "plane": args.get("plane", "xy"), "offset_a": args.get("offset_a", 0.0),
+        "offset_b": args.get("offset_b", 0.05)}
+    _sketch_reference(doc_id, args, params, "sketch_ref_a", "sketch_a")
+    _sketch_reference(doc_id, args, params, "sketch_ref_b", "sketch_b")
+    node = {"type": "LoftFeature", "name": "Loft", "params": params}
     return _combined(doc_id, node, args, "loft")
 
 
@@ -320,6 +352,7 @@ def _add_loft(doc_id, args):
            "shapes, both useful. Set ruled=false for a smooth surface through the sections. "
            "Requires the exact kernel.",
            {"profile_a": {"type": "object"}, "profile_b": {"type": "object"},
+           "sketch_a": _SKETCH_REF, "sketch_b": _SKETCH_REF,
            "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
            "offset_a": {"type": "number"}, "offset_b": {"type": "number"},
            "ruled": {"type": "boolean", "default": True,
@@ -328,12 +361,15 @@ def _add_loft(doc_id, args):
            "target": _COMBINE_TARGET})
 def _add_ruled_loft(doc_id, args):
     doc = _get(doc_id)
-    node = {"type": "RuledLoftFeature", "name": "Ruled loft", "params": {
+    params = {
         "profile_a": args.get("profile_a", {"type": "rect", "width": 0.04, "height": 0.04, "cx": 0, "cy": 0}),
         "profile_b": args.get("profile_b", {"type": "circle", "radius": 0.015, "cx": 0, "cy": 0}),
         "plane": args.get("plane", "xy"),
         "offset_a": args.get("offset_a", 0.0), "offset_b": args.get("offset_b", 0.05),
-        "ruled": bool(args.get("ruled", True))}}
+        "ruled": bool(args.get("ruled", True))}
+    _sketch_reference(doc_id, args, params, "sketch_ref_a", "sketch_a")
+    _sketch_reference(doc_id, args, params, "sketch_ref_b", "sketch_b")
+    node = {"type": "RuledLoftFeature", "name": "Ruled loft", "params": params}
     previous = doc.feature_tree
     tree = feature_ops.add_primitive(previous, node, args.get("operation", "union"),
                                      target_id=args.get("target"))
@@ -442,26 +478,63 @@ def _add_mirror(doc_id, args):
     return {"message": "added mirror", "feature_id": mod["id"]}
 
 
+def _face_reference(tree, feature_id: str, face_id: str) -> dict:
+    """The stored descriptor for one of a feature's faces, by id."""
+    from app.services import datum
+
+    try:
+        _, table = datum.feature_faces(tree, feature_id)
+    except KeyError as exc:
+        raise BadArgument(str(exc), arg="on_face")
+    for descriptor in table:
+        if descriptor["id"] == face_id:
+            return descriptor
+    raise BadArgument(
+        f"no face {face_id!r} on feature {feature_id!r}. Call list_faces with "
+        f"feature={feature_id!r} for the {len(table)} it has.", arg="on_face")
+
+
 def _resolve_on_face(tree, args, params):
     """If args carry an ``on_face`` ref, store it and bake an initial plane/offset.
 
-    A symbolic sketch-on-face reference ({feature_id, face}) is resolved against
-    the referenced feature's current geometry so the sketch follows it through
-    later edits (see services/datum + feature_ops.resolve_datums).
+    Two forms, and which one you get depends on what the body can support.
+    ``{feature_id, face}`` is symbolic — "the top face of f1" — resolved against
+    that feature's live geometry, and the only thing that works when the body has
+    no exact form. ``{feature_id, face_id}`` names a real face from `list_faces`,
+    resolved through the Sprint-8 naming scheme, so it follows an edit that
+    re-topologises the body and reports the face as gone rather than sliding onto
+    a neighbour. Both are re-resolved at every regen by
+    `feature_ops.resolve_datums`.
     """
     from app.services import datum
 
     ref = args.get("on_face")
     if not isinstance(ref, dict) or not ref.get("feature_id"):
         return
-    params["on_face"] = {"feature_id": ref["feature_id"], "face": ref.get("face", "top")}
-    try:
-        plane, offset, origin_uv = datum.resolve_face_frame(tree, ref["feature_id"], ref.get("face", "top"))
-        params["plane"] = plane
-        params["offset"] = offset
-        params["plane_origin"] = list(origin_uv)  # zero the sketch on the face
-    except (KeyError, ValueError):
-        pass  # fall back to explicit plane/offset already in params
+    if ref.get("face_id"):
+        # The whole descriptor is stored, not the id — see `_selected`: an id is a
+        # hash of the face's current measurements and changes when an upstream
+        # dimension moves it, which is precisely the edit this must survive.
+        descriptor = _face_reference(tree, ref["feature_id"], ref["face_id"])
+        params["on_face"] = {"feature_id": ref["feature_id"],
+                             "face_id": ref["face_id"], "face_ref": descriptor}
+        try:
+            plane, offset, origin_uv, _ = datum.resolve_face_id_frame(
+                tree, ref["feature_id"], descriptor)
+        except (KeyError, ValueError) as exc:
+            # Authoring-time only: a face id that resolves to nothing right now is
+            # a mistake in the call, not the later "it used to be there" case.
+            raise BadArgument(str(exc), arg="on_face")
+    else:
+        params["on_face"] = {"feature_id": ref["feature_id"], "face": ref.get("face", "top")}
+        try:
+            plane, offset, origin_uv = datum.resolve_face_frame(
+                tree, ref["feature_id"], ref.get("face", "top"))
+        except (KeyError, ValueError):
+            return  # fall back to explicit plane/offset already in params
+    params["plane"] = plane
+    params["offset"] = offset
+    params["plane_origin"] = list(origin_uv)  # zero the sketch on the face
 
 
 _SKETCH_ARG = {
@@ -541,29 +614,79 @@ def _add_sketch(doc_id, args):
             **_sketch_result(solved)}
 
 
-@operation("update_sketch", "mutate", "Re-solve an existing sketch extrude with an edited sketch spec (and optional plane/offset/depth/on_face).",
+_ON_FACE_ARG = {
+    "type": "object",
+    "description": "{feature_id, face} with face in top|bottom|left|right|front|back, or "
+                   "{feature_id, face_id} naming a real planar face from list_faces — the "
+                   "second follows a re-topologising edit and reports the face as gone "
+                   "rather than sliding onto a neighbour. Overrides plane/offset.",
+}
+
+
+@operation("create_sketch", "mutate", "Create a constrained 2D sketch as its own feature, to be consumed by "
+           "add_extrude / add_revolve / add_loft via their 'sketch' argument. It builds no body "
+           "of its own, several features can read one sketch, and editing it with update_sketch "
+           "moves every one of them.",
+           {"sketch": _SKETCH_ARG,
+           "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
+           "offset": {"type": "number"},
+           "on_face": _ON_FACE_ARG,
+           "name": {"type": "string"}})
+def _create_sketch(doc_id, args):
+    from app.services import sketch_solver
+
+    doc = _get(doc_id)
+    spec = require(args, "sketch")
+    solved = _solved_sketch(spec)
+    params = {
+        "sketch": spec,
+        "profile": sketch_solver.sketch_to_loops(spec, solved),
+        "plane": args.get("plane", "xy"),
+        "offset": args.get("offset", 0.0),
+        "solved": _sketch_result(solved),
+    }
+    _resolve_on_face(doc.feature_tree, args, params)
+    node = {"type": feature_ops.SKETCH_TYPE, "name": args.get("name") or "Sketch",
+            "params": params}
+    # Joined as an ordinary union child so it gets a deterministic id from the
+    # one allocator; `resolve_sketches` takes it back out before evaluation, so
+    # the boolean collapses and the body is exactly what it was.
+    tree = feature_ops.add_primitive(doc.feature_tree, node, "union")
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": "created sketch", "feature_id": node["id"],
+            "plane": params["plane"], "offset": params["offset"],
+            **_sketch_result(solved)}
+
+
+@operation("update_sketch", "mutate", "Re-solve a sketch with an edited spec. Works on a create_sketch feature — "
+           "in which case every feature reading it updates — or on an add_sketch extrude.",
            {"feature_id": {"type": "string", "required": True},
            "sketch": _SKETCH_ARG,
            "plane": {"enum": ["xy", "xz", "yz"]}, "depth": {"type": "number"}, "offset": {"type": "number"},
-           "on_face": {"type": "object", "description": "{feature_id, face} — see add_sketch"}})
+           "on_face": _ON_FACE_ARG})
 def _update_sketch(doc_id, args):
     from app.services import sketch_solver
 
     doc = _get(doc_id)
     fid = require(args, "feature_id")
     node = feature_ops.find_node(doc.feature_tree, fid)
-    if node is None or node.get("type") != "ExtrudeFeature":
-        raise NoSuchFeature(f"no ExtrudeFeature {fid!r}", arg="feature_id")
+    if node is None or node.get("type") not in ("ExtrudeFeature", feature_ops.SKETCH_TYPE):
+        raise NoSuchFeature(f"no sketch or extrude feature {fid!r}", arg="feature_id")
     spec = require(args, "sketch")
     solved = _solved_sketch(spec)
     params = {"profile": sketch_solver.sketch_to_loops(spec, solved), "sketch": spec}
     for key in ("plane", "offset", "depth"):
         if key in args:
             params[key] = args[key]
+    if node.get("type") == feature_ops.SKETCH_TYPE:
+        params["solved"] = _sketch_result(solved)
+        params.pop("depth", None)          # a sketch has no thickness
     _resolve_on_face(doc.feature_tree, args, params)
     tree = feature_ops.set_params(doc.feature_tree, fid, params)
     document_service.update_document(doc_id, feature_tree=tree)
-    return {"message": "updated sketch", **_sketch_result(solved)}
+    consumers = [n["id"] for n in feature_ops.sketch_consumers(tree, fid)]
+    return {"message": "updated sketch", "consumers": consumers,
+            **_sketch_result(solved)}
 
 
 @operation("check_sketch", "query", "Re-solve a sketch and report what it establishes — status, remaining "
@@ -818,18 +941,53 @@ def _exact_shape(doc_id):
 
 @operation("list_faces", "query", "List the body's faces with stable ids, so they can be selected. "
            "Each face reports its kind (plane/cylinder/cone/sphere), area, centre and, "
-           "for cylinders, radius — enough to tell which is which without seeing it.",
-           {})
+           "for cylinders, radius — enough to tell which is which without seeing it. "
+           "Pass 'feature' to list one feature's own faces instead, which is the id space "
+           "a sketch's on_face.face_id is resolved in.",
+           {"feature": {"type": "string",
+            "description": "list the faces of this feature's subtree rather than the whole body"}})
 def _list_faces(doc_id, args):
     from app.cad_kernel.core import naming
 
-    table = naming.face_table(_exact_shape(doc_id))
+    feature_id = args.get("feature")
+    if feature_id:
+        shape = _feature_exact_shape(doc_id, feature_id)
+    else:
+        shape = _exact_shape(doc_id)
+    table = naming.face_table(shape)
     return {"faces": [{"id": f["id"], "kind": f["kind"], "area_mm2": f["area_mm2"],
                        "center_mm": f["center_mm"],
                        **({"radius_mm": f["radius_mm"]} if f.get("radius_mm") else {}),
                        **({"normal": f["normal"]} if f.get("normal") else {})}
                       for f in table],
-            "count": len(table)}
+            "count": len(table),
+            **({"feature": feature_id} if feature_id else {})}
+
+
+def _feature_exact_shape(doc_id, feature_id):
+    """The exact body of one feature's subtree.
+
+    Faces are named relative to the body they are on — the descriptor is
+    normalised to its bounding box, which is what lets a resize keep a selection
+    — so a sub-body's face ids are its own, and are the ids `on_face.face_id`
+    means. Scoping the reference to a feature rather than to the whole body is
+    also what keeps a sketch's own extrusion out of the datum it sits on.
+    """
+    from app.cad_kernel.evaluator import brep
+    from app.services import datum
+
+    if not brep.AVAILABLE:
+        raise PreconditionFailed(
+            "this deployment has no exact kernel installed (pip install cadquery-ocp), "
+            "so faces and edges are not addressable")
+    try:
+        shape = datum.feature_shape(_get(doc_id).feature_tree, feature_id)
+    except KeyError as exc:
+        raise NoSuchFeature(str(exc), arg="feature")
+    if shape is None:
+        raise PreconditionFailed(
+            f"feature {feature_id!r} has no exact form, so it has no addressable faces")
+    return shape
 
 
 @operation("list_edges", "query", "List the body's edges with stable ids, so they can be filleted or "
@@ -1019,6 +1177,37 @@ _REFERENCE_STATUS = {
 }
 
 
+def _sketch_plane_references(doc_id) -> List[Dict[str, Any]]:
+    """Face-id sketch planes, resolved as the build would resolve them.
+
+    A sketch placed on a named face is a reference like any other and fails the
+    same way — the face it sat on can be split by a cut or destroyed by a
+    resize. It is not collected during the exact build the way a fillet's edges
+    are (a datum is resolved before the body is built, not during it), so it is
+    resolved here.
+    """
+    from app.cad_kernel.core.feature_tree import walk_nodes
+    from app.services import datum
+
+    tree = _get(doc_id).feature_tree
+    rows: List[Dict[str, Any]] = []
+    for node in walk_nodes(tree):
+        ref = (node.get("params") or {}).get("on_face")
+        if not isinstance(ref, dict) or not ref.get("face_id"):
+            continue
+        try:
+            _, _, _, status = datum.resolve_face_id_frame(
+                tree, ref["feature_id"], ref.get("face_ref") or ref["face_id"])
+        except (KeyError, ValueError):
+            status = "unresolved"
+        rows.append({"feature_id": node.get("id"), "type": node.get("type"),
+                     "kind": "face", "references": [
+                         {"id": ref["face_id"], "status": status,
+                          "on": ref["feature_id"],
+                          "meaning": _REFERENCE_STATUS.get(status, status)}]})
+    return rows
+
+
 @operation("check_references", "query",
            "Report whether the faces and edges the body's fillets, chamfers and shells "
            "were placed on still exist. An upstream dimension change can split an entity "
@@ -1048,6 +1237,11 @@ def _check_references(doc_id, args):
                 split += 1
             rows.append({**entry, "meaning": _REFERENCE_STATUS.get(status, status)})
         features.append({**report, "references": rows})
+
+    for row in _sketch_plane_references(doc_id):
+        if row["references"][0]["status"] in ("deleted", "unresolved"):
+            lost += 1
+        features.append(row)
 
     if not features and error:
         # No feature got as far as resolving anything, so the build failed for an

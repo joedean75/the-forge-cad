@@ -55,7 +55,7 @@ class _Placed:
 
     def __init__(self, comp):
         doc = document_service.get_document(comp.part_id)
-        active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
+        active = document_service.resolved_tree(doc)
         root = FeatureTree.from_dict(active).root
         self.sdf = sdf_from_feature(root)
 

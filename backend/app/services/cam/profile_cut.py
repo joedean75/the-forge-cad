@@ -33,7 +33,7 @@ def profile_cut(doc_id: str, kerf_mm: float = 0.2, plane: str = "xy",
     doc = document_service.get_document(doc_id)
     if doc is None:
         raise KeyError(doc_id)
-    active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
+    active = document_service.resolved_tree(doc)
     # Sheet metal is cut as its unfolded blank. Sectioning the folded part would
     # trace its silhouette, which is not a shape that folds back into the part.
     active = sheet_metal.unfold_tree(active)

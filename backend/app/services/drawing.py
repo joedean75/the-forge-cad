@@ -141,11 +141,7 @@ def _field(doc) -> Tuple[np.ndarray, np.ndarray, float]:
     against the grid edge: an interpolated contour needs an outside sample to
     cross towards.
     """
-    active = feature_ops.resolve_datums(feature_ops.resolve_suppressed(doc.feature_tree))
-    if doc.parameters:
-        from app.services import parameters
-        scope, _ = parameters.resolve_values(doc.parameters)
-        active = parameters.resolve_tree(active, scope)
+    active = document_service.resolved_tree(doc)
 
     root = FeatureTree.from_dict(active).root
     try:

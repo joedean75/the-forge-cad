@@ -123,6 +123,28 @@ def _pick(params: Optional[dict], keys: Tuple[str, ...]) -> dict:
     return {k: p[k] for k in keys if p.get(k) is not None}
 
 
+# A sketch is geometry other features consume, so it is emitted *before* the
+# body — once, however many features read it — and they refer back to its step.
+# Emitting one per consumer would rebuild the same outline twice and lose the
+# sharing, and the replayed tree would not hash-match the original.
+_SKETCH = "SketchFeature"
+
+# feature type -> {stored reference param: (operation argument, the profile
+# param the sketch supplied)}. The profile is dropped when a sketch supplied it:
+# passing both would be redundant now and would let the two drift apart on the
+# next edit.
+_SKETCH_ARGS: Dict[str, Dict[str, Tuple[str, str]]] = {
+    "ExtrudeFeature": {"sketch_ref": ("sketch", "profile")},
+    "RevolveFeature": {"sketch_ref": ("sketch", "profile")},
+    "LoftFeature": {"sketch_ref_a": ("sketch_a", "profile_a"),
+                    "sketch_ref_b": ("sketch_b", "profile_b")},
+    "RuledLoftFeature": {"sketch_ref_a": ("sketch_a", "profile_a"),
+                         "sketch_ref_b": ("sketch_b", "profile_b")},
+}
+
+_CREATE_SKETCH_KEYS = ("sketch", "plane", "offset", "on_face")
+
+
 def decompile(tree: Dict[str, Any]) -> List[dict]:
     """The operation sequence that builds `tree`.
 
@@ -135,13 +157,43 @@ def decompile(tree: Dict[str, Any]) -> List[dict]:
         raise Unsupported("tree has no root")
 
     steps: List[dict] = []
-    _emit_body(root, steps)
+    sketches = _emit_sketches(root, steps)
+    _emit_body(root, steps, sketches)
     return steps
 
 
-def _emit_body(node: dict, steps: List[dict]) -> int:
+def _emit_sketches(root: dict, steps: List[dict]) -> Dict[str, int]:
+    """Every sketch in the tree, created up front. Returns ``{sketch id: step}``."""
+    from app.cad_kernel.core.feature_tree import walk_nodes
+
+    out: Dict[str, int] = {}
+    for node in walk_nodes(root):
+        if node.get("type") != _SKETCH or not node.get("id"):
+            continue
+        params = node.get("params") or {}
+        if not params.get("sketch"):
+            raise Unsupported("SketchFeature with no sketch spec to re-solve", _SKETCH)
+        args = _pick(params, _CREATE_SKETCH_KEYS)
+        if node.get("name"):
+            args["name"] = node["name"]
+        out[node["id"]] = _push(steps, "create_sketch", args)
+    return out
+
+
+def _body_children(node: dict) -> List[dict]:
+    """A boolean's children that are actually bodies. Sketches are not."""
+    return [c for c in node_children(node) if c.get("type") != _SKETCH]
+
+
+def _emit_body(node: dict, steps: List[dict], sketches: Dict[str, int]) -> int:
     """Emit ops building `node` as the whole body. Returns its step index."""
     node_type = node.get("type")
+
+    if node_type == _SKETCH:
+        # A document that is only a sketch has no body yet — a legitimate state
+        # halfway through drawing one, and `resolve_sketches` gives it the same
+        # placeholder an all-suppressed tree gets.
+        return sketches[node["id"]]
 
     if node_type in _OPAQUE:
         raise Unsupported(
@@ -149,28 +201,28 @@ def _emit_body(node: dict, steps: List[dict]) -> int:
             f"— it was imported or solved, not modelled", node_type)
 
     if node_type == "BooleanFeature":
-        children = node_children(node)
+        children = _body_children(node)
         if not children:
             raise Unsupported("BooleanFeature with no children", "BooleanFeature")
         operation = (node.get("params") or {}).get("operation", "union")
-        index = _emit_body(children[0], steps)          # the base body
+        index = _emit_body(children[0], steps, sketches)          # the base body
         for child in children[1:]:
-            index = _emit_onto(child, operation, steps)  # combined onto it
+            index = _emit_onto(child, operation, steps, sketches)  # combined onto it
         return index
 
     if node_type == "MirrorFeature":
-        children = node_children(node)
+        children = _body_children(node)
         if not children:
             raise Unsupported("MirrorFeature with no children", "MirrorFeature")
-        _emit_body(children[0], steps)
+        _emit_body(children[0], steps, sketches)
         params = node.get("params") or {}
         return _push(steps, "add_mirror", _pick(params, ("plane", "offset")))
 
     if node_type in _TOPOLOGY_OPS:
-        children = node_children(node)
+        children = _body_children(node)
         if not children:
             raise Unsupported(f"{node_type} with no children", node_type)
-        _emit_body(children[0], steps)
+        _emit_body(children[0], steps, sketches)
         op_name, args = _topology_args(node)
         return _push(steps, op_name, args)
 
@@ -179,21 +231,21 @@ def _emit_body(node: dict, steps: List[dict]) -> int:
         if passthrough is None:
             raise Unsupported(
                 f"{node_type} blends two bodies; no operation builds that", node_type)
-        return _emit_body(passthrough, steps)
+        return _emit_body(passthrough, steps, sketches)
 
     if node_type in _MODIFIERS:
-        children = node_children(node)
+        children = _body_children(node)
         if not children:
             raise Unsupported(f"{node_type} with no children", node_type)
-        _emit_body(children[0], steps)
+        _emit_body(children[0], steps, sketches)
         # No target: wrapping the whole body, which is add_modifier's default.
         return _push(steps, "add_modifier", _modifier_args(node))
 
-    return _emit_leaf(node, "union", steps)
+    return _emit_leaf(node, "union", steps, sketches)
 
 
 def _emit_onto(node: dict, operation: str, steps: List[dict],
-               target: Optional[dict] = None) -> int:
+               sketches: Dict[str, int], target: Optional[dict] = None) -> int:
     """Emit ops adding `node` with `operation` — onto the body, or onto `target`.
 
     ``target`` is a ``{"$step": i}`` / ``{"$group": i}`` reference, resolved at
@@ -211,15 +263,15 @@ def _emit_onto(node: dict, operation: str, steps: List[dict],
         if passthrough is None:
             raise Unsupported(
                 f"{node_type} blends two bodies; no operation builds that", node_type)
-        return _emit_onto(passthrough, operation, steps, target)
+        return _emit_onto(passthrough, operation, steps, sketches, target)
 
     if node_type in _MODIFIERS or node_type == "MirrorFeature":
         # A modifier sitting under a boolean was applied to that one feature, not
         # to the whole body — so it replays as a targeted add_modifier.
-        children = node_children(node)
+        children = _body_children(node)
         if not children:
             raise Unsupported(f"{node_type} with no children", node_type)
-        inner = _emit_onto(children[0], operation, steps, target)
+        inner = _emit_onto(children[0], operation, steps, sketches, target)
         if node_type == "MirrorFeature":
             args = _pick(node.get("params") or {}, ("plane", "offset"))
             args["target"] = {"$step": inner}
@@ -235,11 +287,11 @@ def _emit_onto(node: dict, operation: str, steps: List[dict],
         # using the inner one. That needs `target`, which is why the builders
         # grew it: without it this whole shape was unrecoverable, and it is one
         # whole-tree generation produces routinely.
-        children = node_children(node)
+        children = _body_children(node)
         if not children:
             raise Unsupported("BooleanFeature with no children", "BooleanFeature")
         inner = (node.get("params") or {}).get("operation", "union")
-        base = _emit_onto(children[0], operation, steps, target)
+        base = _emit_onto(children[0], operation, steps, sketches, target)
 
         # The second child targets the first *feature*, which wraps the two in a
         # new boolean. Every child after that targets the boolean itself — hence
@@ -248,14 +300,14 @@ def _emit_onto(node: dict, operation: str, steps: List[dict],
         # tree, and the tree is what gets compared.
         reference: dict = {"$step": base}
         for child in children[1:]:
-            reference = {"$group": _emit_onto(child, inner, steps, reference)}
+            reference = {"$group": _emit_onto(child, inner, steps, sketches, reference)}
         return base
 
-    return _emit_leaf(node, operation, steps, target)
+    return _emit_leaf(node, operation, steps, sketches, target)
 
 
 def _emit_leaf(node: dict, operation: str, steps: List[dict],
-               target: Optional[dict] = None) -> int:
+               sketches: Dict[str, int], target: Optional[dict] = None) -> int:
     node_type = node.get("type")
     params = node.get("params") or {}
 
@@ -271,6 +323,16 @@ def _emit_leaf(node: dict, operation: str, steps: List[dict],
     if node_type in _BUILDERS:
         op_name, keys = _BUILDERS[node_type]
         args = _pick(params, keys)
+        for ref_key, (arg_key, profile_key) in (_SKETCH_ARGS.get(node_type) or {}).items():
+            sketch_id = params.get(ref_key)
+            if sketch_id is None:
+                continue
+            if sketch_id not in sketches:
+                raise Unsupported(
+                    f"{node_type} reads sketch {sketch_id!r}, which is not in this tree",
+                    node_type)
+            args.pop(profile_key, None)
+            args[arg_key] = {"$step": sketches[sketch_id]}
         if operation != "union":
             args["operation"] = operation
         if target is not None:
@@ -358,7 +420,12 @@ def replay(steps: List[dict], doc_id: str) -> List[dict]:
 # ------------------------------------------------------------ verification --
 
 def _hash_tree_geometry(tree: dict, resolution: int) -> str:
-    solid = Kernel.evaluate_tree(FeatureTree.from_dict(tree), resolution=resolution)
+    from app.services import feature_ops
+
+    # Sketches are substituted first: a SketchFeature has no body and never
+    # reaches an evaluator in the running system either.
+    solid = Kernel.evaluate_tree(
+        FeatureTree.from_dict(feature_ops.resolve_sketches(tree)), resolution=resolution)
     return mesh_hash(Kernel.tessellate(solid))
 
 
