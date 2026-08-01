@@ -440,6 +440,125 @@ def _world_point(u: float, v: float, w: float, normal: str) -> "gp_Pnt":
     return gp_Pnt(*coords)
 
 
+def _plane_frame(place, axis_dir=None):
+    """``(place, axis_dir)`` for a planar mapping, deriving the normal if absent.
+
+    `place(u, v)` is any affine map from profile coordinates into a plane in
+    space, so the plane's normal is the cross product of where it sends the two
+    unit steps. Circles and arcs need that normal (a `gp_Circ` is a circle *in a
+    frame*); lines do not, which is why the polygon paths never had to care.
+    """
+    if axis_dir is not None:
+        return axis_dir
+    origin = place((0.0, 0.0))
+    pu = place((1.0, 0.0))
+    pv = place((0.0, 1.0))
+    du = (pu.X() - origin.X(), pu.Y() - origin.Y(), pu.Z() - origin.Z())
+    dv = (pv.X() - origin.X(), pv.Y() - origin.Y(), pv.Z() - origin.Z())
+    return gp_Dir(du[1] * dv[2] - du[2] * dv[1],
+                  du[2] * dv[0] - du[0] * dv[2],
+                  du[0] * dv[1] - du[1] * dv[0])
+
+
+def _loop_wire(loop: dict, place, axis_dir=None):
+    """One closed wire from a loop of typed curves — arcs stay arcs.
+
+    This is what makes a sketched bore a *cylinder* rather than 24 planes, and
+    with it the thing `design_spec`'s `hole` requirement, DFM's smallest bore and
+    `naming`'s face ids can all see.
+
+    `place` maps a profile ``[u, v]`` to a `gp_Pnt`, so the same builder serves
+    an extrude's plane and a revolve's half-plane.
+    """
+    from OCP.GC import GC_MakeArcOfCircle
+
+    from app.cad_kernel.geom import profile2d
+
+    curves = loop.get("curves") or []
+    if not curves:
+        raise BrepUnsupported("an empty sketch loop bounds nothing")
+
+    if len(curves) == 1 and curves[0]["kind"] == "circle":
+        curve = curves[0]
+        circle = gp_Circ(gp_Ax2(place(curve["center"]), _plane_frame(place, axis_dir)),
+                         float(curve["r"]))
+        return BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(circle).Edge()).Wire()
+
+    builder = BRepBuilderAPI_MakeWire()
+    for curve in curves:
+        if curve["kind"] == "line":
+            builder.Add(BRepBuilderAPI_MakeEdge(place(curve["a"]), place(curve["b"])).Edge())
+        elif curve["kind"] == "arc":
+            # Three-point construction: OCC needs a point *on* the arc to know
+            # which way round it goes, and the midpoint of the swept angle is
+            # the one that agrees with how the SDF and the tessellator read it.
+            centre = curve["center"]
+            radius = profile2d.arc_radius(curve)
+            a0, da = profile2d.sweep(centre, curve["a"], curve["b"],
+                                     bool(curve.get("ccw", True)))
+            mid = [centre[0] + radius * math.cos(a0 + da / 2.0),
+                   centre[1] + radius * math.sin(a0 + da / 2.0)]
+            builder.Add(BRepBuilderAPI_MakeEdge(GC_MakeArcOfCircle(
+                place(curve["a"]), place(mid), place(curve["b"])).Value()).Edge())
+        elif curve["kind"] == "circle":
+            raise BrepUnsupported("a circle is a loop on its own, not one curve of several")
+        else:
+            raise BrepUnsupported(f"no wire for curve kind {curve['kind']!r}")
+    if not builder.IsDone():
+        raise BrepUnsupported("the sketch loop does not close")
+    return builder.Wire()
+
+
+def _loops_faces(profile: dict, place, axis_dir=None):
+    """Faces for a loops profile — outer wires with their holes cut out.
+
+    Which loop is a hole is decided by `geom.profile2d.faces_of`, the same
+    function the distance field's even-odd parity comes from. Deciding it twice
+    is how a document ends up meaning one thing with OCC installed and another
+    without.
+    """
+    from OCP.TopoDS import TopoDS
+
+    from app.cad_kernel.geom import profile2d
+
+    faces = []
+    for group in profile2d.faces_of(profile):
+        maker = BRepBuilderAPI_MakeFace(_loop_wire(group["outer"], place, axis_dir))
+        for hole in group["holes"]:
+            # Reversed: OCC reads a hole as a wire wound against its outer.
+            # `Reversed` hands back a plain TopoDS_Shape, which `Add` will not
+            # take — the downcast is not cosmetic.
+            maker.Add(TopoDS.Wire_s(_loop_wire(hole, place, axis_dir).Reversed()))
+        if not maker.IsDone():
+            raise BrepUnsupported("sketch loops do not bound a face")
+        faces.append(maker.Face())
+    if not faces:
+        raise BrepUnsupported("the sketch has no closed loop to build a face from")
+    return faces
+
+
+def _fused(parts, message: str):
+    """Fuse a list of shapes into one, or say which builder gave up."""
+    if not parts:
+        raise BrepUnsupported(message)
+    result = parts[0]
+    for other in parts[1:]:
+        builder = BRepAlgoAPI_Fuse(result, other)
+        if not builder.IsDone():
+            raise BrepUnsupported(message)
+        result = builder.Shape()
+    return result
+
+
+def _extrude_place(normal: str, w: float, u0: float, v0: float):
+    def place(point):
+        return _world_point(float(point[0]) + u0, float(point[1]) + v0, w, normal)
+    iu, iv, iw = _EXTRUDE_AXES[normal]
+    axis = [0.0, 0.0, 0.0]
+    axis[iw] = 1.0
+    return place, gp_Dir(*axis)
+
+
 def _profile_wire(profile: dict, normal: str, w: float, u0: float, v0: float):
     """A closed wire for a rect/circle/polygon profile, in world coordinates."""
     kind = (profile or {}).get("type", "rect")
@@ -486,18 +605,29 @@ def _extrude(f):
     if abs(depth) < 1e-12:
         raise BrepUnsupported("zero-depth extrude")
 
+    from app.cad_kernel.geom import profile2d
+
     origin = getattr(f, "plane_origin", None) or (0.0, 0.0)
     base_w = float(f.offset) - depth / 2.0
-    wire = _profile_wire(f.profile or {}, normal, base_w,
-                         float(origin[0]), float(origin[1]))
-
-    face = BRepBuilderAPI_MakeFace(wire)
-    if not face.IsDone():
-        raise BrepUnsupported("profile does not bound a face")
+    u0, v0 = float(origin[0]), float(origin[1])
 
     iu, iv, iw = _EXTRUDE_AXES[normal]
     direction = [0.0, 0.0, 0.0]
     direction[iw] = depth
+
+    if profile2d.is_loops(f.profile or {}):
+        # A sketch can bound several disjoint faces — two separate outlines, or
+        # an island sitting inside a hole. Each is prismed and the results fused,
+        # which is the same body the even-odd distance field describes.
+        place, axis_dir = _extrude_place(normal, base_w, u0, v0)
+        parts = [BRepPrimAPI_MakePrism(face, gp_Vec(*direction)).Shape()
+                 for face in _loops_faces(f.profile, place, axis_dir)]
+        return _fused(parts, "OCC could not fuse the sketch's regions")
+
+    wire = _profile_wire(f.profile or {}, normal, base_w, u0, v0)
+    face = BRepBuilderAPI_MakeFace(wire)
+    if not face.IsDone():
+        raise BrepUnsupported("profile does not bound a face")
     return BRepPrimAPI_MakePrism(face.Face(), gp_Vec(*direction)).Shape()
 
 
@@ -670,23 +800,33 @@ def _revolve(f):
         coords[axis_i] += v
         return gp_Pnt(*coords)
 
-    wire = _profile_wire_2d(profile, to_world)
-    face = BRepBuilderAPI_MakeFace(wire)
-    if not face.IsDone():
-        raise BrepUnsupported("revolve profile does not bound a face")
+    from app.cad_kernel.geom import profile2d
+
+    if profile2d.is_loops(profile):
+        # A sketch profile can bound several regions; each is revolved and the
+        # results fused, matching the even-odd field `RevolveSDF` evaluates.
+        faces = _loops_faces(profile, lambda p: to_world(float(p[0]), float(p[1])))
+    else:
+        maker = BRepBuilderAPI_MakeFace(_profile_wire_2d(profile, to_world))
+        if not maker.IsDone():
+            raise BrepUnsupported("revolve profile does not bound a face")
+        faces = [maker.Face()]
 
     direction = [0.0, 0.0, 0.0]
     direction[axis_i] = 1.0
     pivot = gp_Ax1(gp_Pnt(*centre), gp_Dir(*direction))
 
     angle = float(getattr(f, "angle", 360.0))
-    shape = face.Face()
-    if angle < 359.999:
-        start = gp_Trsf()
-        start.SetRotation(pivot, math.radians(-angle / 2.0))
-        shape = _transformed(shape, start)
-        return BRepPrimAPI_MakeRevol(shape, pivot, math.radians(angle)).Shape()
-    return BRepPrimAPI_MakeRevol(shape, pivot).Shape()
+    parts = []
+    for shape in faces:
+        if angle < 359.999:
+            start = gp_Trsf()
+            start.SetRotation(pivot, math.radians(-angle / 2.0))
+            shape = _transformed(shape, start)
+            parts.append(BRepPrimAPI_MakeRevol(shape, pivot, math.radians(angle)).Shape())
+        else:
+            parts.append(BRepPrimAPI_MakeRevol(shape, pivot).Shape())
+    return _fused(parts, "OCC could not fuse the revolved regions")
 
 
 def _sweep(f):
@@ -728,7 +868,11 @@ def _sweep(f):
 
 def _profile_min_u(profile: dict) -> float:
     """Smallest first-axis coordinate of a profile — for a revolve, its radius."""
+    from app.cad_kernel.geom import profile2d
+
     kind = (profile or {}).get("type", "rect")
+    if kind == "loops":
+        return profile2d.loops_bounds(profile)[0]
     cx = float(profile.get("cx", 0.0))
     if kind == "circle":
         return cx - float(profile.get("radius", 0.02))
@@ -787,9 +931,24 @@ def _ruled_loft(f):
     if abs(offset_b - offset_a) < 1e-12:
         raise BrepUnsupported("the two loft sections are at the same height")
 
+    from app.cad_kernel.geom import profile2d
+
     builder = BRepOffsetAPI_ThruSections(True, bool(getattr(f, "ruled", True)))
     for profile, offset in ((f.profile_a, offset_a), (f.profile_b, offset_b)):
-        builder.AddWire(_profile_wire(profile or {}, normal, offset, 0.0, 0.0))
+        profile = profile or {}
+        if profile2d.is_loops(profile):
+            # One wire per section is all `ThruSections` can pair up: a section
+            # with a hole or two islands has no single correspondence with the
+            # other end, and guessing one would loft to an invented shape.
+            loops = profile2d.loops_of(profile)
+            if len(loops) != 1:
+                raise BrepUnsupported(
+                    "a ruled loft section must be a single closed loop, "
+                    f"but this one has {len(loops)}")
+            place, axis_dir = _extrude_place(normal, offset, 0.0, 0.0)
+            builder.AddWire(_loop_wire(loops[0], place, axis_dir))
+            continue
+        builder.AddWire(_profile_wire(profile, normal, offset, 0.0, 0.0))
     builder.Build()
     if not builder.IsDone():
         raise BrepUnsupported("OCC could not loft between those two profiles")

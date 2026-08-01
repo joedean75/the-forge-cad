@@ -14,6 +14,9 @@ router = APIRouter(prefix="/api/sketch", tags=["sketch"])
 class SolveRequest(BaseModel):
     points: list
     lines: list = []
+    # `arcs` was missing here while `_residuals` and the canvas both had it, so a
+    # sketch containing an arc solved over HTTP as if the arc were not there.
+    arcs: list = []
     circles: list = []
     constraints: list = []
 
@@ -25,7 +28,12 @@ def solve(body: SolveRequest, acc: accounts.Account = Depends(current_account)):
         result = sketch_solver.solve_sketch(spec)
     except sketch_solver.SketchError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    # best-effort profile loop
+    # Best-effort profile: `loops` is what the kernels build from, `polygon` is
+    # the flattened form kept for callers that predate it.
+    try:
+        result["loops"] = sketch_solver.sketch_to_loops(spec, result)
+    except sketch_solver.SketchError:
+        result["loops"] = None
     try:
         result["polygon"] = sketch_solver.sketch_to_polygon(spec, result)
     except sketch_solver.SketchError:

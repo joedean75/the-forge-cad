@@ -252,7 +252,7 @@ def _add_primitive(doc_id, args):
 
 
 @operation("add_extrude", "mutate", "Sketch a 2D profile on a plane and extrude it into a solid (unioned or subtracted).",
-           {"profile": {"type": "object", "description": "{type:rect|circle|polygon, ...} in metres"},
+           {"profile": {"type": "object", "description": "{type:rect|circle|polygon|loops, ...} in metres. 'loops' is the sketch form: {loops:[{curves:[{kind:line|arc|circle, ...}]}]}, nested loops read even-odd so an inner loop is a hole"},
            "plane": {"enum": ["xy", "xz", "yz"], "default": "xy"},
            "offset": {"type": "number"}, "depth": {"type": "number"},
            "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
@@ -273,7 +273,7 @@ def _add_extrude(doc_id, args):
 
 @operation("add_revolve", "mutate", "Revolve a 2D profile (authored in radius/height, metres) about an axis to make a "
            "turned part — shaft, wheel, pulley, bottle. angle<360 = partial revolve.",
-           {"profile": {"type": "object", "description": "{type:rect|circle|polygon} in (radius,height)"},
+           {"profile": {"type": "object", "description": "{type:rect|circle|polygon|loops} in (radius,height)"},
            "axis": {"enum": ["x", "y", "z"], "default": "z"}, "center": _VEC,
            "angle": {"type": "number", "default": 360},
            "operation": {"enum": ["union", "subtract", "intersect"], "default": "union"},
@@ -479,9 +479,12 @@ def _add_sketch(doc_id, args):
     doc = _get(doc_id)
     spec = require(args, "sketch")
     solved = sketch_solver.solve_sketch(spec)
-    polygon = sketch_solver.sketch_to_polygon(spec, solved)
+    # Loops of typed curves, not a ring of points: an arc that reaches the kernel
+    # as an arc becomes a cylindrical face, which is what makes a sketched bore
+    # visible to the hole spec, DFM and edge selection.
+    profile = sketch_solver.sketch_to_loops(spec, solved)
     params = {
-        "profile": {"type": "polygon", "points": polygon},
+        "profile": profile,
         "sketch": spec,  # keep the editable source so the sketch can be reopened
         "plane": args.get("plane", "xy"),
         "offset": args.get("offset", 0.0),
@@ -511,8 +514,7 @@ def _update_sketch(doc_id, args):
         raise NoSuchFeature(f"no ExtrudeFeature {fid!r}", arg="feature_id")
     spec = require(args, "sketch")
     solved = sketch_solver.solve_sketch(spec)
-    polygon = sketch_solver.sketch_to_polygon(spec, solved)
-    params = {"profile": {"type": "polygon", "points": polygon}, "sketch": spec}
+    params = {"profile": sketch_solver.sketch_to_loops(spec, solved), "sketch": spec}
     for key in ("plane", "offset", "depth"):
         if key in args:
             params[key] = args[key]

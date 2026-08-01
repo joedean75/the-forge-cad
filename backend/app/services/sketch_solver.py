@@ -175,12 +175,11 @@ def _arc_points(
     return out
 
 
-def sketch_to_polygon(spec: dict, solved: dict, arc_segments: int = 24) -> List[List[float]]:
-    """Order the sketch's lines and arcs into a single closed loop of 2D points."""
-    pts = solved["points"]
+def _edges_of(spec: dict) -> List[dict]:
+    """Lines and arcs as a uniform edge list, in spec order."""
     edges: List[dict] = []
-    for l in spec.get("lines", []):
-        edges.append({"a": l["a"], "b": l["b"], "kind": "line"})
+    for line in spec.get("lines", []):
+        edges.append({"a": line["a"], "b": line["b"], "kind": "line"})
     for arc in spec.get("arcs", []):
         edges.append({
             "a": arc["a"],
@@ -189,25 +188,28 @@ def sketch_to_polygon(spec: dict, solved: dict, arc_segments: int = 24) -> List[
             "center": arc["center"],
             "ccw": bool(arc.get("ccw", True)),
         })
-    if not edges:
-        raise SketchError("sketch has no lines or arcs to form a profile")
+    return edges
 
-    # Walk connected edges into an ordered loop, tracking traversal direction so
-    # arcs tessellate the correct way even when an edge is stored b->a.
-    used = [False] * len(edges)
-    start = edges[0]["a"]
+
+def _walk_loop(edges: List[dict], used: List[bool], start_index: int):
+    """Chain edges from ``edges[start_index]`` until they close or run out.
+
+    Yields ``(edge, from_pid, to_pid)`` — the traversal direction matters,
+    because an arc stored ``b→a`` sweeps the other way round.
+    """
+    start = edges[start_index]["a"]
     cur = start
-    ordered: List[Tuple[dict, str, str]] = []  # (edge, from_pid, to_pid)
+    ordered: List[Tuple[dict, str, str]] = []
     for _ in range(len(edges)):
         found = None
-        for i, e in enumerate(edges):
+        for i, edge in enumerate(edges):
             if used[i]:
                 continue
-            if e["a"] == cur:
-                found = (i, e["a"], e["b"])
+            if edge["a"] == cur:
+                found = (i, edge["a"], edge["b"])
                 break
-            if e["b"] == cur:
-                found = (i, e["b"], e["a"])
+            if edge["b"] == cur:
+                found = (i, edge["b"], edge["a"])
                 break
         if found is None:
             break
@@ -217,18 +219,88 @@ def sketch_to_polygon(spec: dict, solved: dict, arc_segments: int = 24) -> List[
         cur = to
         if cur == start:
             break
+    return start, ordered
 
+
+def _loop_points(pts, start: str, ordered, arc_segments: int) -> List[List[float]]:
     poly: List[List[float]] = [list(pts[start])]
-    for e, frm, to in ordered:
-        if e["kind"] == "line":
+    for edge, frm, to in ordered:
+        if edge["kind"] == "line":
             poly.append(list(pts[to]))
         else:
-            # A stored-b->a traversal reverses the arc's sweep direction.
-            traverse_ccw = e["ccw"] if frm == e["a"] else (not e["ccw"])
-            poly.extend(_arc_points(pts[e["center"]], pts[frm], pts[to], traverse_ccw, arc_segments))
-
-    # The closing edge lands back on the start point; drop the duplicate so the
-    # profile matches the line-only convention (loop closed implicitly).
+            traverse_ccw = edge["ccw"] if frm == edge["a"] else (not edge["ccw"])
+            poly.extend(_arc_points(pts[edge["center"]], pts[frm], pts[to],
+                                    traverse_ccw, arc_segments))
     if len(poly) > 1 and poly[-1] == poly[0]:
         poly.pop()
     return poly
+
+
+def sketch_to_polygon(spec: dict, solved: dict, arc_segments: int = 24) -> List[List[float]]:
+    """The sketch's first closed loop as a ring of 2D points, arcs tessellated.
+
+    Superseded by :func:`sketch_to_loops`, which keeps curves as curves and
+    returns *every* loop. Kept because documents persisted before that carry
+    ``{"type": "polygon"}`` profiles and must go on meaning exactly what they
+    meant when they were saved — tessellation included.
+    """
+    edges = _edges_of(spec)
+    if not edges:
+        raise SketchError("sketch has no lines or arcs to form a profile")
+    start, ordered = _walk_loop(edges, [False] * len(edges), 0)
+    return _loop_points(solved["points"], start, ordered, arc_segments)
+
+
+def sketch_to_loops(spec: dict, solved: dict) -> dict:
+    """Every closed loop in the sketch, as typed curves rather than points.
+
+    This is the profile the kernels actually want. `sketch_to_polygon` flattened
+    a sketch to one ring of points before either kernel saw it, which cost three
+    things that matter here: a circle-only sketch had no lines or arcs and so
+    could not be extruded at all; an arc became 24 straight segments, so a
+    sketched bore arrived as 24 planar faces and was invisible to everything in
+    this codebase that counts cylindrical ones (`design_spec._c_hole`,
+    `dfm_topology`'s smallest bore, `naming`'s face ids, STEP); and only the
+    first loop was walked, so a profile with a hole in it was not expressible.
+
+    Loops are unordered and unnested here — containment is worked out where the
+    profile is evaluated, by `cad_kernel.geom.profile2d`, so the SDF and the
+    B-rep cannot disagree about which loop is a hole.
+    """
+    pts = solved["points"]
+    radii = solved.get("radii", {})
+    loops: List[dict] = []
+
+    edges = _edges_of(spec)
+    used = [False] * len(edges)
+    for index in range(len(edges)):
+        if used[index]:
+            continue
+        start, ordered = _walk_loop(edges, used, index)
+        if not ordered:
+            continue
+        curves = []
+        for edge, frm, to in ordered:
+            if edge["kind"] == "line":
+                curves.append({"kind": "line", "a": list(pts[frm]), "b": list(pts[to])})
+            else:
+                curves.append({
+                    "kind": "arc", "a": list(pts[frm]), "b": list(pts[to]),
+                    "center": list(pts[edge["center"]]),
+                    "ccw": edge["ccw"] if frm == edge["a"] else (not edge["ccw"]),
+                })
+        loops.append({"curves": curves})
+
+    for circle in spec.get("circles", []):
+        radius = float(radii.get(circle["id"], circle.get("radius", 0.01)))
+        if radius <= 0:
+            continue
+        loops.append({"curves": [{"kind": "circle",
+                                  "center": list(pts[circle["center"]]),
+                                  "r": radius}]})
+
+    if not loops:
+        raise SketchError(
+            "sketch has nothing closed to extrude — draw a closed chain of "
+            "lines/arcs, or a circle")
+    return {"type": "loops", "loops": loops}

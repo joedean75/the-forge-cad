@@ -373,8 +373,18 @@ def _poly_sdf_2d(uv: np.ndarray, verts: np.ndarray) -> np.ndarray:
 
 
 def profile_sdf_2d(profile: dict, u: np.ndarray, v: np.ndarray) -> np.ndarray:
-    """Signed distance to a 2D profile (rect/circle/polygon) at points (u, v)."""
+    """Signed distance to a 2D profile at points (u, v).
+
+    ``rect`` / ``circle`` / ``polygon`` are the original shapes and mean exactly
+    what they always did — persisted documents carry them. ``loops`` is the
+    sketch profile that keeps arcs as arcs and supports holes; the geometry for
+    it lives in `geom.profile2d` so the B-rep path reads the same definition.
+    """
+    from app.cad_kernel.geom import profile2d
+
     p = profile or {}
+    if profile2d.is_loops(p):
+        return profile2d.loops_sdf(p, u, v)
     cx, cy = p.get("cx", 0.0), p.get("cy", 0.0)
     du, dv = u - cx, v - cy
     kind = p.get("type", "rect")
@@ -550,10 +560,14 @@ class ExtrudeSDF(SDF):
         return np.maximum(self._profile_sdf(u, v), slab)
 
     def bounds(self) -> Bounds:
+        from app.cad_kernel.geom import profile2d
+
         p = self.profile
         cx, cy = p.get("cx", 0.0), p.get("cy", 0.0)
         kind = p.get("type", "rect")
-        if kind == "circle":
+        if profile2d.is_loops(p):
+            umin, vmin, umax, vmax = profile2d.loops_bounds(p)
+        elif kind == "circle":
             r = p.get("radius", 0.02)
             umin, umax, vmin, vmax = cx - r, cx + r, cy - r, cy + r
         elif kind == "polygon":
@@ -587,9 +601,14 @@ class RevolveSDF(SDF):
         self.angle = float(angle_deg)
 
     def _profile_extent(self):
+        from app.cad_kernel.geom import profile2d
+
         p = self.profile
         cx, cy = p.get("cx", 0.0), p.get("cy", 0.0)
         kind = p.get("type", "rect")
+        if profile2d.is_loops(p):
+            _, vmin, umax, vmax = profile2d.loops_bounds(p)
+            return umax, vmin, vmax
         if kind == "circle":
             r = p.get("radius", 0.02)
             return cx + r, cy - r, cy + r
@@ -704,11 +723,16 @@ class LoftSDF(SDF):
         return np.maximum(blended, slab)
 
     def bounds(self) -> Bounds:
+        from app.cad_kernel.geom import profile2d
+
         ext = []
         for p in (self.pa, self.pb):
             cx, cy = p.get("cx", 0.0), p.get("cy", 0.0)
             kind = p.get("type", "rect")
-            if kind == "circle":
+            if profile2d.is_loops(p):
+                umin, vmin, umax, vmax = profile2d.loops_bounds(p)
+                ext.append((umin, umax, vmin, vmax))
+            elif kind == "circle":
                 r = p.get("radius", 0.02); ext.append((cx - r, cx + r, cy - r, cy + r))
             elif kind == "polygon":
                 verts = np.asarray(p.get("points", [[0, 0]]), dtype=float)

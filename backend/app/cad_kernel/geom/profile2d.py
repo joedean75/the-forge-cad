@@ -1,0 +1,350 @@
+"""Loops of typed 2D curves — the profile representation both kernels read.
+
+A sketch used to be flattened to a ring of points before either kernel saw it.
+That made the sketch the one path in the system that *downgrades* geometry on
+its way in: an arc became 24 straight segments, so a sketched bore arrived as 24
+planar faces, and everything here that counts cylindrical faces — the ``hole``
+spec requirement, DFM's smallest bore, `naming`'s face ids, analytic STEP — quietly
+stopped seeing it.
+
+A profile is now ``{"type": "loops", "loops": [{"curves": [...]}, ...]}`` where a
+curve is one of
+
+    {"kind": "line",   "a": [u, v], "b": [u, v]}
+    {"kind": "arc",    "a": [u, v], "b": [u, v], "center": [u, v], "ccw": bool}
+    {"kind": "circle", "center": [u, v], "r": float}
+
+**Containment is decided here and only here.** `evaluator/sdf` and
+`evaluator/brep` both call into this module for it, because a loop that the
+distance field treats as a hole and OpenCascade treats as a second boundary is a
+document that means two different things depending on which kernel ran — the
+same failure the `LoftFeature` note in CLAUDE.md exists to prevent.
+
+The rule is **even-odd**, matching SVG, DXF and every drafting tool: a point is
+inside when an odd number of loops contain it. Nesting therefore works to any
+depth without a special case, and a loop's winding direction carries no meaning —
+which is what you want, because the direction a user happens to draw in does not
+mean anything either.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any, Dict, List, Sequence, Tuple
+
+import numpy as np
+
+
+def is_loops(profile: dict) -> bool:
+    return bool(profile) and profile.get("type") == "loops"
+
+
+def loops_of(profile: dict) -> List[dict]:
+    return list((profile or {}).get("loops") or [])
+
+
+# ----------------------------------------------------------------- angles --
+
+def sweep(center, start, end, ccw: bool) -> Tuple[float, float]:
+    """``(a0, da)`` for an arc — the same convention `_arc_points` tessellates."""
+    a0 = math.atan2(start[1] - center[1], start[0] - center[0])
+    a1 = math.atan2(end[1] - center[1], end[0] - center[0])
+    da = a1 - a0
+    if ccw:
+        while da <= 1e-12:
+            da += 2 * math.pi
+    else:
+        while da >= -1e-12:
+            da -= 2 * math.pi
+    return a0, da
+
+
+def _within_sweep(angle: np.ndarray, a0: float, da: float) -> np.ndarray:
+    """Whether each angle lies on the arc running ``da`` from ``a0``."""
+    delta = (angle - a0) % (2 * math.pi)
+    if da >= 0:
+        return delta <= da + 1e-12
+    return (delta - 2 * math.pi) >= da - 1e-12
+
+
+def arc_radius(curve: dict) -> float:
+    """The arc's radius, averaged over its two endpoints.
+
+    A sketch that solved to a residual rather than to zero has endpoints at
+    slightly different radii; averaging is what `_arc_points` already does when
+    it tessellates, so the two agree.
+    """
+    centre, start, end = curve["center"], curve["a"], curve["b"]
+    r0 = math.hypot(start[0] - centre[0], start[1] - centre[1])
+    r1 = math.hypot(end[0] - centre[0], end[1] - centre[1])
+    return (r0 + r1) / 2.0
+
+
+# --------------------------------------------------------------- distance --
+
+def _line_distance(u, v, curve) -> np.ndarray:
+    ax, ay = curve["a"]
+    bx, by = curve["b"]
+    ex, ey = bx - ax, by - ay
+    length2 = ex * ex + ey * ey
+    if length2 < 1e-24:
+        return np.hypot(u - ax, v - ay)
+    t = np.clip(((u - ax) * ex + (v - ay) * ey) / length2, 0.0, 1.0)
+    return np.hypot(u - (ax + t * ex), v - (ay + t * ey))
+
+
+def _arc_distance(u, v, curve) -> np.ndarray:
+    cx, cy = curve["center"]
+    radius = arc_radius(curve)
+    du, dv = u - cx, v - cy
+    reach = np.hypot(du, dv)
+    a0, da = sweep(curve["center"], curve["a"], curve["b"], bool(curve.get("ccw", True)))
+    on_arc = _within_sweep(np.arctan2(dv, du), a0, da)
+    # On the arc's angular span the nearest point is radially out; off it, the
+    # nearest point is whichever endpoint is closer.
+    radial = np.abs(reach - radius)
+    to_a = np.hypot(u - curve["a"][0], v - curve["a"][1])
+    to_b = np.hypot(u - curve["b"][0], v - curve["b"][1])
+    return np.where(on_arc, radial, np.minimum(to_a, to_b))
+
+
+def _circle_distance(u, v, curve) -> np.ndarray:
+    cx, cy = curve["center"]
+    return np.abs(np.hypot(u - cx, v - cy) - float(curve["r"]))
+
+
+_DISTANCE = {"line": _line_distance, "arc": _arc_distance, "circle": _circle_distance}
+
+
+# --------------------------------------------------------------- crossings --
+
+def _line_crossings(u, v, curve) -> np.ndarray:
+    """Half-open crossing test, matching `_poly_sdf_2d`'s convention.
+
+    A ray leaving the point along +u; a vertex exactly on the ray must be
+    counted once, not twice, which is what the asymmetric `>=` / `<` does.
+    """
+    ax, ay = curve["a"]
+    bx, by = curve["b"]
+    if abs(by - ay) < 1e-24:
+        return np.zeros_like(u, dtype=bool)
+    t = (v - ay) / (by - ay)
+    hit = (t >= 0.0) & (t < 1.0)
+    return hit & ((ax + t * (bx - ax)) > u)
+
+
+def _circular_crossings(u, v, centre, radius, span) -> np.ndarray:
+    """How many times a +u ray from each point crosses a circle or arc.
+
+    Both intersections of the horizontal line with the circle are candidates;
+    each counts if it is to the right of the point and (for an arc) on the swept
+    part. Tangency is excluded on purpose — it is the same measure-zero case the
+    half-open vertex rule handles for polygons.
+    """
+    cx, cy = centre
+    dv = v - cy
+    inside = radius * radius - dv * dv
+    live = inside > 1e-24
+    root = np.sqrt(np.where(live, inside, 0.0))
+
+    count = np.zeros_like(u, dtype=int)
+    for sign in (-1.0, 1.0):
+        ui = cx + sign * root
+        hit = live & (ui > u)
+        if span is not None:
+            a0, da = span
+            hit &= _within_sweep(np.arctan2(dv, ui - cx), a0, da)
+        count += hit.astype(int)
+    return count
+
+
+def _curve_crossings(u, v, curve) -> np.ndarray:
+    kind = curve["kind"]
+    if kind == "line":
+        return _line_crossings(u, v, curve).astype(int)
+    if kind == "circle":
+        return _circular_crossings(u, v, curve["center"], float(curve["r"]), None)
+    span = sweep(curve["center"], curve["a"], curve["b"], bool(curve.get("ccw", True)))
+    return _circular_crossings(u, v, curve["center"], arc_radius(curve), span)
+
+
+def loop_contains(loop: dict, u, v) -> np.ndarray:
+    """Whether each point is inside one loop, by ray crossing parity."""
+    u = np.asarray(u, dtype=float)
+    v = np.asarray(v, dtype=float)
+    count = np.zeros(u.shape, dtype=int)
+    for curve in loop.get("curves") or []:
+        count = count + _curve_crossings(u, v, curve)
+    return (count % 2) == 1
+
+
+# ------------------------------------------------------------------- sdf --
+
+def loops_sdf(profile: dict, u: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """Signed distance to a loops profile: negative inside, positive outside.
+
+    Distance is to the nearest curve of any loop, which is exact for lines,
+    arcs and circles alike. The sign is even-odd containment. Those two are
+    computed from the same curves, so the zero crossing and the inside/outside
+    boundary are the same place — a mismatch there is what puts a half-cell step
+    in a traced silhouette (see the mask note in `services/drawing`).
+    """
+    u = np.asarray(u, dtype=float)
+    v = np.asarray(v, dtype=float)
+    loops = loops_of(profile)
+    if not loops:
+        return np.full(u.shape, 1e6)
+
+    distance = np.full(u.shape, np.inf)
+    parity = np.zeros(u.shape, dtype=int)
+    for loop in loops:
+        for curve in loop.get("curves") or []:
+            distance = np.minimum(distance, _DISTANCE[curve["kind"]](u, v, curve))
+        parity = parity + loop_contains(loop, u, v).astype(int)
+
+    return np.where((parity % 2) == 1, -distance, distance)
+
+
+def loops_bounds(profile: dict) -> Tuple[float, float, float, float]:
+    """``(umin, vmin, umax, vmax)`` of every curve in the profile."""
+    lows_u, lows_v, highs_u, highs_v = [], [], [], []
+    for loop in loops_of(profile):
+        for curve in loop.get("curves") or []:
+            if curve["kind"] == "circle":
+                cx, cy = curve["center"]
+                radius = float(curve["r"])
+                lows_u.append(cx - radius); highs_u.append(cx + radius)
+                lows_v.append(cy - radius); highs_v.append(cy + radius)
+                continue
+            points = [curve["a"], curve["b"]]
+            if curve["kind"] == "arc":
+                # An arc bulges past its endpoints wherever it crosses an axis
+                # direction, so those extremes have to be added explicitly — a
+                # box around the chord is not a box around the arc.
+                cx, cy = curve["center"]
+                radius = arc_radius(curve)
+                a0, da = sweep(curve["center"], curve["a"], curve["b"],
+                                bool(curve.get("ccw", True)))
+                for quarter in range(4):
+                    angle = quarter * math.pi / 2.0
+                    if bool(_within_sweep(np.array([angle]), a0, da)[0]):
+                        points.append([cx + radius * math.cos(angle),
+                                       cy + radius * math.sin(angle)])
+            for point in points:
+                lows_u.append(point[0]); highs_u.append(point[0])
+                lows_v.append(point[1]); highs_v.append(point[1])
+    if not lows_u:
+        return 0.0, 0.0, 0.0, 0.0
+    return min(lows_u), min(lows_v), max(highs_u), max(highs_v)
+
+
+# ------------------------------------------------------------- containment --
+
+def _sample_point(loop: dict) -> Tuple[float, float]:
+    """A point on the loop, for testing which other loops enclose it."""
+    curve = (loop.get("curves") or [{}])[0]
+    if curve.get("kind") == "circle":
+        return float(curve["center"][0]) + float(curve["r"]), float(curve["center"][1])
+    return float(curve["a"][0]), float(curve["a"][1])
+
+
+def nesting(profile: dict) -> List[int]:
+    """How many other loops enclose each loop — 0 outer, 1 hole, 2 island, …
+
+    The B-rep side needs this explicitly (OCC wants a face's outer wire and its
+    holes named separately) while the SDF gets the same answer implicitly from
+    even-odd parity. Deriving both from this one function is what keeps them
+    describing the same shape.
+    """
+    loops = loops_of(profile)
+    depths = []
+    for i, loop in enumerate(loops):
+        pu, pv = _sample_point(loop)
+        u = np.array([pu]); v = np.array([pv])
+        depth = 0
+        for j, other in enumerate(loops):
+            if i == j:
+                continue
+            if bool(loop_contains(other, u, v)[0]):
+                depth += 1
+        depths.append(depth)
+    return depths
+
+
+def faces_of(profile: dict) -> List[Dict[str, Any]]:
+    """Group loops into ``{"outer": loop, "holes": [loop, …]}`` by nesting depth.
+
+    Even depth is material and odd depth is a void, so an island inside a hole
+    becomes its own face rather than a special case.
+    """
+    loops = loops_of(profile)
+    depths = nesting(profile)
+    out: List[Dict[str, Any]] = []
+    for i, loop in enumerate(loops):
+        if depths[i] % 2 != 0:
+            continue
+        holes = []
+        for j, other in enumerate(loops):
+            if i == j or depths[j] != depths[i] + 1:
+                continue
+            # A hole belongs to the outer loop that immediately encloses it.
+            pu, pv = _sample_point(other)
+            if bool(loop_contains(loop, np.array([pu]), np.array([pv]))[0]):
+                holes.append(other)
+        out.append({"outer": loop, "holes": holes})
+    return out
+
+
+def tessellate(profile: dict, segments: int = 48) -> List[List[List[float]]]:
+    """Each loop as a ring of points — for callers that can only take polygons."""
+    rings: List[List[List[float]]] = []
+    for loop in loops_of(profile):
+        ring: List[List[float]] = []
+        for curve in loop.get("curves") or []:
+            if curve["kind"] == "line":
+                ring.append([float(curve["a"][0]), float(curve["a"][1])])
+            elif curve["kind"] == "circle":
+                cx, cy = curve["center"]
+                radius = float(curve["r"])
+                ring.extend([[cx + radius * math.cos(2 * math.pi * i / segments),
+                              cy + radius * math.sin(2 * math.pi * i / segments)]
+                             for i in range(segments)])
+            else:
+                cx, cy = curve["center"]
+                radius = arc_radius(curve)
+                a0, da = sweep(curve["center"], curve["a"], curve["b"],
+                                bool(curve.get("ccw", True)))
+                steps = max(2, int(segments * abs(da) / (2 * math.pi)) + 1)
+                ring.extend([[cx + radius * math.cos(a0 + da * i / steps),
+                              cy + radius * math.sin(a0 + da * i / steps)]
+                             for i in range(steps)])
+        if len(ring) >= 3:
+            rings.append(ring)
+    return rings
+
+
+def area(profile: dict) -> float:
+    """Signed-area sum over tessellated loops, holes subtracted. For sanity checks."""
+    total = 0.0
+    depths = nesting(profile)
+    # Per-loop rather than against `tessellate(profile)`: that drops degenerate
+    # rings, which would slide every later loop onto the wrong nesting depth and
+    # silently flip a hole into material.
+    for depth, loop in zip(depths, loops_of(profile)):
+        ring = (tessellate({"type": "loops", "loops": [loop]}) or [[]])[0]
+        if len(ring) < 3:
+            continue
+        loop_area = 0.0
+        for i, (ux, uy) in enumerate(ring):
+            vx, vy = ring[(i + 1) % len(ring)]
+            loop_area += ux * vy - vx * uy
+        total += abs(loop_area / 2.0) * (1 if depth % 2 == 0 else -1)
+    return total
+
+
+def curve_count(profile: dict) -> int:
+    return sum(len(loop.get("curves") or []) for loop in loops_of(profile))
+
+
+def kinds(profile: dict) -> Sequence[str]:
+    return [c["kind"] for loop in loops_of(profile) for c in (loop.get("curves") or [])]
