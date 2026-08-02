@@ -2,16 +2,39 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   X, MousePointer2, Minus as LineIcon, Square, Circle as CircleIcon, Loader2,
   MoveHorizontal, MoveVertical, Ruler, GitCompareArrows, Spline, Equal, Dot, Anchor, Trash2,
-  Eye, EyeOff, Scissors, MoveRight, Copy, FlipHorizontal2, Target, Triangle, PenLine,
+  Scissors, MoveRight, Copy, FlipHorizontal2, Target, Triangle, PenLine,
+  Maximize2, Grid3x3, Box, Layers, Frame, EyeOff,
 } from 'lucide-react'
 import { api } from '../../api/client'
 import { useDocumentStore } from '../../store/useDocumentStore'
 import { findNode } from '../../util/featureTree'
-import { PartBackdrop, useMeshTriangles, faceToPlaneOffset } from './PartBackdrop'
+import {
+  PartBackdrop, useMeshTriangles, faceToPlaneOffset, partBounds, spanV,
+  type BackdropMode, type View,
+} from './PartBackdrop'
 import { SketchDimensions } from './SketchDimensions'
+import { SketchGrid, gridStep } from './SketchGrid'
 import * as edit from './sketchEdit'
 import type { Arc, Cir, Con, Entities, Ln, Pt } from './sketchEdit'
 import type { SketchSolution, SketchStatus } from '../../../../shared/types'
+
+const DEFAULT_VIEW: View = { cx: 0, cy: 0, span: 260 }
+
+/**
+ * What is drawn behind the sketch. `shaded` is the part as an orthographic
+ * shaded view, `section` is only the material the plane cuts, `outline` is the
+ * silhouette. They answer different questions, so this is a choice rather than
+ * one on/off switch.
+ */
+const BACKDROPS: { id: BackdropMode; label: string; icon: typeof Box; title: string }[] = [
+  { id: 'shaded', label: 'Shaded', icon: Box,
+    title: 'The part shaded, seen down the sketch plane normal' },
+  { id: 'section', label: 'Section', icon: Layers,
+    title: 'Only the material this plane cuts through' },
+  { id: 'outline', label: 'Outline', icon: Frame,
+    title: 'The part\u2019s silhouette, holes included' },
+  { id: 'off', label: 'Off', icon: EyeOff, title: 'Hide the part' },
+]
 
 type Sel = { kind: 'point' | 'line' | 'circle' | 'arc'; id: string }
 type Tool = 'select' | 'line' | 'rect' | 'circle' | 'arc' | 'trim' | 'extend'
@@ -96,7 +119,13 @@ export function SketchCanvas() {
   const [status, setStatus] = useState('')
   const [solution, setSolution] = useState<SketchSolution | null>(null)
   const [busy, setBusy] = useState(false)
-  const [showPart, setShowPart] = useState(true)
+  const [backdrop, setBackdrop] = useState<BackdropMode>('shaded')
+  // The visible window, in sketch millimetres. Everything drawn scales by
+  // `span / 260` so strokes, points and annotations keep their size on screen
+  // while the geometry zooms.
+  const [view, setView] = useState<View>(DEFAULT_VIEW)
+  const [panning, setPanning] = useState<{ x: number; y: number } | null>(null)
+  const [snap, setSnap] = useState(true)
   // Newly drawn geometry is construction while this is on: a centreline or a
   // bolt circle constrains the sketch without being part of the outline.
   const [drawConstruction, setDrawConstruction] = useState(false)
@@ -108,10 +137,11 @@ export function SketchCanvas() {
 
   // The existing body, shown behind the sketch so you can see what you're drawing
   // on. Only fetched/parsed while the sketch is actually open.
-  const partTris = useMeshTriangles(sketchOpen && showPart ? doc?.derived.mesh_url : null)
+  const partTris = useMeshTriangles(
+    sketchOpen && backdrop !== 'off' ? doc?.derived.mesh_url : null)
   // Display plane + section position: when sketching on a face, mirror the
   // backend datum resolution from that feature's live geometry; else the free plane.
-  const backdrop = useMemo<{ plane: 'xy' | 'xz' | 'yz'; sectionMm: number; originMm: [number, number] }>(() => {
+  const frame = useMemo<{ plane: 'xy' | 'xz' | 'yz'; sectionMm: number; originMm: [number, number] }>(() => {
     if (onFace && doc) {
       const node = findNode(doc.feature_tree, onFace.featureId)
       const r = node ? faceToPlaneOffset(node, onFace.face) : null
@@ -154,12 +184,17 @@ export function SketchCanvas() {
       setPlane(sketchPreset?.plane ?? 'xy'); setDepth(10); setOffset(0)
     }
     setOnFace(sketchEdit ? null : (sketchPreset?.onFace ?? null))
-    setSel([]); setDraft(null); setStatus(''); setSolution(null)
+    setSel([]); setDraft(null); setStatus(''); setSolution(null); setView(DEFAULT_VIEW)
   }, [sketchOpen, sketchEdit, sketchPreset])
 
   if (!sketchOpen) return null
 
-  const TH = 4 // snap / hit threshold (mm)
+  // Millimetres per 260 of view: the factor that keeps a 1.4-unit stroke the
+  // same thickness on screen at any zoom. Everything drawn in model space that
+  // is *not* geometry — strokes, point radii, type, hit thresholds — uses it.
+  const k = view.span / 260
+  const TH = 4 * k          // snap / hit threshold, in model mm at this zoom
+  const step = gridStep(view.span)
   const getPt = (id: string) => pts.find((p) => p.id === id)!
   const dist = edit.dist
 
@@ -169,13 +204,66 @@ export function SketchCanvas() {
     setCircles(next.circles); setCons(next.cons); setSel([])
   }
 
-  const toWorld = (e: React.MouseEvent): { x: number; y: number } => {
+  const toWorld = (e: { clientX: number; clientY: number }): { x: number; y: number } => {
     const svg = svgRef.current!
     const pt = svg.createSVGPoint()
     pt.x = e.clientX
     pt.y = e.clientY
     const p = pt.matrixTransform(svg.getScreenCTM()!.inverse())
     return { x: p.x, y: -p.y } // SVG y-down -> sketch y-up
+  }
+
+  /** Round to the visible grid, unless a real point is nearer. */
+  const onGrid = (w: { x: number; y: number }) =>
+    (snap ? { x: Math.round(w.x / step) * step, y: Math.round(w.y / step) * step } : w)
+
+  // ── view: zoom about the cursor, pan on the middle/right button, fit ───────
+
+  const zoom = (e: React.WheelEvent) => {
+    const at = toWorld(e)
+    const factor = Math.exp(e.deltaY * 0.0012)
+    const span = Math.min(4000, Math.max(2, view.span * factor))
+    // Anchor on the cursor: the model point under the pointer must not move,
+    // which is the difference between zooming and jumping.
+    const t = span / view.span
+    setView({ cx: at.x + (view.cx - at.x) * t, cy: at.y + (view.cy - at.y) * t, span })
+  }
+
+  const startPan = (e: React.MouseEvent) => {
+    if (e.button !== 1 && e.button !== 2) return
+    e.preventDefault()
+    setPanning({ x: e.clientX, y: e.clientY })
+  }
+
+  const dragPan = (e: React.MouseEvent) => {
+    if (!panning) return
+    const rect = svgRef.current!.getBoundingClientRect()
+    const perPx = view.span / rect.width
+    setView((v) => ({ ...v,
+      cx: v.cx - (e.clientX - panning.x) * perPx,
+      cy: v.cy + (e.clientY - panning.y) * perPx }))
+    setPanning({ x: e.clientX, y: e.clientY })
+  }
+
+  /** Frame the sketch, and the part behind it when one is shown. */
+  const fit = () => {
+    let u0 = Infinity, v0 = Infinity, u1 = -Infinity, v1 = -Infinity
+    const grow = (x: number, y: number, pad = 0) => {
+      u0 = Math.min(u0, x - pad); u1 = Math.max(u1, x + pad)
+      v0 = Math.min(v0, y - pad); v1 = Math.max(v1, y + pad)
+    }
+    for (const p of pts) grow(p.x, p.y)
+    for (const c of circles) { const ct = getPt(c.center); if (ct) grow(ct.x, ct.y, c.radius) }
+    if (backdrop !== 'off') {
+      const b = partBounds(partTris, frame.plane, frame.originMm)
+      if (b) { grow(b.u0, b.v0); grow(b.u1, b.v1) }
+    }
+    if (!Number.isFinite(u0)) { setView(DEFAULT_VIEW); return }
+    const width = Math.max(u1 - u0, 1)
+    const height = Math.max(v1 - v0, 1)
+    // 12% margin, and the taller-than-wide case has to be driven by height.
+    const span = Math.max(width, height / (spanV(1))) * 1.24
+    setView({ cx: (u0 + u1) / 2, cy: (v0 + v1) / 2, span: Math.min(4000, Math.max(2, span)) })
   }
 
   const addPoint = (x: number, y: number) => {
@@ -231,7 +319,12 @@ export function SketchCanvas() {
   }
 
   const canvasClick = (e: React.MouseEvent) => {
-    const w = toWorld(e)
+    // A pan that ended over the canvas must not also place a point.
+    if (e.button !== 0) return
+    const raw = toWorld(e)
+    // An existing point always wins over the grid — snapping to a round number
+    // half a millimetre from a corner is how a chain silently stops closing.
+    const w = snapPoint(raw) ? raw : onGrid(raw)
     const mark = drawConstruction ? { construction: true } : {}
     if (tool === 'select') {
       const hit = hitTest(w)
@@ -441,6 +534,46 @@ export function SketchCanvas() {
     setSel([]); setDraft(null); setStatus(''); setSolution(null)
   }
 
+  /**
+   * Where the next click will actually land — the same rule `canvasClick` uses.
+   * The rubber band and its figure are drawn to *this*, not to the raw pointer,
+   * because a preview that disagrees with the click is worse than no preview.
+   */
+  const landing = cursor && (snapPoint(cursor) ? cursor : onGrid(cursor))
+
+  /**
+   * The measurement of the thing currently being drawn, next to the cursor.
+   *
+   * A length that only appears once the shape is committed is a length you draw
+   * twice — once to see what you got, once to fix it.
+   */
+  const draftFigure = (() => {
+    if (!draft || !landing) return null
+    const to = landing                       // where it will actually end up
+    const decimals = step < 1 ? 2 : 1
+    const at = { x: (draft.x + to.x) / 2, y: (draft.y + to.y) / 2 + 4 * k }
+    if (draft.kind === 'line') {
+      const angle = (Math.atan2(to.y - draft.y, to.x - draft.x) * 180) / Math.PI
+      return { at, text: `${dist(draft, to).toFixed(decimals)} mm  ${angle.toFixed(1)}°` }
+    }
+    if (draft.kind === 'rect') {
+      return { at: { x: at.x, y: Math.max(draft.y, to.y) + 4 * k },
+        text: `${Math.abs(to.x - draft.x).toFixed(decimals)} × ${Math.abs(to.y - draft.y).toFixed(decimals)} mm` }
+    }
+    if (draft.kind === 'circle') {
+      const r = dist(draft, to)
+      return { at: { x: draft.x, y: draft.y + r + 4 * k },
+        text: `R${r.toFixed(decimals)}  Ø${(r * 2).toFixed(decimals)}` }
+    }
+    if (draft.kind === 'arc') {
+      const centre = draft.centerId ? getPt(draft.centerId) : null
+      if (!centre) return null
+      const r = dist(centre, to)
+      return { at: { x: centre.x, y: centre.y + r + 4 * k }, text: `R${r.toFixed(decimals)}` }
+    }
+    return null
+  })()
+
   const isSel = (id: string) => sel.some((s) => s.id === id)
   const sx = (x: number) => x
   const sy = (y: number) => -y
@@ -499,13 +632,27 @@ export function SketchCanvas() {
               </select>
             </label>
           )}
-          <button
-            onClick={() => setShowPart((v) => !v)}
-            disabled={!doc?.derived.mesh_url}
-            title={showPart ? 'Hide the existing part' : 'Show the existing part behind the sketch'}
-            className={`flex items-center gap-1 px-2 py-1.5 rounded-sm border text-[10px] transition-colors disabled:opacity-40 ${showPart ? 'border-cad-accent/50 text-cad-accent-hot bg-cad-accent/10' : 'border-cad-border text-cad-text hover:text-cad-text-heading'}`}
-          >
-            {showPart ? <Eye size={12} /> : <EyeOff size={12} />} Part
+          {/* How the part is drawn behind the sketch. Not one on/off switch:
+              shaded answers "what does it look like", section answers "what is
+              under my pen at this height", and they are different questions. */}
+          <div className="flex items-center gap-0.5 p-0.5 rounded-sm bg-cad-bg border border-cad-border"
+            title="What to show behind the sketch">
+            {BACKDROPS.map((b) => (
+              <button key={b.id} onClick={() => setBackdrop(b.id)} title={b.title}
+                disabled={!doc?.derived.mesh_url && b.id !== 'off'}
+                className={`flex items-center gap-1 px-1.5 py-1 rounded-[3px] text-[10px] disabled:opacity-30 ${backdrop === b.id ? 'bg-cad-accent/15 text-cad-accent-hot' : 'text-cad-text hover:text-cad-text-heading'}`}>
+                <b.icon size={11} />{b.label}
+              </button>
+            ))}
+          </div>
+          <button onClick={fit} title="Frame the sketch and the part (scroll to zoom, middle-drag to pan)"
+            className="flex items-center gap-1 px-2 py-1.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading text-[10px]">
+            <Maximize2 size={12} /> Fit
+          </button>
+          <button onClick={() => setSnap((v) => !v)}
+            title={snap ? `Snapping to the ${step} mm grid` : 'Free placement — click anywhere'}
+            className={`flex items-center gap-1 px-2 py-1.5 rounded-sm border text-[10px] transition-colors ${snap ? 'border-cad-accent/50 text-cad-accent-hot bg-cad-accent/10' : 'border-cad-border text-cad-text hover:text-cad-text-heading'}`}>
+            <Grid3x3 size={12} /> {snap ? `${step}mm` : 'Free'}
           </button>
           <label className={`flex items-center gap-1 text-[10px] text-cad-text ${standalone ? 'opacity-40' : ''}`}>
             depth
@@ -576,44 +723,48 @@ export function SketchCanvas() {
 
         {/* canvas */}
         <div className="flex-1 min-w-0 relative" style={{ background: 'radial-gradient(120% 120% at 50% 30%, #1a1f27 0%, var(--color-cad-bg) 60%)' }}>
-          <svg ref={svgRef} className="w-full h-full" viewBox="-130 -95 260 190" preserveAspectRatio="xMidYMid meet"
-            onClick={canvasClick} onMouseMove={(e) => setCursor(toWorld(e))} style={{ cursor: tool === 'select' ? 'default' : 'crosshair' }}>
-            {/* grid */}
-            {Array.from({ length: 27 }, (_, i) => -130 + i * 10).map((g) => (
-              <line key={'gx' + g} x1={g} y1={-95} x2={g} y2={95} stroke="#20252e" strokeWidth={g % 50 === 0 ? 0.4 : 0.2} />
-            ))}
-            {Array.from({ length: 20 }, (_, i) => -95 + i * 10).map((g) => (
-              <line key={'gy' + g} x1={-130} y1={g} x2={130} y2={g} stroke="#20252e" strokeWidth={g % 50 === 0 ? 0.4 : 0.2} />
-            ))}
-            <line x1={-130} y1={0} x2={130} y2={0} stroke="#2c333e" strokeWidth={0.5} />
-            <line x1={0} y1={-95} x2={0} y2={95} stroke="#2c333e" strokeWidth={0.5} />
+          <svg ref={svgRef} className="w-full h-full" preserveAspectRatio="xMidYMid meet"
+            viewBox={`${view.cx - view.span / 2} ${-view.cy - spanV(view.span) / 2} ${view.span} ${spanV(view.span)}`}
+            onClick={canvasClick}
+            onWheel={zoom}
+            onMouseDown={startPan}
+            onMouseMove={(e) => { dragPan(e); setCursor(toWorld(e)) }}
+            onMouseUp={() => setPanning(null)}
+            onMouseLeave={() => { setPanning(null); setCursor(null) }}
+            onContextMenu={(e) => e.preventDefault()}
+            style={{ cursor: panning ? 'grabbing' : tool === 'select' ? 'default' : 'crosshair',
+              userSelect: 'none' }}>
+            <SketchGrid view={view} />
 
-            {/* existing part: dim silhouette + bright section where the plane cuts */}
-            {showPart && <PartBackdrop positions={partTris} plane={backdrop.plane} sectionMm={backdrop.sectionMm} originMm={backdrop.originMm} />}
+            {/* the existing part, behind the sketch */}
+            <PartBackdrop positions={partTris} plane={frame.plane} sectionMm={frame.sectionMm}
+              originMm={frame.originMm} view={view} mode={backdrop} />
 
             {/* circles */}
             {circles.map((c) => {
               const ct = getPt(c.center)
               return <circle key={c.id} cx={sx(ct.x)} cy={sy(ct.y)} r={c.radius} fill="none"
-                stroke={stroke(c.id, c.construction)} strokeDasharray={dash(c.construction)} strokeWidth={1} />
+                stroke={stroke(c.id, c.construction)} strokeDasharray={dash(c.construction)}
+                strokeWidth={(c.construction ? 0.7 : 1.2) * k} />
             })}
             {/* lines */}
             {lines.map((l) => {
               const a = getPt(l.a), b = getPt(l.b)
               return <line key={l.id} x1={sx(a.x)} y1={sy(a.y)} x2={sx(b.x)} y2={sy(b.y)}
                 stroke={stroke(l.id, l.construction)} strokeDasharray={dash(l.construction)}
-                strokeWidth={l.construction ? 0.7 : 1.4} strokeLinecap="round" />
+                strokeWidth={(l.construction ? 0.7 : 1.4) * k} strokeLinecap="round" />
             })}
             {/* arcs */}
             {arcs.map((ar) => (
-              <polyline key={ar.id} points={arcPolyline(getPt(ar.center), getPt(ar.a), getPt(ar.b), ar.ccw)} fill="none"
+              <polyline key={ar.id} points={arcPolyline(getPt(ar.center), getPt(ar.a), getPt(ar.b), ar.ccw, 64)} fill="none"
                 stroke={stroke(ar.id, ar.construction)} strokeDasharray={dash(ar.construction)}
-                strokeWidth={ar.construction ? 0.7 : 1.4} strokeLinecap="round" strokeLinejoin="round" />
+                strokeWidth={(ar.construction ? 0.7 : 1.4) * k} strokeLinecap="round" strokeLinejoin="round" />
             ))}
 
             {/* dimensions, drawn where they apply */}
             <SketchDimensions
               cons={cons}
+              k={k}
               look={{
                 pt: (id) => pts.find((p) => p.id === id),
                 line: (id) => lines.find((l) => l.id === id),
@@ -624,18 +775,34 @@ export function SketchCanvas() {
             />
 
             {/* draft preview */}
-            {draft && cursor && draft.kind === 'line' && <line x1={sx(draft.x)} y1={sy(draft.y)} x2={sx(cursor.x)} y2={sy(cursor.y)} stroke="#e8683c" strokeWidth={1} strokeDasharray="2 2" />}
-            {draft && cursor && draft.kind === 'rect' && <rect x={sx(Math.min(draft.x, cursor.x))} y={sy(Math.max(draft.y, cursor.y))} width={Math.abs(cursor.x - draft.x)} height={Math.abs(cursor.y - draft.y)} fill="none" stroke="#e8683c" strokeWidth={1} strokeDasharray="2 2" />}
-            {draft && cursor && draft.kind === 'circle' && <circle cx={sx(draft.x)} cy={sy(draft.y)} r={dist(draft, cursor)} fill="none" stroke="#e8683c" strokeWidth={1} strokeDasharray="2 2" />}
+            {draft && landing && draft.kind === 'line' && <line x1={sx(draft.x)} y1={sy(draft.y)} x2={sx(landing.x)} y2={sy(landing.y)} stroke="#e8683c" strokeWidth={1 * k} strokeDasharray={`${2 * k} ${2 * k}`} />}
+            {draft && landing && draft.kind === 'rect' && <rect x={sx(Math.min(draft.x, landing.x))} y={sy(Math.max(draft.y, landing.y))} width={Math.abs(landing.x - draft.x)} height={Math.abs(landing.y - draft.y)} fill="none" stroke="#e8683c" strokeWidth={1 * k} strokeDasharray={`${2 * k} ${2 * k}`} />}
+            {draft && landing && draft.kind === 'circle' && <circle cx={sx(draft.x)} cy={sy(draft.y)} r={dist(draft, landing)} fill="none" stroke="#e8683c" strokeWidth={1 * k} strokeDasharray={`${2 * k} ${2 * k}`} />}
             {/* arc draft: after center+start clicks, preview the sweep to the cursor */}
-            {draft && cursor && draft.kind === 'arc' && draft.aId && (() => {
+            {draft && landing && draft.kind === 'arc' && draft.aId && (() => {
               const c = getPt(draft.centerId!), a = getPt(draft.aId!)
-              const cross = (a.x - c.x) * (cursor.y - c.y) - (a.y - c.y) * (cursor.x - c.x)
-              return <polyline points={arcPolyline(c, a, cursor, cross > 0)} fill="none" stroke="#e8683c" strokeWidth={1} strokeDasharray="2 2" />
+              const cross = (a.x - c.x) * (landing.y - c.y) - (a.y - c.y) * (landing.x - c.x)
+              return <polyline points={arcPolyline(c, a, landing, cross > 0, 64)} fill="none" stroke="#e8683c" strokeWidth={1 * k} strokeDasharray={`${2 * k} ${2 * k}`} />
             })()}
-            {draft && cursor && draft.kind === 'arc' && !draft.aId && <line x1={sx(draft.x)} y1={sy(draft.y)} x2={sx(cursor.x)} y2={sy(cursor.y)} stroke="#e8683c" strokeWidth={0.6} strokeDasharray="1 2" />}
+            {draft && landing && draft.kind === 'arc' && !draft.aId && <line x1={sx(draft.x)} y1={sy(draft.y)} x2={sx(landing.x)} y2={sy(landing.y)} stroke="#e8683c" strokeWidth={0.6 * k} strokeDasharray={`${1 * k} ${2 * k}`} />}
+
+            {/* What the thing being drawn currently measures. A number that only
+                appears once the shape is committed is a number you draw twice. */}
+            {draftFigure && (
+              <text x={draftFigure.at.x} y={-draftFigure.at.y} fill="#f0a58a"
+                fontSize={4 * k} textAnchor="middle" style={{ userSelect: 'none' }}>
+                {draftFigure.text}
+              </text>
+            )}
+
             {/* points */}
-            {pts.map((p) => <circle key={p.id} cx={sx(p.x)} cy={sy(p.y)} r={isSel(p.id) ? 2 : 1.4} fill={isSel(p.id) ? '#ffb86b' : '#7d8ba0'} />)}
+            {pts.map((p) => <circle key={p.id} cx={sx(p.x)} cy={sy(p.y)} r={(isSel(p.id) ? 2 : 1.4) * k} fill={isSel(p.id) ? '#ffb86b' : '#7d8ba0'} />)}
+
+            {/* where the next click will land, when it is not where the pointer is */}
+            {snap && landing && cursor && tool !== 'select' && !snapPoint(cursor) && (
+              <circle cx={landing.x} cy={-landing.y} r={1.1 * k} fill="none" stroke="#5cc9a7"
+                strokeWidth={0.4 * k} opacity={0.8} />
+            )}
           </svg>
 
           {/* active-tool hint */}
@@ -644,15 +811,26 @@ export function SketchCanvas() {
           </div>
 
           {/* backdrop legend */}
-          {showPart && partTris && (
+          {backdrop !== 'off' && partTris && (
             <div className="absolute top-3 right-3 flex flex-col gap-1 text-[9px] text-cad-text/70 bg-cad-panel/70 px-2 py-1.5 rounded-sm border border-cad-border pointer-events-none">
-              <span className="flex items-center gap-1.5"><span className="w-3 h-2 rounded-sm" style={{ background: 'rgba(125,139,160,0.4)' }} /> existing part</span>
-              <span className="flex items-center gap-1.5"><span className="w-3 h-0.5" style={{ background: '#5cc9a7' }} /> section at this plane</span>
+              {backdrop === 'shaded' && (
+                <span className="flex items-center gap-1.5"><span className="w-3 h-2 rounded-sm" style={{ background: 'linear-gradient(135deg,#5f6c80,#39414f)' }} /> part, from this plane</span>
+              )}
+              {backdrop === 'outline' && (
+                <span className="flex items-center gap-1.5"><span className="w-3 h-2 rounded-sm border" style={{ borderColor: '#8ea0b8' }} /> silhouette</span>
+              )}
+              <span className="flex items-center gap-1.5"><span className="w-3 h-2 rounded-sm" style={{ background: 'rgba(92,201,167,0.25)', border: '1px solid #5cc9a7' }} /> material at this plane</span>
             </div>
           )}
 
-          <div className="tabular absolute bottom-3 left-3 text-[10px] text-cad-text/70 bg-cad-panel/70 px-2 py-1 rounded-sm border border-cad-border">
-            {cursor ? `${cursor.x.toFixed(1)}, ${cursor.y.toFixed(1)} mm` : 'grid: 10 mm'} · {pts.length} pts · {lines.length} lines · {arcs.length} arcs · {circles.length} circles
+          {/* Top-left, not bottom-left: the grid's own figures run along the
+              bottom and left edges, and a floating pill sat on top of them. */}
+          <div className="tabular absolute top-3 left-3 flex items-center gap-2 text-[10px] text-cad-text/70 bg-cad-panel/70 px-2 py-1 rounded-sm border border-cad-border pointer-events-none">
+            <span className="text-cad-text-heading">{cursor ? `${cursor.x.toFixed(step < 1 ? 2 : 1)}, ${cursor.y.toFixed(step < 1 ? 2 : 1)}` : '—'}</span>
+            <span className="text-cad-text/40">·</span>
+            <span title="Visible width. Scroll to zoom, middle-drag to pan.">⌀{view.span.toFixed(view.span < 10 ? 1 : 0)}mm</span>
+            <span className="text-cad-text/40">·</span>
+            <span>{pts.length}p {lines.length}l {arcs.length}a {circles.length}c</span>
           </div>
         </div>
 

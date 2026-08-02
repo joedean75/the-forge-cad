@@ -345,6 +345,24 @@ naming an entity a trim replaced is dropped rather than left to fail in the
 solver. Re-anchoring constraints through a trim needs the solver to own the
 geometry rather than the canvas, and that is a larger change than this sprint.
 
+**The backdrop was worse than the plan assumed.** `PartBackdrop` filled every
+projected triangle into one path and called `fill(path, 'nonzero')`, which for a
+*closed* body sums the near and far faces' opposite windings to zero — so the
+silhouette was empty and there was no part behind the sketch at all, only the
+green section line. Normalising each triangle to a positive projected area makes
+nonzero a union, and on top of that fix the backdrop now has three modes:
+`shaded` (depth-cued and Lambert-lit, so a boss reads as raised and a pocket as
+sunk), `section` (the material at the plane, filled by scanline parity over the
+section edges) and `outline` (the silhouette, holes included, from eroding the
+mask). Depth does most of the shading rather than the light, because looking
+straight down a plane's normal every face parallel to it has the same Lambert
+term and the view would say nothing.
+
+The canvas also zooms and pans, and everything that is not geometry — strokes,
+point radii, dimension offsets, type — scales by `span / 260` so it holds its
+size on screen. The grid picks its spacing off the visible span and labels the
+majors, so a distance can be read off the canvas rather than measured.
+
 ---
 
 ## Suggested order
