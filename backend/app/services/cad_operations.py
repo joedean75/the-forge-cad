@@ -981,7 +981,7 @@ def _feature_exact_shape(doc_id, feature_id):
             "this deployment has no exact kernel installed (pip install cadquery-ocp), "
             "so faces and edges are not addressable")
     try:
-        shape = datum.feature_shape(_get(doc_id).feature_tree, feature_id)
+        shape, _ = datum.feature_shape(_get(doc_id).feature_tree, feature_id)
     except KeyError as exc:
         raise NoSuchFeature(str(exc), arg="feature")
     if shape is None:
@@ -1198,7 +1198,11 @@ def _sketch_plane_references(doc_id) -> List[Dict[str, Any]]:
         try:
             _, _, _, status = datum.resolve_face_id_frame(
                 tree, ref["feature_id"], ref.get("face_ref") or ref["face_id"])
-        except (KeyError, ValueError):
+        except Exception:  # noqa: BLE001 — OCC raises many types, and this is a report
+            # Anything that stops the reference resolving *is* the answer here:
+            # the point of the query is to say which selections no longer land,
+            # and a failure to rebuild the host is one of the ways they don't.
+            # `resolve_datums` treats the same failure the same way.
             status = "unresolved"
         rows.append({"feature_id": node.get("id"), "type": node.get("type"),
                      "kind": "face", "references": [

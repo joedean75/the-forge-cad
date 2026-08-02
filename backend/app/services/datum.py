@@ -90,25 +90,24 @@ def resolve_face_frame(tree: dict, feature_id: str, face: str):
 _NORMAL_PLANES = (("xy", 2), ("xz", 1), ("yz", 0))
 
 
-def feature_faces(tree: dict, feature_id: str):
-    """``(shape, face_table)`` for one feature's subtree, or ``(None, [])``.
+def feature_shape(tree: dict, feature_id: str):
+    """``(shape, entities)`` for one feature's subtree, or ``(None, None)``.
 
     A sketch is placed on a face of *the feature it names*, not of the whole
     body — the same scoping the symbolic path uses, and for the same reason:
     resolving against the whole body would fold the sketch's own extrusion into
     the datum it is measured from.
 
-    Built with history so each descriptor carries its tag, which is what lets a
-    reference survive an edit that re-topologises the feature rather than merely
-    resizing it.
+    Built with history so each descriptor can carry its tag, which is what lets
+    a reference survive an edit that re-topologises the feature rather than
+    merely resizing it.
     """
-    from app.cad_kernel.core import naming
     from app.cad_kernel.core.feature_tree import FeatureTree
     from app.cad_kernel.evaluator import brep
     from app.services import feature_ops
 
     if not brep.AVAILABLE:
-        return None, []
+        return None, None
     node = feature_ops.find_node(tree, feature_id)
     if node is None:
         raise KeyError(f"referenced feature {feature_id} not found")
@@ -116,13 +115,24 @@ def feature_faces(tree: dict, feature_id: str):
     resolved = feature_ops.resolve_sketches(feature_ops.resolve_suppressed(subtree))
     shape, history = brep.build_with_history(FeatureTree.from_dict(resolved).root)
     if shape is None:
+        return None, None
+    return shape, (history or {}).get("entities")
+
+
+def feature_faces(tree: dict, feature_id: str):
+    """``(shape, face_table)`` — for picking a face by id. See `feature_shape`.
+
+    Kept separate because describing every face is the expensive half and the
+    resolver does not want it: `resolve_face_id_frame` hands the shape to
+    `naming.resolve_references`, which describes them itself. Building the table
+    here and throwing it away was two full passes over the topology per regen.
+    """
+    from app.cad_kernel.core import naming
+
+    shape, entities = feature_shape(tree, feature_id)
+    if shape is None:
         return None, []
-    return shape, naming.face_table(shape, (history or {}).get("entities"))
-
-
-def feature_shape(tree: dict, feature_id: str):
-    """Just the exact body of one feature's subtree, or None."""
-    return feature_faces(tree, feature_id)[0]
+    return shape, naming.face_table(shape, entities)
 
 
 def resolve_face_id_frame(tree: dict, feature_id: str, reference):
@@ -146,7 +156,7 @@ def resolve_face_id_frame(tree: dict, feature_id: str, reference):
     if isinstance(reference, str):
         reference = {"id": reference}
     face_id = reference.get("id")
-    shape = feature_shape(tree, feature_id)
+    shape, _ = feature_shape(tree, feature_id)
     if shape is None:
         raise ValueError(f"feature {feature_id} has no exact form, so no named faces")
 

@@ -201,8 +201,12 @@ function canvasOf(f: Frame): [HTMLCanvasElement, CanvasRenderingContext2D] | nul
   return ctx ? [canvas, ctx] : null
 }
 
+type Projection = {
+  u: Float32Array; v: Float32Array; shade: Float32Array; count: number; order: number[]
+}
+
 /** Triangles in display millimetres, depth-sorted far-to-near, with normals. */
-function projected(pos: Float32Array, plane: Plane, origin: [number, number]) {
+function projected(pos: Float32Array, plane: Plane, origin: [number, number]): Projection {
   const [ui, vi, wi] = AXES[plane]
   const [ox, oy] = origin
   const total = Math.floor(pos.length / 9)
@@ -217,7 +221,11 @@ function projected(pos: Float32Array, plane: Plane, origin: [number, number]) {
   const L = [-0.35, 0.52, 0.78]
   const norm = Math.hypot(L[0], L[1], L[2])
   let n = 0
-  for (let t = 0; t + 8 < pos.length; t += stride) {
+  // Bounded by `count` as well as by the buffer: a typed array drops an
+  // out-of-range write silently, so an off-by-one would not throw — it would
+  // leave `count` claiming triangles whose coordinates read back `undefined`,
+  // and `undefined` maps to NaN in the rasterizer.
+  for (let t = 0; t + 8 < pos.length && n < count; t += stride) {
     const au = pos[t + ui] * 1000 - ox, av = pos[t + vi] * 1000 - oy, aw = pos[t + wi] * 1000
     const bu = pos[t + 3 + ui] * 1000 - ox, bv = pos[t + 3 + vi] * 1000 - oy, bw = pos[t + 3 + wi] * 1000
     const cu = pos[t + 6 + ui] * 1000 - ox, cv = pos[t + 6 + vi] * 1000 - oy, cw = pos[t + 6 + wi] * 1000
@@ -257,16 +265,14 @@ function projected(pos: Float32Array, plane: Plane, origin: [number, number]) {
     shade[i] = (0.42 + 0.58 * ((depth[i] - far) / range)) * (0.78 + 0.22 * lit[i])
   }
 
-  const order = new Int32Array(n)
-  for (let i = 0; i < n; i++) order[i] = i
   // Painter's algorithm: far first, so the near surface wins. "Near" is +w,
   // because the sketch is looked at down the plane's own normal.
-  const sorted = Array.from(order).sort((a, b) => depth[a] - depth[b])
-  return { u, v, shade, count: n, order: sorted }
+  const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => depth[a] - depth[b])
+  return { u, v, shade, count: n, order }
 }
 
 /** Every triangle as one path, each wound positive so `nonzero` unions them. */
-function maskPath(tri: ReturnType<typeof projected>, f: Frame): Path2D {
+function maskPath(tri: Projection, f: Frame): Path2D {
   const path = new Path2D()
   for (let i = 0; i < tri.count; i++) {
     const k = i * 3
@@ -286,11 +292,12 @@ function maskPath(tri: ReturnType<typeof projected>, f: Frame): Path2D {
   return path
 }
 
-/** A one-pixel outline of the projected mask, holes included. */
-function contourImage(tri: ReturnType<typeof projected>, f: Frame, colour: string): string | null {
+/** Paint a one-pixel outline of the projected mask, holes included. */
+function paintContour(target: CanvasRenderingContext2D, tri: Projection,
+                      f: Frame, colour: string, alpha: number): void {
   const made = canvasOf(f)
   const eroded = canvasOf(f)
-  if (!made || !eroded) return null
+  if (!made || !eroded) return
   const [maskCanvas, mask] = made
   const [outCanvas, out] = eroded
   const path = maskPath(tri, f)
@@ -311,7 +318,10 @@ function contourImage(tri: ReturnType<typeof projected>, f: Frame, colour: strin
   mask.globalCompositeOperation = 'source-in'
   mask.fillStyle = colour
   mask.fillRect(0, 0, f.W, f.H)
-  return maskCanvas.toDataURL()
+
+  target.globalAlpha = alpha
+  target.drawImage(maskCanvas, 0, 0)
+  target.globalAlpha = 1
 }
 
 /**
@@ -322,11 +332,9 @@ function contourImage(tri: ReturnType<typeof projected>, f: Frame, colour: strin
  * every row regardless, so the fill is exact without the loop walk — and a
  * missing segment degrades to a thin stripe rather than to a filled screen.
  */
-function sectionFill(segments: number[][], f: Frame, colour: string): string | null {
-  if (segments.length < 2) return null
-  const made = canvasOf(f)
-  if (!made) return null
-  const [canvas, ctx] = made
+function paintSection(ctx: CanvasRenderingContext2D, segments: number[][],
+                      f: Frame, colour: string): void {
+  if (segments.length < 2) return
 
   // Bucket segments by the pixel rows they span, so each row only looks at what
   // can actually cross it.
@@ -358,14 +366,20 @@ function sectionFill(segments: number[][], f: Frame, colour: string): string | n
       ctx.fillRect(crossings[k], r, crossings[k + 1] - crossings[k], 1)
     }
   }
-  return canvas.toDataURL()
 }
 
-/** The shaded body: depth-sorted, Lambert-lit triangles. */
-function shadedImage(tri: ReturnType<typeof projected>, f: Frame): string | null {
+/** Paint the shaded body: depth-sorted, Lambert-lit triangles. */
+function paintShaded(target: CanvasRenderingContext2D, tri: Projection,
+                     f: Frame, alpha: number): void {
+  // Rendered opaque on its own canvas and faded as a whole, never triangle by
+  // triangle. Under a `globalAlpha` below 1 the fill and the stroke composite
+  // separately, so every shared edge is painted twice and the seams reappear as
+  // *bright* lines instead of dark ones — which is what the SVG `opacity` this
+  // replaced was quietly getting right.
   const made = canvasOf(f)
-  if (!made) return null
+  if (!made) return
   const [canvas, ctx] = made
+
   // Stroking each triangle in its own fill colour closes the antialiased seam
   // between neighbours. Without it a flat face is crazed with hairline cracks —
   // adjacent triangles each cover half of the boundary pixel and the two
@@ -388,10 +402,38 @@ function shadedImage(tri: ReturnType<typeof projected>, f: Frame): string | null
     ctx.fill()
     ctx.stroke()
   }
-  return canvas.toDataURL()
+
+  target.globalAlpha = alpha
+  target.drawImage(canvas, 0, 0)
+  target.globalAlpha = 1
 }
 
-type Layers = { shaded: string | null; contour: string | null; section: string | null }
+/**
+ * All three layers composited into one image, in the order they belong:
+ * body, then the cut through it, then the boundary on top.
+ *
+ * One image rather than three. Each `toDataURL` is a PNG encode of ~900k
+ * pixels, and stacking three `<image>` elements paid for that three times per
+ * redraw — on every zoom step, for a backdrop.
+ */
+function backdropImage(
+  tri: Projection, segments: number[][], f: Frame, mode: BackdropMode,
+): string | null {
+  const made = canvasOf(f)
+  if (!made) return null
+  const [canvas, ctx] = made
+
+  if (mode === 'shaded') paintShaded(ctx, tri, f, 0.72)
+  // Under the shaded view the cut is a hint — the shading is the subject and a
+  // heavy tint over the whole plate flattens it back out. In `section` mode the
+  // cut *is* the subject, so it carries.
+  paintSection(ctx, segments, f,
+    mode === 'shaded' ? 'rgba(92,201,167,0.10)' : 'rgba(92,201,167,0.24)')
+  if (mode === 'shaded' || mode === 'outline') {
+    paintContour(ctx, tri, f, '#aebdd1', mode === 'outline' ? 0.8 : 0.65)
+  }
+  return canvas.toDataURL()
+}
 
 export function PartBackdrop({
   positions,
@@ -411,57 +453,41 @@ export function PartBackdrop({
   view: View
   mode?: BackdropMode
 }) {
-  const [layers, setLayers] = useState<Layers>({ shaded: null, contour: null, section: null })
+  const [image, setImage] = useState<string | null>(null)
   const [edges, setEdges] = useState<number[][]>([])
 
   const [ox, oy] = originMm
+  const { cx, cy, span } = view
   // Rasterizing runs off the render path so opening the sketch, panning and
   // zooming never wait on the mesh — the canvas paints, the part catches up.
+  // The cleanup cancels a pending pass, so a burst of wheel events rasterizes
+  // once, for wherever the burst ended.
   useEffect(() => {
     if (!positions || mode === 'off') {
-      setLayers({ shaded: null, contour: null, section: null })
+      setImage(null)
       setEdges([])
       return
     }
     let alive = true
     const id = window.setTimeout(() => {
       if (!alive) return
-      const f = frameOf(view)
+      const f = frameOf({ cx, cy, span })
       const tri = projected(positions, plane, [ox, oy])
       const segments = computeSection(positions, plane, sectionMm / 1000, [ox, oy])
       setEdges(segments)
-      setLayers({
-        shaded: mode === 'shaded' ? shadedImage(tri, f) : null,
-        contour: mode === 'shaded' || mode === 'outline' ? contourImage(tri, f, '#aebdd1') : null,
-        // Under the shaded view the cut is a hint — the shading is the subject
-        // and a heavy tint over the whole plate flattens it back out. In
-        // `section` mode the cut *is* the subject, so it carries.
-        section: sectionFill(segments, f,
-          mode === 'shaded' ? 'rgba(92,201,167,0.10)' : 'rgba(92,201,167,0.24)'),
-      })
+      setImage(backdropImage(tri, segments, f, mode))
     }, 0)
     return () => { alive = false; window.clearTimeout(id) }
-  }, [positions, plane, sectionMm, ox, oy, view, mode])
+  }, [positions, plane, sectionMm, ox, oy, cx, cy, span, mode])
 
   if (!positions || mode === 'off') return null
-  const x = view.cx - view.span / 2
-  const y = -view.cy - spanV(view.span) / 2
-  const w = view.span
-  const h = spanV(view.span)
-  const line = view.span / 260   // keep stroke weight constant on screen
+  const line = span / 260   // keep stroke weight constant on screen
 
   return (
     <g pointerEvents="none">
-      {layers.shaded && (
-        <image href={layers.shaded} x={x} y={y} width={w} height={h}
-          preserveAspectRatio="none" opacity={0.72} />
-      )}
-      {layers.section && (
-        <image href={layers.section} x={x} y={y} width={w} height={h} preserveAspectRatio="none" />
-      )}
-      {layers.contour && (
-        <image href={layers.contour} x={x} y={y} width={w} height={h}
-          preserveAspectRatio="none" opacity={mode === 'outline' ? 0.8 : 0.65} />
+      {image && (
+        <image href={image} x={cx - span / 2} y={-cy - spanV(span) / 2}
+          width={span} height={spanV(span)} preserveAspectRatio="none" />
       )}
       {/* The material boundary at the active sketch plane, drawn as vectors so
           it stays crisp at any zoom — it is the line you are sketching against. */}

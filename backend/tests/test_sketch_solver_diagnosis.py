@@ -308,3 +308,144 @@ def test_check_sketch_on_a_feature_with_no_sketch_is_a_precondition():
     result = ops.execute("check_sketch", doc_id, {"feature_id": box["result"]["feature_id"]})
     assert not result["ok"]
     assert result["error"]["code"] == "PRECONDITION"
+
+
+# --------------------------------------------------- the compiled model --
+
+def _dense_jacobian(model, x, step):
+    """Every column re-evaluated in full, ignoring the sparsity map."""
+    import numpy as np
+
+    xs = list(x)
+    out = np.zeros((model.n_res, model.n_vars))
+    for column in range(model.n_vars):
+        original = xs[column]
+        xs[column] = original + step
+        up = sketch_solver._residuals(xs, model).copy()
+        xs[column] = original - step
+        down = sketch_solver._residuals(xs, model).copy()
+        xs[column] = original
+        out[:, column] = (up - down) / (2 * step)
+    return out
+
+
+EVERY_CONSTRAINT = {
+    "points": [{"id": "o", "x": 0.0, "y": 0.0}, {"id": "a", "x": 0.05, "y": 0.002},
+               {"id": "b", "x": 0.048, "y": 0.031}, {"id": "m", "x": 0.026, "y": 0.001},
+               {"id": "s1", "x": 0.01, "y": 0.02}, {"id": "s2", "x": 0.041, "y": -0.018},
+               {"id": "c1", "x": 0.02, "y": -0.03}, {"id": "c2", "x": 0.033, "y": -0.028},
+               {"id": "ap", "x": 0.06, "y": 0.01}, {"id": "bp", "x": 0.06, "y": 0.03},
+               {"id": "ac", "x": 0.052, "y": 0.02}, {"id": "free", "x": 0.07, "y": 0.05}],
+    "lines": [{"id": "l1", "a": "o", "b": "a"}, {"id": "l2", "a": "a", "b": "b"},
+              {"id": "l3", "a": "o", "b": "b"}],
+    "arcs": [{"id": "arc1", "a": "ap", "b": "bp", "center": "ac", "ccw": True}],
+    "circles": [{"id": "k1", "center": "c1", "radius": 0.006},
+                {"id": "k2", "center": "c2", "radius": 0.004}],
+    "constraints": [
+        {"type": "fixed", "point": "o", "x": 0.0, "y": 0.0},
+        {"type": "fixed", "point": "free", "y": 0.05},
+        {"type": "coincident", "a": "s1", "b": "s2"},
+        {"type": "horizontal", "line": "l1"},
+        {"type": "vertical", "line": "l2"},
+        {"type": "distance", "a": "o", "b": "a", "value": 0.05},
+        {"type": "parallel", "line1": "l1", "line2": "l3"},
+        {"type": "perpendicular", "line1": "l1", "line2": "l2"},
+        {"type": "equal_length", "line1": "l1", "line2": "l3"},
+        {"type": "radius", "circle": "k1", "value": 0.006},
+        {"type": "point_on_line", "point": "m", "line": "l1"},
+        {"type": "arc_radius", "arc": "arc1", "value": 0.01},
+        {"type": "tangent", "line": "l1", "circle": "k1"},
+        {"type": "tangent", "a": "k1", "b": "k2"},
+        {"type": "tangent", "a": "k1", "b": "k2", "internal": True},
+        {"type": "concentric", "a": "k1", "b": "k2"},
+        {"type": "symmetric", "a": "s1", "b": "s2", "line": "l3"},
+        {"type": "angle", "line1": "l1", "line2": "l3", "value": 30.0},
+        {"type": "midpoint", "point": "m", "line": "l1"},
+        {"type": "equal_radius", "a": "k1", "b": "arc1"},
+        {"type": "point_on_circle", "point": "m", "circle": "k2"},
+    ],
+}
+
+
+def _model_of(spec):
+    import numpy as np
+
+    vi, x0 = sketch_solver._index_variables(spec["points"])
+    radii = {}
+    for circle in spec.get("circles", []):
+        radii[circle["id"]] = len(x0)
+        x0.append(float(circle["radius"]))
+    x = np.array(x0, dtype=float)
+    return sketch_solver._compile(spec, vi, radii, x.size), x
+
+
+def test_every_constraint_type_declares_the_columns_it_reads():
+    """The sparse Jacobian trusts each row's declared `columns`. A missing entry
+    is a silently wrong rank — and therefore a silently wrong dof — so the
+    sparse matrix is compared against one built the slow, unconditional way."""
+    import numpy as np
+
+    model, x = _model_of(EVERY_CONSTRAINT)
+    # Every constraint type is exercised, or this test is not saying much.
+    used = {c["type"] for c in EVERY_CONSTRAINT["constraints"]}
+    assert len(used) == 18, sorted(used)
+
+    step = 1e-6 * float(np.max(np.abs(x)))
+    sparse = sketch_solver._jacobian(model, x, step)
+    dense = _dense_jacobian(model, x, step)
+    assert np.allclose(sparse, dense, atol=1e-9), np.abs(sparse - dense).max()
+
+
+def test_the_model_is_built_once_not_per_evaluation():
+    """The tables used to be rebuilt inside every residual evaluation, which was
+    91% of a solve. This pins the structure that fixed it."""
+    model, x = _model_of(EVERY_CONSTRAINT)
+    assert len(model.rows) == len(EVERY_CONSTRAINT["constraints"]) + 1  # + implicit arc
+    assert model.n_res == sum(row.width for row in model.rows)
+    # Nothing reads a column that does not exist.
+    for row in model.rows:
+        assert all(0 <= column < model.n_vars for column in row.columns)
+
+
+# --------------------------------------------------------- the size bound --
+
+def _ring(n):
+    points = [{"id": f"p{i}", "x": 0.05 * math.cos(2 * math.pi * i / n),
+               "y": 0.05 * math.sin(2 * math.pi * i / n)} for i in range(n)]
+    lines = [{"id": f"l{i}", "a": f"p{i}", "b": f"p{(i + 1) % n}"} for i in range(n)]
+    return {"points": points, "lines": lines, "constraints": []}
+
+
+def test_an_oversized_sketch_is_refused_by_name_and_number():
+    """Unbounded, the rank SVD costs O(rows^2 x variables) and allocates
+    rows x rows — one request could spend minutes and hundreds of megabytes on
+    a surface anyone who can open a document can reach."""
+    spec = _ring(sketch_solver.MAX_ENTITIES)      # 2N entities: over the line
+    with pytest.raises(sketch_solver.SketchError, match=r"more than the \d+"):
+        sketch_solver.solve_sketch(spec)
+
+    entities, constraints = sketch_solver.sketch_size(spec)
+    assert entities == 2 * sketch_solver.MAX_ENTITIES and constraints == 0
+
+
+def test_too_many_constraints_is_refused_separately():
+    spec = _ring(4)
+    spec["constraints"] = [{"type": "horizontal", "line": "l0"}] * (
+        sketch_solver.MAX_CONSTRAINTS + 1)
+    with pytest.raises(sketch_solver.SketchError, match="constraints"):
+        sketch_solver.solve_sketch(spec)
+
+
+def test_a_sketch_at_the_limit_still_solves():
+    """The bound has to leave room for a real generated sketch."""
+    spec = _ring(sketch_solver.MAX_ENTITIES // 2)
+    spec["constraints"] = [{"type": "fixed", "point": "p0", "x": 0.05, "y": 0.0}]
+    result = sketch_solver.solve_sketch(spec)
+    assert result["status"] == "under_constrained"
+
+
+def test_the_operation_surface_reports_the_bound_as_a_typed_failure():
+    result = ops.execute("add_sketch", _doc(), {"sketch": _ring(500), "depth": 0.01})
+    assert not result["ok"]
+    assert result["error"]["code"] == "BAD_ARG"
+    assert "entities" in result["error"]["message"]

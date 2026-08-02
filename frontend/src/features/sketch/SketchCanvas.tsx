@@ -336,19 +336,26 @@ export function SketchCanvas() {
       )
       return
     }
+    // `edit.*` signal "nothing to do" by handing the same object back, so the
+    // comparison has to be against the object that went *in*. Calling
+    // `entities()` twice builds two, and `next === entities()` was therefore
+    // always false: the message never appeared and a no-op still cleared the
+    // selection.
     if (tool === 'trim') {
       const hit = hitTest(w)
       if (!hit || hit.kind === 'point') { setStatus('Click a line or circle to trim.'); return }
-      const next = edit.trim(entities(), hit, w)
-      if (next === entities()) setStatus('Nothing crosses that — trim needs something to cut back to.')
+      const before = entities()
+      const next = edit.trim(before, hit, w)
+      if (next === before) setStatus('Nothing crosses that — trim needs something to cut back to.')
       else { apply(next); setStatus('') }
       return
     }
     if (tool === 'extend') {
       const hit = hitTest(w)
       if (!hit || hit.kind !== 'line') { setStatus('Extend works on a line.'); return }
-      const next = edit.extend(entities(), hit.id, w)
-      if (next === entities()) setStatus('Nothing beyond that end to extend to.')
+      const before = entities()
+      const next = edit.extend(before, hit.id, w)
+      if (next === before) setStatus('Nothing beyond that end to extend to.')
       else { apply(next); setStatus('') }
       return
     }

@@ -29,6 +29,7 @@ also reports a `status` (`well_constrained` / `under_constrained` /
 from __future__ import annotations
 
 import math
+from math import hypot
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
@@ -50,170 +51,292 @@ def _index_variables(points: List[dict]) -> Tuple[Dict[str, int], List[float]]:
     return var_index, x0
 
 
-def _residual_rows(x: np.ndarray, spec: dict, vi: Dict[str, int],
-                   radii_index: Dict[str, int]) -> List[Tuple[Any, List[float]]]:
-    """``(owner, rows)`` for every constraint, then the implicit per-arc rows.
+class _Row:
+    """One residual owner: what it is, how to evaluate it, what it depends on.
 
-    Grouped by owner rather than flattened, because the diagnosis has to be able
-    to say *which constraint* carries a residual or spans a redundancy, and a
-    bare row index cannot.
+    ``columns`` is the set of variable indices the row actually reads. It is the
+    difference between a Jacobian that costs ``2 · variables`` full evaluations
+    and one that costs two per *nonzero*, which for a sketch — where a constraint
+    touches four or six coordinates out of hundreds — is the whole cost.
     """
-    def px(pid):
-        try:
-            return x[vi[pid]]
-        except KeyError:
-            raise SketchError(f"constraint references unknown point: {pid}")
 
-    def py(pid):
-        return x[vi[pid] + 1]
+    __slots__ = ("owner", "evaluate", "columns", "width")
 
-    def line_dir(lid):
-        ln = lines.get(lid)
-        if ln is None:
-            raise SketchError(f"constraint references unknown line: {lid}")
-        return px(ln["b"]) - px(ln["a"]), py(ln["b"]) - py(ln["a"])
+    def __init__(self, owner, evaluate, columns, width: int):
+        self.owner = owner
+        self.evaluate = evaluate
+        self.columns = tuple(sorted(columns))
+        self.width = width
 
-    def centre_pid(eid):
-        """The centre point of a circle or an arc, whichever ``eid`` names."""
-        entity = circles.get(eid) or arcs.get(eid)
-        if entity is None:
-            raise SketchError(f"constraint references unknown circle or arc: {eid}")
-        return entity["center"]
 
-    def radius_of(eid):
-        """A circle's radius variable, or an arc's radius measured from its ends."""
-        if eid in radii_index:
-            return x[radii_index[eid]]
-        arc = arcs.get(eid)
-        if arc is None:
-            raise SketchError(f"constraint references unknown circle or arc: {eid}")
-        cx, cy = px(arc["center"]), py(arc["center"])
-        return (np.hypot(px(arc["a"]) - cx, py(arc["a"]) - cy)
-                + np.hypot(px(arc["b"]) - cx, py(arc["b"]) - cy)) / 2.0
+class _Model:
+    """A sketch compiled for evaluation.
 
-    def point_line_distance(pid, lid):
-        """Signed perpendicular distance from a point to a line's infinite extent."""
-        ln = lines[lid]
-        ex, ey = px(ln["b"]) - px(ln["a"]), py(ln["b"]) - py(ln["a"])
-        wx, wy = px(pid) - px(ln["a"]), py(pid) - py(ln["a"])
-        return (ex * wy - ey * wx) / (np.hypot(ex, ey) + 1e-12)
+    The entity tables and the per-constraint closures are built **once**. They
+    used to be rebuilt inside every residual evaluation — four dicts and six
+    closures, several hundred times a solve — which was 91% of the time spent
+    solving even a modest sketch.
+    """
 
-    def authored_point(pid):
-        point = authored.get(pid)
-        if point is None:
-            raise SketchError(f"constraint references unknown point: {pid}")
-        return float(point.get("x", 0.0)), float(point.get("y", 0.0))
+    __slots__ = ("spec", "vi", "radii", "rows", "n_vars", "n_res", "spans", "by_column")
 
+    def __init__(self, spec, vi, radii, rows, n_vars):
+        self.spec = spec
+        self.vi = vi
+        self.radii = radii
+        self.rows = rows
+        self.n_vars = n_vars
+        self.spans = []
+        cursor = 0
+        for row in rows:
+            self.spans.append((cursor, cursor + row.width))
+            cursor += row.width
+        self.n_res = cursor
+        # column -> the rows that read it, for the sparse Jacobian.
+        self.by_column: List[List[int]] = [[] for _ in range(n_vars)]
+        for i, row in enumerate(rows):
+            for column in row.columns:
+                self.by_column[column].append(i)
+
+
+def _compile(spec: dict, vi: Dict[str, int], radii: Dict[str, int], n_vars: int) -> _Model:
+    """Resolve every constraint into a closure over variable indices."""
     lines = {l["id"]: l for l in spec.get("lines", [])}
     arcs = {a["id"]: a for a in spec.get("arcs", [])}
     circles = {c["id"]: c for c in spec.get("circles", [])}
     authored = {p["id"]: p for p in spec.get("points", [])}
-    out: List[Tuple[Any, List[float]]] = []
 
+    def point(pid):
+        """``(x column, y column)`` for a point id."""
+        base = vi.get(pid)
+        if base is None:
+            raise SketchError(f"constraint references unknown point: {pid}")
+        return base, base + 1
+
+    def segment(lid):
+        ln = lines.get(lid)
+        if ln is None:
+            raise SketchError(f"constraint references unknown line: {lid}")
+        return point(ln["a"]) + point(ln["b"])
+
+    def centre(eid):
+        entity = circles.get(eid) or arcs.get(eid)
+        if entity is None:
+            raise SketchError(f"constraint references unknown circle or arc: {eid}")
+        return point(entity["center"])
+
+    def radius(eid):
+        """``(fn, columns)`` — a circle's variable, or an arc's measured radius."""
+        if eid in radii:
+            column = radii[eid]
+            return (lambda x, i=column: x[i]), (column,)
+        arc = arcs.get(eid)
+        if arc is None:
+            raise SketchError(f"constraint references unknown circle or arc: {eid}")
+        cx, cy = point(arc["center"])
+        ax, ay = point(arc["a"])
+        bx, by = point(arc["b"])
+
+        def measured(x, cx=cx, cy=cy, ax=ax, ay=ay, bx=bx, by=by):
+            ox, oy = x[cx], x[cy]
+            return (hypot(x[ax] - ox, x[ay] - oy) + hypot(x[bx] - ox, x[by] - oy)) / 2.0
+
+        return measured, (cx, cy, ax, ay, bx, by)
+
+    def offset_from_line(px_i, py_i, lid):
+        """``fn`` for the signed perpendicular distance from a point to a line."""
+        ax, ay, bx, by = segment(lid)
+
+        def distance(x, ax=ax, ay=ay, bx=bx, by=by, px_i=px_i, py_i=py_i):
+            ex, ey = x[bx] - x[ax], x[by] - x[ay]
+            wx, wy = x[px_i] - x[ax], x[py_i] - x[ay]
+            return (ex * wy - ey * wx) / (hypot(ex, ey) + 1e-12)
+
+        return distance, (ax, ay, bx, by, px_i, py_i)
+
+    rows: List[_Row] = []
     for index, c in enumerate(spec.get("constraints", [])):
-        t = c.get("type")
-        if t == "fixed":
-            # One row per axis actually given. `x` used to default to the point's
-            # *live* coordinate, which makes a residual that is identically zero
-            # with a zero derivative: it pinned nothing, yet counted as an
-            # equation, so pinning only y reported a spurious redundancy. With
-            # neither axis given it falls back to where the point was authored,
-            # which is what "fixed" plainly means.
-            p = c["point"]
-            home_x, home_y = authored_point(p)
-            has_axis = ("x" in c) or ("y" in c)
-            res = []
-            if "x" in c or not has_axis:
-                res.append(px(p) - float(c.get("x", home_x)))
-            if "y" in c or not has_axis:
-                res.append(py(p) - float(c.get("y", home_y)))
-        elif t == "coincident":
-            res = [px(c["a"]) - px(c["b"]), py(c["a"]) - py(c["b"])]
-        elif t == "horizontal":
-            res = [line_dir(c["line"])[1]]
-        elif t == "vertical":
-            res = [line_dir(c["line"])[0]]
-        elif t == "distance":
-            d = np.hypot(px(c["a"]) - px(c["b"]), py(c["a"]) - py(c["b"]))
-            res = [d - float(c["value"])]
-        elif t == "parallel":
-            d1x, d1y = line_dir(c["line1"])
-            d2x, d2y = line_dir(c["line2"])
-            res = [d1x * d2y - d1y * d2x]
-        elif t == "perpendicular":
-            d1x, d1y = line_dir(c["line1"])
-            d2x, d2y = line_dir(c["line2"])
-            res = [d1x * d2x + d1y * d2y]
-        elif t == "equal_length":
-            res = [np.hypot(*line_dir(c["line1"])) - np.hypot(*line_dir(c["line2"]))]
-        elif t == "radius":
-            key = c.get("circle") or c.get("arc")
-            res = [radius_of(key) - float(c["value"])]
-        elif t == "point_on_line":
-            res = [point_line_distance(c["point"], c["line"])]
-        elif t == "arc_radius":
-            arc = arcs.get(c["arc"])
-            if arc is None:
-                raise SketchError(f"arc_radius references unknown arc: {c['arc']}")
-            res = [np.hypot(px(arc["a"]) - px(arc["center"]),
-                            py(arc["a"]) - py(arc["center"])) - float(c["value"])]
-        elif t == "tangent":
-            res = [_tangent_residual(c, line_dir, px, py, centre_pid, radius_of,
-                                     point_line_distance, lines)]
-        elif t == "concentric":
-            ca, cb = centre_pid(c["a"]), centre_pid(c["b"])
-            res = [px(ca) - px(cb), py(ca) - py(cb)]
-        elif t == "symmetric":
-            # Two halves: the pair's midpoint sits on the mirror line, and the
-            # line joining them crosses it square. Either alone is not symmetry.
-            lid = c["line"]
-            ln = lines.get(lid)
-            if ln is None:
-                raise SketchError(f"constraint references unknown line: {lid}")
-            ex, ey = line_dir(lid)
-            length = np.hypot(ex, ey) + 1e-12
-            mx = (px(c["a"]) + px(c["b"])) / 2.0
-            my = (py(c["a"]) + py(c["b"])) / 2.0
-            wx, wy = mx - px(ln["a"]), my - py(ln["a"])
-            join_x, join_y = px(c["b"]) - px(c["a"]), py(c["b"]) - py(c["a"])
-            res = [(ex * wy - ey * wx) / length,
-                   (ex * join_x + ey * join_y) / length]
-        elif t == "angle":
-            d1x, d1y = line_dir(c["line1"])
-            d2x, d2y = line_dir(c["line2"])
-            actual = math.atan2(d1x * d2y - d1y * d2x, d1x * d2x + d1y * d2y)
-            wanted = math.radians(float(c["value"]))
-            # Wrapped into (-pi, pi] so 179 deg and -181 deg are the same ask.
-            res = [(actual - wanted + math.pi) % (2 * math.pi) - math.pi]
-        elif t == "midpoint":
-            ln = lines.get(c["line"])
-            if ln is None:
-                raise SketchError(f"constraint references unknown line: {c['line']}")
-            res = [px(c["point"]) - (px(ln["a"]) + px(ln["b"])) / 2.0,
-                   py(c["point"]) - (py(ln["a"]) + py(ln["b"])) / 2.0]
-        elif t == "equal_radius":
-            res = [radius_of(c["a"]) - radius_of(c["b"])]
-        elif t == "point_on_circle":
-            key = c.get("circle") or c.get("arc")
-            centre = centre_pid(key)
-            res = [np.hypot(px(c["point"]) - px(centre), py(c["point"]) - py(centre))
-                   - radius_of(key)]
-        else:
-            raise SketchError(f"unknown constraint: {t}")
-        out.append((("constraint", index), [float(v) for v in res]))
+        owner = ("constraint", index)
+        rows.append(_constraint_row(owner, c, point, segment, centre, radius,
+                                    offset_from_line, lines, arcs, authored))
 
     # Implicit per-arc residual: keep the arc circular by forcing both endpoints
     # equidistant from the center.
     for arc_id, arc in arcs.items():
-        ra = np.hypot(px(arc["a"]) - px(arc["center"]), py(arc["a"]) - py(arc["center"]))
-        rb = np.hypot(px(arc["b"]) - px(arc["center"]), py(arc["b"]) - py(arc["center"]))
-        out.append((("arc", arc_id), [float(ra - rb)]))
+        cx, cy = point(arc["center"])
+        ax, ay = point(arc["a"])
+        bx, by = point(arc["b"])
 
-    return out
+        def circular(x, cx=cx, cy=cy, ax=ax, ay=ay, bx=bx, by=by):
+            ox, oy = x[cx], x[cy]
+            return [hypot(x[ax] - ox, x[ay] - oy) - hypot(x[bx] - ox, x[by] - oy)]
+
+        rows.append(_Row(("arc", arc_id), circular, (cx, cy, ax, ay, bx, by), 1))
+
+    return _Model(spec, vi, radii, rows, n_vars)
 
 
-def _tangent_residual(c, line_dir, px, py, centre_pid, radius_of,
-                      point_line_distance, lines) -> float:
+def _constraint_row(owner, c, point, segment, centre, radius, offset_from_line,
+                    lines, arcs, authored) -> _Row:
+    """One constraint, as a closure over variable indices plus the columns it reads."""
+    t = c.get("type")
+
+    if t == "fixed":
+        # One row per axis actually given. `x` used to default to the point's
+        # *live* coordinate, which makes a residual that is identically zero
+        # with a zero derivative: it pinned nothing, yet counted as an equation,
+        # so pinning only y reported a spurious redundancy. With neither axis
+        # given it falls back to where the point was authored, which is what
+        # "fixed" plainly means.
+        pid = c["point"]
+        px_i, py_i = point(pid)
+        home = authored.get(pid) or {}
+        wants_x = "x" in c or ("y" not in c)
+        wants_y = "y" in c or ("x" not in c)
+        at_x = float(c.get("x", home.get("x", 0.0)))
+        at_y = float(c.get("y", home.get("y", 0.0)))
+        columns = ([px_i] if wants_x else []) + ([py_i] if wants_y else [])
+
+        def pinned(x, px_i=px_i, py_i=py_i, at_x=at_x, at_y=at_y,
+                   wants_x=wants_x, wants_y=wants_y):
+            out = []
+            if wants_x:
+                out.append(x[px_i] - at_x)
+            if wants_y:
+                out.append(x[py_i] - at_y)
+            return out
+
+        return _Row(owner, pinned, columns, len(columns))
+
+    if t == "coincident":
+        ax, ay = point(c["a"])
+        bx, by = point(c["b"])
+        return _Row(owner, lambda x: [x[ax] - x[bx], x[ay] - x[by]],
+                    (ax, ay, bx, by), 2)
+
+    if t in ("horizontal", "vertical"):
+        ax, ay, bx, by = segment(c["line"])
+        if t == "horizontal":
+            return _Row(owner, lambda x: [x[by] - x[ay]], (ay, by), 1)
+        return _Row(owner, lambda x: [x[bx] - x[ax]], (ax, bx), 1)
+
+    if t == "distance":
+        ax, ay = point(c["a"])
+        bx, by = point(c["b"])
+        value = float(c["value"])
+        return _Row(owner, lambda x: [hypot(x[ax] - x[bx], x[ay] - x[by]) - value],
+                    (ax, ay, bx, by), 1)
+
+    if t in ("parallel", "perpendicular"):
+        a1x, a1y, b1x, b1y = segment(c["line1"])
+        a2x, a2y, b2x, b2y = segment(c["line2"])
+        columns = (a1x, a1y, b1x, b1y, a2x, a2y, b2x, b2y)
+
+        if t == "parallel":
+            def crossed(x):
+                return [(x[b1x] - x[a1x]) * (x[b2y] - x[a2y])
+                        - (x[b1y] - x[a1y]) * (x[b2x] - x[a2x])]
+            return _Row(owner, crossed, columns, 1)
+
+        def dotted(x):
+            return [(x[b1x] - x[a1x]) * (x[b2x] - x[a2x])
+                    + (x[b1y] - x[a1y]) * (x[b2y] - x[a2y])]
+        return _Row(owner, dotted, columns, 1)
+
+    if t == "equal_length":
+        a1x, a1y, b1x, b1y = segment(c["line1"])
+        a2x, a2y, b2x, b2y = segment(c["line2"])
+
+        def same_length(x):
+            return [hypot(x[b1x] - x[a1x], x[b1y] - x[a1y])
+                    - hypot(x[b2x] - x[a2x], x[b2y] - x[a2y])]
+        return _Row(owner, same_length, (a1x, a1y, b1x, b1y, a2x, a2y, b2x, b2y), 1)
+
+    if t == "radius":
+        measure, columns = radius(c.get("circle") or c.get("arc"))
+        value = float(c["value"])
+        return _Row(owner, lambda x: [measure(x) - value], columns, 1)
+
+    if t == "point_on_line":
+        px_i, py_i = point(c["point"])
+        distance, columns = offset_from_line(px_i, py_i, c["line"])
+        return _Row(owner, lambda x: [distance(x)], columns, 1)
+
+    if t == "arc_radius":
+        arc = arcs.get(c["arc"])
+        if arc is None:
+            raise SketchError(f"arc_radius references unknown arc: {c['arc']}")
+        cx, cy = point(arc["center"])
+        ax, ay = point(arc["a"])
+        value = float(c["value"])
+        return _Row(owner, lambda x: [hypot(x[ax] - x[cx], x[ay] - x[cy]) - value],
+                    (cx, cy, ax, ay), 1)
+
+    if t == "tangent":
+        return _tangent_row(owner, c, point, segment, centre, radius,
+                            offset_from_line, lines)
+
+    if t == "concentric":
+        ax, ay = centre(c["a"])
+        bx, by = centre(c["b"])
+        return _Row(owner, lambda x: [x[ax] - x[bx], x[ay] - x[by]], (ax, ay, bx, by), 2)
+
+    if t == "symmetric":
+        lax, lay, lbx, lby = segment(c["line"])
+        ax, ay = point(c["a"])
+        bx, by = point(c["b"])
+
+        # Two halves: the pair's midpoint sits on the mirror line, and the line
+        # joining them crosses it square. Either alone is not symmetry.
+        def mirrored(x):
+            ex, ey = x[lbx] - x[lax], x[lby] - x[lay]
+            length = hypot(ex, ey) + 1e-12
+            wx = (x[ax] + x[bx]) / 2.0 - x[lax]
+            wy = (x[ay] + x[by]) / 2.0 - x[lay]
+            return [(ex * wy - ey * wx) / length,
+                    (ex * (x[bx] - x[ax]) + ey * (x[by] - x[ay])) / length]
+
+        return _Row(owner, mirrored, (lax, lay, lbx, lby, ax, ay, bx, by), 2)
+
+    if t == "angle":
+        a1x, a1y, b1x, b1y = segment(c["line1"])
+        a2x, a2y, b2x, b2y = segment(c["line2"])
+        wanted = math.radians(float(c["value"]))
+
+        def between(x):
+            d1x, d1y = x[b1x] - x[a1x], x[b1y] - x[a1y]
+            d2x, d2y = x[b2x] - x[a2x], x[b2y] - x[a2y]
+            actual = math.atan2(d1x * d2y - d1y * d2x, d1x * d2x + d1y * d2y)
+            # Wrapped into (-pi, pi] so 179 deg and -181 deg are the same ask.
+            return [(actual - wanted + math.pi) % (2 * math.pi) - math.pi]
+
+        return _Row(owner, between, (a1x, a1y, b1x, b1y, a2x, a2y, b2x, b2y), 1)
+
+    if t == "midpoint":
+        lax, lay, lbx, lby = segment(c["line"])
+        px_i, py_i = point(c["point"])
+        return _Row(owner, lambda x: [x[px_i] - (x[lax] + x[lbx]) / 2.0,
+                                      x[py_i] - (x[lay] + x[lby]) / 2.0],
+                    (lax, lay, lbx, lby, px_i, py_i), 2)
+
+    if t == "equal_radius":
+        first, cols_a = radius(c["a"])
+        second, cols_b = radius(c["b"])
+        return _Row(owner, lambda x: [first(x) - second(x)], (*cols_a, *cols_b), 1)
+
+    if t == "point_on_circle":
+        key = c.get("circle") or c.get("arc")
+        cx, cy = centre(key)
+        measure, cols_r = radius(key)
+        px_i, py_i = point(c["point"])
+        return _Row(owner,
+                    lambda x: [hypot(x[px_i] - x[cx], x[py_i] - x[cy]) - measure(x)],
+                    (cx, cy, px_i, py_i, *cols_r), 1)
+
+    raise SketchError(f"unknown constraint: {t}")
+
+
+def _tangent_row(owner, c, point, segment, centre, radius, offset_from_line, lines) -> _Row:
     """Tangency, line-to-curve or curve-to-curve.
 
     Curve-to-curve has **two** answers — the circles can touch outside each other
@@ -226,35 +349,84 @@ def _tangent_residual(c, line_dir, px, py, centre_pid, radius_of,
     curves = [k for k in (c.get("arc"), c.get("circle"), c.get("a"), c.get("b"),
                           c.get("arc1"), c.get("arc2"), c.get("curve1"), c.get("curve2"))
               if k is not None]
+
     if line_id is not None:
         if line_id not in lines:
             raise SketchError(f"tangent references unknown line: {line_id}")
         if not curves:
             raise SketchError("tangent needs a line and a circle/arc, or two of them")
+        cx, cy = centre(curves[0])
+        measure, cols_r = radius(curves[0])
+        distance, cols_d = offset_from_line(cx, cy, line_id)
         # |perpendicular distance| - r: the line grazes the circle from either
         # side, and which side is not something tangency has an opinion about.
-        return float(abs(point_line_distance(centre_pid(curves[0]), line_id))
-                     - radius_of(curves[0]))
+        return _Row(owner, lambda x: [abs(distance(x)) - measure(x)],
+                    (*cols_d, *cols_r), 1)
+
     if len(curves) < 2:
         raise SketchError("tangent needs a line and a circle/arc, or two of them")
-    ca, cb = centre_pid(curves[0]), centre_pid(curves[1])
-    span = np.hypot(px(ca) - px(cb), py(ca) - py(cb))
-    ra, rb = radius_of(curves[0]), radius_of(curves[1])
-    if bool(c.get("internal", False)):
-        return float(span - abs(ra - rb))
-    return float(span - (ra + rb))
+    ax, ay = centre(curves[0])
+    bx, by = centre(curves[1])
+    first, cols_a = radius(curves[0])
+    second, cols_b = radius(curves[1])
+    internal = bool(c.get("internal", False))
+
+    def touching(x):
+        span = hypot(x[ax] - x[bx], x[ay] - x[by])
+        ra, rb = first(x), second(x)
+        return [span - (abs(ra - rb) if internal else ra + rb)]
+
+    return _Row(owner, touching, (ax, ay, bx, by, *cols_a, *cols_b), 1)
 
 
-def _residuals(x: np.ndarray, spec: dict, vi: Dict[str, int],
-               radii_index: Dict[str, int]) -> np.ndarray:
-    rows = _residual_rows(x, spec, vi, radii_index)
-    return np.array([v for _, values in rows for v in values], dtype=float)
+def _rows_at(model: _Model, x) -> List[Tuple[Any, List[float]]]:
+    """``(owner, values)`` for every row, which is what the diagnosis reads."""
+    return [(row.owner, row.evaluate(x)) for row in model.rows]
+
+
+def _residuals(x, model: _Model) -> np.ndarray:
+    values = np.empty(model.n_res, dtype=float)
+    xs = x.tolist() if isinstance(x, np.ndarray) else x
+    for row, (lo, hi) in zip(model.rows, model.spans):
+        values[lo:hi] = row.evaluate(xs)
+    return values
 
 
 # ------------------------------------------------------------- diagnosis --
 
 _TOLERANCE = 1e-6          # a residual this small is a satisfied constraint
 _RANK_TOLERANCE = 1e-7     # relative to the largest singular value
+
+# How large a sketch this will accept. The residual evaluation and the Jacobian
+# are both linear in the sketch now, but the rank comes from an SVD, which is
+# not: it costs O(rows^2 x variables) and `_redundancy_groups` asks for the full
+# left basis, which allocates rows x rows. Unbounded, one request could spend
+# minutes of CPU and hundreds of megabytes — the operation surface is reachable
+# by anyone who can open a document, so the bound belongs here rather than in a
+# comment about reasonable use. A hand-drawn sketch is tens of entities; a
+# generated one is low hundreds.
+MAX_ENTITIES = 600
+MAX_CONSTRAINTS = 600
+
+
+def sketch_size(spec: dict) -> Tuple[int, int]:
+    """``(entities, constraints)`` — what the limits below are counted against."""
+    entities = sum(len(spec.get(kind) or ())
+                   for kind in ("points", "lines", "arcs", "circles"))
+    return entities, len(spec.get("constraints") or ())
+
+
+def check_size(spec: dict) -> None:
+    """Refuse a sketch too large to diagnose, by name and with the number."""
+    entities, constraints = sketch_size(spec)
+    if entities > MAX_ENTITIES:
+        raise SketchError(
+            f"sketch has {entities} entities, more than the {MAX_ENTITIES} this "
+            "solver will diagnose — split it across several sketches")
+    if constraints > MAX_CONSTRAINTS:
+        raise SketchError(
+            f"sketch has {constraints} constraints, more than the "
+            f"{MAX_CONSTRAINTS} this solver will diagnose")
 
 
 def _sketch_scale(x: np.ndarray) -> float:
@@ -270,23 +442,35 @@ def _sketch_scale(x: np.ndarray) -> float:
     return magnitude if magnitude > 1e-12 else 1.0
 
 
-def _jacobian(x: np.ndarray, spec: dict, vi, radii_index, step: float) -> np.ndarray:
-    """Central differences at the solution.
+def _jacobian(model: _Model, x, step: float) -> np.ndarray:
+    """Central differences at the solution, evaluated only where they can be nonzero.
 
+    Two things are load-bearing. **Central** rather than forward differences:
     `least_squares` hands back a forward-difference Jacobian computed with its
-    own step, which is accurate to about 1e-8 relative — close enough to the rank
-    tolerance below to make the diagnosis a coin toss. Two extra evaluations per
-    variable buys three more digits and a stable answer.
+    own step, accurate to about 1e-8 relative, which is close enough to the rank
+    tolerance below to make the diagnosis a coin toss; two evaluations per
+    variable buys three more digits and a stable answer. And **sparse**: a
+    constraint reads four or six coordinates, so perturbing one variable can only
+    move the handful of rows that read it. Re-evaluating every row per column
+    made the cost quadratic in the sketch size, which is how a few hundred
+    entities turned into fifteen seconds.
     """
-    n = x.size
-    base = _residuals(x, spec, vi, radii_index)
-    jac = np.zeros((base.size, n), dtype=float)
-    for j in range(n):
-        up, down = x.copy(), x.copy()
-        up[j] += step
-        down[j] -= step
-        jac[:, j] = (_residuals(up, spec, vi, radii_index)
-                     - _residuals(down, spec, vi, radii_index)) / (2.0 * step)
+    xs = list(x)
+    jac = np.zeros((model.n_res, model.n_vars), dtype=float)
+    inverse = 1.0 / (2.0 * step)
+    for column, affected in enumerate(model.by_column):
+        if not affected:
+            continue
+        original = xs[column]
+        xs[column] = original + step
+        up = [model.rows[i].evaluate(xs) for i in affected]
+        xs[column] = original - step
+        down = [model.rows[i].evaluate(xs) for i in affected]
+        xs[column] = original
+        for i, high, low in zip(affected, up, down):
+            lo, hi = model.spans[i]
+            for k in range(hi - lo):
+                jac[lo + k, column] = (high[k] - low[k]) * inverse
     return jac
 
 
@@ -331,7 +515,7 @@ def _reference(spec: dict, owner) -> Dict[str, Any]:
             "label": _label(spec, owner)}
 
 
-def diagnose(spec: dict, x: np.ndarray, vi, radii_index) -> Dict[str, Any]:
+def diagnose(model: "_Model", x) -> Dict[str, Any]:
     """What the solve actually established, beyond "the residual is small".
 
     Four states, read off the Jacobian at the solution:
@@ -350,39 +534,36 @@ def diagnose(spec: dict, x: np.ndarray, vi, radii_index) -> Dict[str, Any]:
     constraints carry four constraints' worth of information" is the true
     statement, and picking one of them as the culprit would be an invention.
     """
-    rows = _residual_rows(x, spec, vi, radii_index)
-    scale = _sketch_scale(x)
+    spec = model.spec
+    xs = x.tolist() if isinstance(x, np.ndarray) else list(x)
+    rows = _rows_at(model, xs)
+    scale = _sketch_scale(np.asarray(xs, dtype=float))
     tolerance = _TOLERANCE * scale
 
     owners = [owner for owner, _ in rows]
     counts = [len(values) for _, values in rows]
-    flat = np.array([v for _, values in rows for v in values], dtype=float)
+    per_owner = [(owner, math.sqrt(sum(v * v for v in values)) if values else 0.0)
+                 for owner, values in rows]
 
-    per_owner: List[Tuple[Any, float]] = []
-    cursor = 0
-    for owner, count in zip(owners, counts):
-        chunk = flat[cursor:cursor + count]
-        per_owner.append((owner, float(np.linalg.norm(chunk)) if count else 0.0))
-        cursor += count
-
-    n_vars = int(x.size)
-    if flat.size == 0:
+    n_vars = model.n_vars
+    n_res = model.n_res
+    if n_res == 0:
         jac = np.zeros((0, n_vars))
         rank = 0
     else:
-        jac = _row_normalised(_jacobian(x, spec, vi, radii_index, 1e-6 * scale))
+        jac = _row_normalised(_jacobian(model, xs, 1e-6 * scale))
         singular = np.linalg.svd(jac, compute_uv=False)
         rank = int(np.sum(singular > (singular[0] if singular.size else 0.0) * _RANK_TOLERANCE))
 
     dof = max(n_vars - rank, 0)
-    redundant = max(flat.size - rank, 0)
+    redundant = max(n_res - rank, 0)
 
     conflicts = [_reference(spec, owner) | {"residual": round(value, 12)}
                  for owner, value in sorted(per_owner, key=lambda kv: -kv[1])
                  if value > tolerance]
 
     redundant_groups: List[List[Dict[str, Any]]] = []
-    if redundant and flat.size:
+    if redundant and n_res:
         redundant_groups = _redundancy_groups(spec, jac, owners, counts, rank)
 
     if conflicts:
@@ -400,7 +581,7 @@ def diagnose(spec: dict, x: np.ndarray, vi, radii_index) -> Dict[str, Any]:
         "redundant": redundant,
         "rank": rank,
         "variables": n_vars,
-        "equations": int(flat.size),
+        "equations": n_res,
         "conflicts": conflicts,
         "redundant_groups": redundant_groups,
         "message": _message(status, dof, conflicts, redundant_groups),
@@ -455,6 +636,7 @@ def solve_sketch(spec: dict) -> dict:
     points = spec.get("points", [])
     if not points:
         raise SketchError("sketch has no points")
+    check_size(spec)
 
     vi, x0 = _index_variables(points)
     circles = spec.get("circles", [])
@@ -464,20 +646,20 @@ def solve_sketch(spec: dict) -> dict:
         x0.append(float(cir.get("radius", 0.01)))
 
     x0_arr = np.array(x0, dtype=float)
-    n_res = _residuals(x0_arr, spec, vi, radii_index).size
-    if n_res == 0:
+    model = _compile(spec, vi, radii_index, x0_arr.size)
+    if model.n_res == 0:
         sol_x = x0_arr
         residual = 0.0
     else:
         # 'lm' is fast/exact but requires residuals >= variables; under-constrained
         # sketches (fewer constraints than DOF) need 'trf', which handles both.
-        method = "lm" if n_res >= x0_arr.size else "trf"
+        method = "lm" if model.n_res >= x0_arr.size else "trf"
         # Tighter than the 1e-8 default: these systems are a few dozen unknowns,
         # so the extra iterations cost nothing, and at the default an
         # under-constrained solve stopped around 5e-9 — an order of magnitude
         # from the 1e-6 that `converged` claims and well short of what a tangency
         # needs to be believable.
-        result = least_squares(_residuals, x0_arr, args=(spec, vi, radii_index),
+        result = least_squares(_residuals, x0_arr, args=(model,),
                                method=method, max_nfev=2000,
                                ftol=1e-14, xtol=1e-14, gtol=1e-14)
         sol_x = result.x
@@ -491,7 +673,7 @@ def solve_sketch(spec: dict) -> dict:
         "residual": round(residual, 9),
         "converged": residual < 1e-6,
     }
-    solved.update(diagnose(spec, sol_x, vi, radii_index))
+    solved.update(diagnose(model, sol_x))
     return solved
 
 

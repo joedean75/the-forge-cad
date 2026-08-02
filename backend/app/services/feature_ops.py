@@ -485,11 +485,17 @@ def resolve_datums(tree: Dict[str, Any]) -> Dict[str, Any]:
                         params["plane"] = plane
                         params["offset"] = offset
                         params["plane_origin"] = list(origin_uv)  # zero the sketch on the face
-                    except (KeyError, ValueError) as exc:
+                    except Exception as exc:  # noqa: BLE001 — see below
                         # Keep the baked-in fallback plane/offset, but say why —
                         # `check_references` reads this back, and "the face you
                         # sketched on is gone" is the only useful thing to report
                         # when an upstream edit destroyed it.
+                        #
+                        # Every exception, not just KeyError/ValueError: this
+                        # runs on the evaluation path, and OCC raises its own
+                        # types when a rebuild fails. A datum that cannot be
+                        # resolved must degrade to the last known plane, never
+                        # take the whole document down with it.
                         if ref.get("face_id"):
                             params["on_face_status"] = "unresolved"
                             params["on_face_detail"] = str(exc)
