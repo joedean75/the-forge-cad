@@ -39,37 +39,16 @@ def _doc_summary(doc) -> dict:
     return observation.summarize(doc)
 
 
-def _catalog_text() -> str:
-    lines = []
-    for op in cad_operations.catalog():
-        params = ", ".join(op["params"].keys()) or "—"
-        lines.append(f"- {op['name']} ({op['kind']}): {op['description']} · params: {params}")
-    return "\n".join(lines)
-
-
-_SYSTEM_PROMPT = """You are Forge Copilot, an engineering agent that builds and edits a CAD part by calling operations one at a time.
-
-Each turn respond with EXACTLY ONE JSON object, nothing else:
-  {"op": "<operation_name>", "args": { ... }, "rationale": "<one short sentence>"}
-or, when the goal is fully satisfied:
-  {"done": true, "summary": "<what you accomplished>"}
-
-Rules:
-- ALL lengths are in METRES (100 mm = 0.1). Center parts near the origin.
-- Use ONLY the operations listed below, with their exact parameter names.
-- Take the minimum number of purposeful steps. Prefer add_primitive, add_sketch, add_modifier, and set_feature_params.
-- To change an existing feature's size/position, read its CURRENT params in the document summary and pass the SAME structure to set_feature_params (e.g. a box uses {"size":{"x","y","z"},"center":{...}} in metres). Do not invent parameter names.
-- Use query operations (bounding_box, list_features) to verify when unsure; they don't change the part.
-- If an operation returned an error last turn, fix the arguments or try a different approach — do not repeat the same failing call.
-- When the part matches the goal, return {"done": true, ...}. Do not keep adding features unnecessarily.
-
-Available operations:
-%s
-"""
-
-
 def _plan_next(goal: str, transcript: List[dict], summary: dict) -> dict:
-    """Ask the LLM for the next operation. Returns a decision dict."""
+    """Ask the LLM for the next operation. Returns a decision dict.
+
+    Two paths, and which one ran is recorded on the decision as ``_via`` the
+    same way `AnalysisReport.solver` marks a closed-form fallback: a prompt is
+    not a measurement, and a benchmark comparing runs has to be able to tell a
+    schema-constrained call from a parsed one.
+    """
+    from app.services import action_space
+
     if not llm_client.is_configured():
         return {"done": True, "summary": "No LLM configured — the copilot needs an LLM key.", "_unconfigured": True}
 
@@ -79,6 +58,7 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict) -> dict:
             "args": s.get("args"),
             "ok": s.get("ok"),
             "error": s.get("error"),
+            "warnings": s.get("warnings"),
             "result": s.get("result"),
         }
         for s in transcript
@@ -88,17 +68,38 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict) -> dict:
         f"Goal: {goal}\n\n"
         f"Current document:\n{json.dumps(summary)}\n\n"
         f"Steps so far:\n{json.dumps(history) if history else '(none yet)'}\n\n"
-        "Return the next single JSON action."
+        "Take the next single action."
     )
+    with_tools = llm_client.supports_tools()
     messages = [
-        {"role": "system", "content": _SYSTEM_PROMPT % _catalog_text()},
+        {"role": "system", "content": action_space.system_prompt(with_tools=with_tools)},
         {"role": "user", "content": user},
     ]
-    content = llm_client._call_llm(messages, timeout=60.0, max_tokens=1200)
+    message = llm_client._post_chat(
+        messages, timeout=60.0, max_tokens=1200,
+        tools=action_space.tools() if with_tools else None)
+
+    calls = message.get("tool_calls") or []
+    if calls:
+        function = (calls[0] or {}).get("function") or {}
+        raw_args = function.get("arguments") or "{}"
+        try:
+            parsed = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"tool call arguments were not JSON: {raw_args[:200]}") from exc
+        return {"op": function.get("name"), "args": parsed,
+                "rationale": (message.get("content") or "").strip()[:200], "_via": "tools"}
+
+    content = message.get("content") or ""
+    if with_tools:
+        # Tools were offered and none was called: on this protocol that is how a
+        # model says it is finished, and the text is the summary.
+        return {"done": True, "summary": content.strip()[:500] or "done", "_via": "tools"}
+
     raw = llm_client._extract_json(content)
     if raw is None:
         raise ValueError(f"planner returned no JSON: {content[:200]}")
-    return json.loads(raw)
+    return {**json.loads(raw), "_via": "prose"}
 
 
 def run(
@@ -123,6 +124,7 @@ def run(
     max_steps = max(1, min(int(max_steps), MAX_STEPS_CAP))
     transcript: List[dict] = []
     final_summary: Optional[str] = None
+    checked = False
 
     # A copilot run is the archetypal training example: a natural-language goal
     # and the operation sequence that satisfied it. It was previously discarded
@@ -140,6 +142,7 @@ def run(
             except Exception:  # progress reporting must never kill the loop
                 pass
 
+    finished = False
     for _ in range(max_steps):
         doc = document_service.get_document(doc_id)
         if doc is None:
@@ -153,6 +156,23 @@ def run(
 
         if not isinstance(decision, dict) or decision.get("done"):
             final_summary = (decision or {}).get("summary") if isinstance(decision, dict) else None
+            unmet = _unmet_requirements(doc_id) if not checked else []
+            if unmet:
+                # The spec is the reward function, and a loop that never reads it
+                # is optimising nothing. Checked once, on the transition to done
+                # — re-checking after every edit would spend the whole budget
+                # checking, and a second refusal would be a loop rather than a
+                # correction.
+                checked = True
+                # Recorded as the operation it is, not as a private note: the
+                # planner's history is built from `kind == "op"` entries, so
+                # anything else would be invisible to the model it is meant to
+                # inform, and the run would spend a step to learn nothing.
+                note({"kind": "op", "op": "verify_against_spec", "args": {}, "ok": True,
+                      "rationale": "self-check before finishing",
+                      "result": {"unmet": unmet}})
+                continue
+            finished = True
             break
 
         op = decision.get("op")
@@ -188,9 +208,39 @@ def run(
     if final_summary is None:
         n_ok = sum(1 for s in transcript if s.get("kind") == "op" and s.get("ok"))
         final_summary = f"Ran {n_ok} operation(s) toward: {goal}"
-    trajectories.finish(trajectory_id, outcome="done", summary=final_summary)
+    # Say so rather than implying the goal was met. A run that stops with
+    # requirements outstanding is a different outcome from one that finished,
+    # and a summary that reads the same for both is the silent success this
+    # whole surface is built to avoid.
+    outstanding = _unmet_requirements(doc_id)
+    if outstanding:
+        final_summary = (f"{final_summary} — {len(outstanding)} requirement(s) "
+                         f"still unmet: {'; '.join(outstanding[:3])}")
+    trajectories.finish(trajectory_id, outcome="done" if finished else "budget",
+                        summary=final_summary)
     return {"steps": transcript, "document": doc, "summary": final_summary,
+            # Whether the planner *said* it was done, rather than inferred from
+            # the step count — a run that used its last step to finish and one
+            # that was cut off there are different outcomes.
+            "finished": finished, "unmet": outstanding,
             "trajectory_id": trajectory_id}
+
+
+def _unmet_requirements(doc_id: str) -> List[str]:
+    """Which of the document's own spec requirements the body currently fails.
+
+    Empty when there is no spec, which is the common case and must not turn into
+    a phantom failure — a document with nothing declared has nothing to fail.
+    """
+    doc = document_service.get_document(doc_id)
+    if doc is None or not ((getattr(doc, "spec", None) or {}).get("requirements")):
+        return []
+    env = cad_operations.execute("verify_against_spec", doc_id, {}, include_state=False)
+    if not env["ok"]:
+        return []
+    return [f"{row.get('label') or row.get('id')}: {row.get('detail')}"
+            for row in (env["result"] or {}).get("checks") or []
+            if row.get("status") != "pass"]
 
 
 _HEAVY_KEYS = {"document", "mesh_url", "feature_tree", "profile", "sketch"}

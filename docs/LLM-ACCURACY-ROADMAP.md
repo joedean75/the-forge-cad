@@ -1,5 +1,32 @@
 # LLM accuracy roadmap — three sprints
 
+> **Status: A1, A2 and A3 are done.** Measured the same way as the numbers
+> below, on the adversarial suite that ships in `evals/tasks.py`:
+>
+> | | before | after |
+> |---|---|---|
+> | Known bad calls caught (refused or flagged) | **0 / 5** | **5 / 5** |
+> | Adversarial suite behaving as declared | 2 / 7 | 7 / 7 |
+> | Parameters with no description | 71 / 142 | **0** |
+> | Parameters with no unit and not declared unitless | 20+ | **0** |
+> | What the planner is handed | 12,763 chars of parameter *names* | 45 KB of JSON Schema, or prose carrying type + unit + required |
+> | Generators of the action space | 3 (prompt, corpus, tools) | **1** (`services/action_space.py`) |
+> | Error codes carrying a remedy | 0 / 8 | **8 / 8** |
+> | Loop reads its own reward function | never | once, on the transition to done |
+>
+> Every one of those five bad calls previously returned `ok: true` with a body
+> nobody asked for. The largest was structural: `additionalProperties: false`
+> was declared on nested objects and never enforced, so `add_primitive` with
+> three invented key names dropped all three and returned a default 50 mm cube.
+>
+> **The goal suite is written and unrun.** `evals/tasks.py::GOALS` holds six
+> tasks across primitives, holes, booleans, materials and the exact kernel, and
+> they need an API key this environment does not have — `evals.agent --suite
+> goals` exits 2 and says so rather than reporting a number it did not measure.
+> So the headline "did A2 make a model better?" is still open; what is measured
+> is that five specific ways of being wrong now produce an error instead of a
+> part.
+
 The operation catalog was built to be an action space for a model: typed
 arguments, validation before a handler runs, typed failures, results that say
 what changed, verifiers that can score a part. All of that is real. What is

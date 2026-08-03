@@ -28,6 +28,14 @@ class OperationError(ValueError):
 
     code = "BAD_ARG"
     http_status = 422
+    #: What to do about it. A code tells a caller *which* problem it has; the
+    #: remedy tells it what the next call should be, which is otherwise
+    #: something every agent has to re-derive from prose every time. Written
+    #: once, per code, rather than repeated in a system prompt that will drift.
+    #: `fillet_edges` already did this inside its message ("call list_edges for
+    #: the 12 available on this body") and it was the exception; this makes it
+    #: the rule without every handler having to remember.
+    remedy = "Check the argument against the operation's schema and call again."
 
     def __init__(self, message: str, *, arg: Optional[str] = None):
         super().__init__(message)
@@ -35,7 +43,7 @@ class OperationError(ValueError):
         self.arg = arg
 
     def to_dict(self) -> dict:
-        out = {"code": self.code, "message": self.message}
+        out = {"code": self.code, "message": self.message, "remedy": self.remedy}
         if self.arg:
             out["arg"] = self.arg
         return out
@@ -45,6 +53,7 @@ class UnknownOperation(OperationError):
     """No such operation in the catalog."""
 
     code = "UNKNOWN_OP"
+    remedy = ("Use one of the operation names in the catalog exactly as written.")
     http_status = 400
 
 
@@ -52,6 +61,7 @@ class MissingArgument(OperationError):
     """A required argument was absent. Distinct from anything being 'not found'."""
 
     code = "MISSING_ARG"
+    remedy = ("Supply the named argument. The operation's schema marks it required; it has no default because there is no answer that would be right.")
     http_status = 422
 
 
@@ -59,16 +69,19 @@ class BadArgument(OperationError):
     """An argument was present but unusable — wrong type, range or enum member."""
 
     code = "BAD_ARG"
+    remedy = ("Fix the named argument's type, range or spelling. Lengths are in metres and the schema lists every field an object accepts.")
     http_status = 422
 
 
 class NoSuchDocument(OperationError):
     code = "NO_SUCH_DOCUMENT"
+    remedy = ("Nothing can be done with this id — the document does not exist or is not yours.")
     http_status = 404
 
 
 class NoSuchFeature(OperationError):
     code = "NO_SUCH_FEATURE"
+    remedy = ("Call list_features and use an id from it. Feature ids change when features are deleted.")
     http_status = 404
 
 
@@ -81,6 +94,7 @@ class PreconditionFailed(OperationError):
     """
 
     code = "PRECONDITION"
+    remedy = ("Different arguments will not help: a different *earlier* step is needed. Build what this operation needs first, then call it again.")
     http_status = 409
 
 
@@ -88,6 +102,7 @@ class EvaluationFailed(OperationError):
     """The edit applied but the resulting tree does not evaluate to geometry."""
 
     code = "EVAL_FAILED"
+    remedy = ("The edit applied but the body will not evaluate. Undo it with set_feature_params or delete_feature, or fix the parameter it depends on.")
     http_status = 422
 
 
@@ -95,6 +110,7 @@ class InternalError(OperationError):
     """An unexpected exception. Surfaced as structured JSON, never a bare 500."""
 
     code = "INTERNAL"
+    remedy = ("Not your call\u2019s fault. Try a different approach; repeating this one will fail the same way.")
     http_status = 500
 
 

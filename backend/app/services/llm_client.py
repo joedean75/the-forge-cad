@@ -397,8 +397,15 @@ def _headers() -> dict[str, str]:
     return headers
 
 
-def _call_llm(messages: list[dict[str, str]], timeout: float = 60.0, max_tokens: Optional[int] = None) -> str:
-    """Send a chat-completion request to the configured LLM provider."""
+def _post_chat(messages: list[dict[str, Any]], *, timeout: float = 60.0,
+               max_tokens: Optional[int] = None,
+               tools: Optional[list[dict[str, Any]]] = None) -> dict[str, Any]:
+    """One chat-completion round trip, returning the whole assistant message.
+
+    Separate from `_call_llm` because a tool call has no ``content`` — the model
+    answers in ``tool_calls`` — and the older helper's "empty content is an
+    error" rule would reject exactly the responses the strong path wants.
+    """
     if not LLM_API_KEY:
         raise RuntimeError("LLM_API_KEY is not set")
 
@@ -410,6 +417,9 @@ def _call_llm(messages: list[dict[str, str]], timeout: float = 60.0, max_tokens:
     }
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
 
     with httpx.Client(timeout=timeout) as client:
         resp = client.post(url, headers=_headers(), json=payload)
@@ -419,7 +429,23 @@ def _call_llm(messages: list[dict[str, str]], timeout: float = 60.0, max_tokens:
     choices = data.get("choices", [])
     if not choices:
         raise RuntimeError("LLM returned no choices")
-    content = choices[0].get("message", {}).get("content", "")
+    return choices[0].get("message", {}) or {}
+
+
+def supports_tools() -> bool:
+    """Whether to hand the provider real tool schemas.
+
+    Opt-out rather than opt-in: the OpenAI-style ``tools`` field is what every
+    provider this client targets speaks, and a provider that ignores it returns
+    ordinary content, which the caller already handles. `FORGE_LLM_TOOLS=0`
+    forces the prose path for one that rejects the field outright.
+    """
+    return os.getenv("FORGE_LLM_TOOLS", "1") not in ("0", "false", "no")
+
+
+def _call_llm(messages: list[dict[str, str]], timeout: float = 60.0, max_tokens: Optional[int] = None) -> str:
+    """Send a chat-completion request and return its text content."""
+    content = _post_chat(messages, timeout=timeout, max_tokens=max_tokens).get("content", "")
     if not content:
         raise RuntimeError("LLM returned empty content")
     return content

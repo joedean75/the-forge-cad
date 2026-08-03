@@ -132,6 +132,20 @@ def corpus_health(
                                     doc_ids=ids, record=False)
 
 
+@router.get("/corpus-stats")
+def corpus_stats(acc: accounts.Account = Depends(current_account)):
+    """What this account's recorded corpus is made of, and what failed in it.
+
+    `corpus-health` asks whether a *tree* can be recovered as an op sequence.
+    This asks what the *agent* did — and `by_error_code` is the column that
+    matters, because it says which kind of mistake the surface is provoking.
+    A corpus with no failures in it teaches nothing about recovery, which is
+    most of what an agent does.
+    """
+    mine = [r for r in trajectories.list_all() if _visible(r, acc)]
+    return trajectories.corpus_stats(mine)
+
+
 @router.get("/{trajectory_id}")
 def get_trajectory(trajectory_id: str, acc: accounts.Account = Depends(current_account)):
     record = trajectories.get(trajectory_id)

@@ -165,9 +165,13 @@ def test_a_missing_argument_is_a_422_over_http_not_a_404():
     doc = _doc()
     r = client.post(f"/api/documents/{doc.id}/op", json={"op": "add_sketch", "args": {}})
     assert r.status_code == 422
-    assert r.json()["detail"] == {"code": "MISSING_ARG",
-                                  "message": "'sketch' is required by add_sketch",
-                                  "arg": "sketch"}
+    detail = r.json()["detail"]
+    assert detail["code"] == "MISSING_ARG"
+    assert detail["message"] == "'sketch' is required by add_sketch"
+    assert detail["arg"] == "sketch"
+    # And what to do about it, so the caller does not have to infer the next
+    # move from the prose. See `op_errors.OperationError.remedy`.
+    assert "required" in detail["remedy"]
 
 
 def test_envelope_mode_returns_failures_as_200_for_rollout_harnesses():

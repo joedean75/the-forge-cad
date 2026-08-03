@@ -182,6 +182,52 @@ def delete(trajectory_id: str) -> bool:
     return persistence.delete_trajectory(trajectory_id)
 
 
+def corpus_stats(records: Optional[List[dict]] = None) -> Dict[str, Any]:
+    """What the recorded corpus is made of, and what went wrong in it.
+
+    The counterpart to `decompiler.corpus_report`, which asks whether a *tree*
+    can be recovered. This asks what the *agent* did: how many calls it took,
+    how many failed, and — the column that matters — under which code.
+
+    The failures are the valuable half. A corpus of only successes never shows a
+    model what recovering from a `PRECONDITION` looks like, and recovery is most
+    of what an agent does; `by_error_code` is how you see whether the corpus
+    contains any, and which kind. Nothing is written here: measuring must not
+    also record.
+    """
+    records = list_all() if records is None else records
+    codes: Dict[str, int] = {}
+    outcomes: Dict[str, int] = {}
+    kinds: Dict[str, int] = {}
+    steps = failures = warned = 0
+
+    for record in records:
+        outcomes[record.get("outcome") or "open"] = \
+            outcomes.get(record.get("outcome") or "open", 0) + 1
+        kinds[record.get("kind") or "edit"] = kinds.get(record.get("kind") or "edit", 0) + 1
+        for step in record.get("steps") or []:
+            steps += 1
+            if step.get("warnings"):
+                warned += 1
+            error = step.get("error") or {}
+            code = error.get("code")
+            if code:
+                failures += 1
+                codes[code] = codes.get(code, 0) + 1
+
+    return {
+        "trajectories": len(records),
+        "steps": steps,
+        "failed_steps": failures,
+        "failure_rate": round(failures / steps, 4) if steps else 0.0,
+        "warned_steps": warned,
+        "mean_steps": round(steps / len(records), 2) if records else 0.0,
+        "by_error_code": dict(sorted(codes.items(), key=lambda kv: -kv[1])),
+        "by_outcome": outcomes,
+        "by_kind": kinds,
+    }
+
+
 # ------------------------------------------------------------------ export --
 
 def to_messages(record: dict, catalog_text: str = "") -> List[dict]:
@@ -259,12 +305,14 @@ def export_jsonl(records: Optional[List[dict]] = None, *, include_catalog: bool 
 
 
 def _catalog_text() -> str:
-    """The action space as a system prompt — generated, so it cannot go stale."""
-    from app.services import cad_operations
+    """The action space as a system prompt.
 
-    lines = ["You build CAD parts by calling operations one at a time.",
-             "All lengths are in METRES (100 mm = 0.1). Available operations:"]
-    for op in cad_operations.catalog():
-        params = ", ".join(op["params"].keys()) or "—"
-        lines.append(f"- {op['name']} ({op['kind']}): {op['description']} · params: {params}")
-    return "\n".join(lines)
+    The *same* generator the copilot's prompt uses (`services.action_space`).
+    This used to build its own, so the corpus described a different action space
+    from the one at inference — training a model to drive an API that does not
+    exist. The two agreed only by coincidence, and both listed parameter names
+    with no types, no units and no required list.
+    """
+    from app.services import action_space
+
+    return action_space.system_prompt(with_tools=False)

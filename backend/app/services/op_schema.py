@@ -43,13 +43,34 @@ _TYPE_CHECKS = {
 
 
 def _property_schema(descriptor: Dict[str, Any]) -> Dict[str, Any]:
-    """One parameter descriptor as a JSON Schema property."""
+    """One parameter descriptor as a JSON Schema property.
+
+    Recursive, because the descriptors are: a primitive's ``params`` declares
+    its own ``properties`` block, and ``required`` is *our* spelling — a boolean
+    on the property — where JSON Schema wants an array on the object above it.
+    Emitting the boolean produced a schema no validator would accept, in the one
+    payload whose entire purpose is being handed to someone else's validator.
+    """
     prop = {k: v for k, v in (descriptor or {}).items() if k not in _INTERNAL_KEYS}
     # An `enum` alone is valid JSON Schema, but stating the type as well lets a
     # constrained decoder narrow the token space before it reaches the values.
     if "enum" in prop and "type" not in prop:
         if all(isinstance(v, str) for v in prop["enum"]):
             prop["type"] = "string"
+    if isinstance(prop.get("properties"), dict):
+        nested = prop["properties"]
+        prop["properties"] = {k: _property_schema(v) for k, v in nested.items()}
+        needed = [k for k, v in nested.items() if (v or {}).get("required")]
+        if needed:
+            prop["required"] = needed
+    if isinstance(prop.get("items"), dict):
+        prop["items"] = _property_schema(prop["items"])
+    # A length cannot be zero or negative in any operation this catalog has, and
+    # unlike the plausibility band (see `units.py`) that is a fact rather than a
+    # guess — so it belongs in the schema, where a constrained decoder enforces
+    # it before a token is spent.
+    if (descriptor or {}).get("unit") == "m" and prop.get("type") == "number":
+        prop.setdefault("exclusiveMinimum", 0)
     return prop
 
 
@@ -116,17 +137,82 @@ def _check_value(name: str, value: Any, descriptor: Dict[str, Any]) -> None:
             f"'{name}' must be {' or '.join(str(t) for t in names)}; "
             f"got {type(value).__name__}", arg=name)
 
+    _check_nested(name, value, descriptor)
+
+
+def _check_nested(path: str, value: Any, descriptor: Dict[str, Any]) -> None:
+    """Descend into a declared object or array shape.
+
+    Only where a shape is *declared*. `add_sketch.sketch` is an opaque
+    ``{"type": "object"}`` whose contents the sketch solver owns, and inventing
+    a check for it here would be a second, weaker definition of a sketch.
+
+    Skipping this descent was the single largest hole in the surface. A
+    primitive's ``params`` declares its own properties and
+    ``additionalProperties: false``; nothing enforced it, so
+    ``{"width": 0.1, "depth": 0.06, "thickness": 0.008}`` — every key invented —
+    had all three silently dropped and returned a default 50 mm cube as
+    ``ok: true``. A model that invents an argument name has to be told, not
+    handed a body it did not ask for.
+    """
+    properties = descriptor.get("properties")
+    if isinstance(value, dict) and isinstance(properties, dict) and properties:
+        if descriptor.get("additionalProperties") is False:
+            unknown = sorted(k for k in value if k not in properties)
+            if unknown:
+                known = ", ".join(sorted(properties))
+                raise BadArgument(
+                    f"'{path}' has no field{'s' if len(unknown) > 1 else ''} "
+                    f"{', '.join(repr(u) for u in unknown)}; it takes: {known}",
+                    arg=path)
+        for key, nested in properties.items():
+            if (nested or {}).get("required") and value.get(key) is None:
+                raise MissingArgument(f"'{path}.{key}' is required", arg=f"{path}.{key}")
+        for key, item in value.items():
+            nested = properties.get(key)
+            if nested and item is not None:
+                _check_value(f"{path}.{key}", item, nested)
+        return
+
+    items = descriptor.get("items")
+    if isinstance(value, (list, tuple)) and isinstance(items, dict) and items:
+        for index, item in enumerate(value):
+            if item is not None:
+                _check_value(f"{path}[{index}]", item, items)
+
+
+def annotated(params: Dict[str, Any], inherited: Optional[str] = None) -> Dict[str, Any]:
+    """Params with declared units folded into their descriptions, recursively.
+
+    Generated rather than written out by hand, because a unit written into prose
+    beside the code that means it drifts from that code — which is how twenty
+    length parameters came to state no unit at all while the kernel worked in
+    metres and the observation came back in millimetres.
+    """
+    from app.services import units
+
+    out: Dict[str, Any] = {}
+    for name, descriptor in (params or {}).items():
+        entry = units.annotate(name, descriptor or {}, inherited)
+        nested = entry.get("properties")
+        if isinstance(nested, dict):
+            entry = {**entry, "properties": annotated(nested, entry.get("unit"))}
+        out[name] = entry
+    return out
+
 
 def describe(name: str, kind: str, description: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """One catalog entry, carrying both the legacy block and a usable schema."""
+    described = annotated(params)
     return {
         "name": name,
         "kind": kind,
         "description": description,
-        # Kept as-is: the UI, the copilot prompt and the MCP catalog all read it.
-        "params": params,
+        # Kept as-is in shape: the UI, the copilot prompt and the MCP catalog all
+        # read it. Units are folded into the descriptions on the way out.
+        "params": described,
         # What a function-calling API or a constrained decoder should be given.
-        "schema": json_schema(params),
+        "schema": json_schema(described),
     }
 
 
@@ -139,6 +225,6 @@ def tool_definitions() -> List[Dict[str, Any]]:
         "function": {
             "name": op.name,
             "description": op.description,
-            "parameters": json_schema(op.params),
+            "parameters": json_schema(annotated(op.params)),
         },
     } for op in cad_operations.OPERATIONS.values()]
