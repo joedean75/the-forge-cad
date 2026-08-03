@@ -372,6 +372,37 @@ def _poly_sdf_2d(uv: np.ndarray, verts: np.ndarray) -> np.ndarray:
     return s * np.sqrt(d)
 
 
+# A 3D sample grid asks the same 2D question over and over: an extrude at
+# resolution 128 evaluates its profile at 128^3 points, of which only 128^2 are
+# distinct (u, v) pairs — every one is repeated once per slice up the extrusion.
+# For a rectangle that repetition is free; for a 300-curve traced outline it is
+# the whole cost of the document. `_grid_plan` spots it and evaluates the
+# distinct pairs.
+#
+# The probe is what keeps this from being a tax on the cases it cannot help.
+# `RevolveSDF` passes a *radius*, which is different at nearly every point, and
+# a full `np.unique` over two million of those would cost half a second to
+# learn nothing. Counting the distinct values in a strided sample answers the
+# same question for a thousandth of the work.
+_DEDUP_MIN_POINTS = 65_536
+_DEDUP_PROBE = 4096
+
+
+def _grid_plan(u: np.ndarray, v: np.ndarray):
+    """``(uu, ui, vv, vi)`` when (u, v) is a small product set, else ``None``."""
+    n = u.size
+    if n < _DEDUP_MIN_POINTS:
+        return None
+    stride = max(1, n // _DEDUP_PROBE)
+    if np.unique(u[::stride]).size * np.unique(v[::stride]).size > 16 * _DEDUP_PROBE:
+        return None
+    uu, ui = np.unique(u, return_inverse=True)
+    vv, vi = np.unique(v, return_inverse=True)
+    if uu.size * vv.size * 4 > n:
+        return None
+    return uu, ui.reshape(-1), vv, vi.reshape(-1)
+
+
 def profile_sdf_2d(profile: dict, u: np.ndarray, v: np.ndarray) -> np.ndarray:
     """Signed distance to a 2D profile at points (u, v).
 
@@ -380,6 +411,18 @@ def profile_sdf_2d(profile: dict, u: np.ndarray, v: np.ndarray) -> np.ndarray:
     sketch profile that keeps arcs as arcs and supports holes; the geometry for
     it lives in `geom.profile2d` so the B-rep path reads the same definition.
     """
+    u = np.asarray(u, dtype=float)
+    v = np.asarray(v, dtype=float)
+    plan = _grid_plan(u.reshape(-1), v.reshape(-1))
+    if plan is None:
+        return _profile_sdf_at(profile, u, v)
+    uu, ui, vv, vi = plan
+    field = _profile_sdf_at(profile,
+                            np.repeat(uu, vv.size), np.tile(vv, uu.size))
+    return field.reshape(uu.size, vv.size)[ui, vi].reshape(u.shape)
+
+
+def _profile_sdf_at(profile: dict, u: np.ndarray, v: np.ndarray) -> np.ndarray:
     from app.cad_kernel.geom import profile2d
 
     p = profile or {}

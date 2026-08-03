@@ -50,7 +50,11 @@ down to a 0.2 mm plate.
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import math
+from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Dict, List, Optional, Tuple
@@ -129,6 +133,11 @@ class _Recorder:
         # this build. Collected here rather than recomputed on demand because the
         # answer is only knowable while the intermediate bodies still exist.
         self.reports: List[Dict[str, Any]] = []
+        # Subtree content keys, memoised per feature object for this build. Also
+        # keyed on `id`, so the features are pinned for the same reason the
+        # shapes are.
+        self.subtree_keys: Dict[int, Optional[str]] = {}
+        self._pinned: List[Any] = []
 
     def set(self, shape, entities: history.EntityMap) -> history.EntityMap:
         self._maps[id(shape)] = entities
@@ -155,6 +164,123 @@ def _recording():
         yield recorder
     finally:
         _RECORDER.reset(token)
+
+
+# ----------------------------------------------------------- build cache --
+#
+# Editing one feature of a twelve-feature part used to rebuild all twelve, and
+# then rebuild them *again* the first time any topology operation asked for the
+# exact body. Both are avoidable: a subtree's shape is a pure function of that
+# subtree, so it can be keyed by content and kept.
+#
+# Three things make this safe rather than merely fast, and none of them is
+# optional:
+#
+# * **The key covers everything the build reads.** It is the node's own
+#   parameters plus its children's keys, recursively, so a parameter substituted
+#   into a leaf ten levels down changes the root's key. Any feature that will not
+#   serialise yields ``None`` and simply is not cached — a miss is slow, a stale
+#   hit is a document that quietly stops meaning what it says.
+# * **The entity tags come back with the shape.** A cached shape handed to a
+#   parent boolean has to answer `_tags`, or `history.advance` sees an untagged
+#   input and the whole Sprint-8 naming scheme silently degrades to descriptor
+#   matching. The `EntityMap` is cached alongside, still bound to the
+#   `ShapeKeys` it was built under; that map indexes by `IsSame`, and the cached
+#   shape's sub-shapes are the same ones, so the tags still resolve.
+# * **So do the reference verdicts.** `_resolved` files "these four edges
+#   matched, that one is gone" on the recorder while the child body exists. A
+#   cached subtree never runs it, so the verdicts are replayed from the entry —
+#   otherwise `check_references` would report fewer selections the second time a
+#   document is built than the first.
+
+# Bounded because the entries are OCC bodies, not numbers: each pins a shape,
+# its tag map, and the `ShapeKeys` map that map indexes into. A twelve-feature
+# part occupies about two dozen entries per distinct state, so this holds a few
+# states of a few documents — which is what an edit-undo-redo loop actually
+# revisits — rather than a session's whole history.
+_NODE_CACHE_SIZE = 96
+_NODE_CACHE: "OrderedDict[str, Tuple[Any, Any, List[Dict[str, Any]]]]" = OrderedDict()
+
+_MISSING = object()
+
+
+def clear_cache() -> None:
+    """Drop every cached subtree build. For tests and for memory pressure."""
+    _NODE_CACHE.clear()
+
+
+def cache_size() -> int:
+    return len(_NODE_CACHE)
+
+
+def _assign_keys(feature, node: Dict[str, Any], recorder: "_Recorder") -> str:
+    """Key this feature and every feature under it, from one serialized tree.
+
+    Walked against the already-serialized dict rather than calling `to_dict` per
+    node: `to_dict` recurses into children, so keying each node from its own
+    call would serialise the tree once per node.
+    """
+    children = getattr(feature, "children", None) or []
+    serialized = ((node.get("params") or {}).get("children") or [])
+    child_keys = [_assign_keys(child, child_node, recorder)
+                  for child, child_node in zip(children, serialized)]
+    params = {k: v for k, v in (node.get("params") or {}).items() if k != "children"}
+    payload = json.dumps(
+        [node.get("type"), node.get("id"), node.get("name"), params, child_keys],
+        sort_keys=True)
+    key = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    recorder.subtree_keys[id(feature)] = key
+    recorder._pinned.append(feature)
+    return key
+
+
+def _subtree_key(feature) -> Optional[str]:
+    """A content key for this subtree, or ``None`` if it cannot be keyed."""
+    recorder = _RECORDER.get()
+    if recorder is None:
+        return None
+    hit = recorder.subtree_keys.get(id(feature), _MISSING)
+    if hit is not _MISSING:
+        return hit
+    try:
+        _assign_keys(feature, feature.to_dict(), recorder)
+    except Exception:  # noqa: BLE001 — a feature that will not serialise is uncached
+        recorder.subtree_keys[id(feature)] = None
+        recorder._pinned.append(feature)
+        return None
+    return recorder.subtree_keys.get(id(feature))
+
+
+def _reuse(key: Optional[str]):
+    """A cached shape, re-registered on the running build, or ``None``."""
+    if key is None:
+        return None
+    entry = _NODE_CACHE.get(key)
+    if entry is None:
+        return None
+    _NODE_CACHE.move_to_end(key)
+    shape, entities, reports = entry
+    recorder = _RECORDER.get()
+    if recorder is not None:
+        recorder.set(shape, entities)
+        # Copied, because these outlive the build that made them and a caller
+        # that edited one in place would be editing every later build's answer.
+        recorder.reports.extend(copy.deepcopy(reports))
+    return shape
+
+
+def _remember(key: Optional[str], shape, mark: int) -> None:
+    """Cache a freshly built shape with its tags and the verdicts it filed."""
+    recorder = _RECORDER.get()
+    if key is None or recorder is None or shape is None:
+        return
+    entities = recorder.get(shape)
+    if entities is None:
+        return
+    _NODE_CACHE[key] = (shape, entities, copy.deepcopy(recorder.reports[mark:]))
+    _NODE_CACHE.move_to_end(key)
+    while len(_NODE_CACHE) > _NODE_CACHE_SIZE:
+        _NODE_CACHE.popitem(last=False)
 
 
 def _owner(feature) -> str:
@@ -289,9 +415,30 @@ def _boolean(f):
     if not children or any(c is None for c in children):
         raise BrepUnsupported("boolean child has no exact form")
 
-    result = children[0]
     operation = getattr(f, "operation", "union")
-    for other in children[1:]:
+
+    # Fusing twelve bodies is eleven booleans folded left to right, and editing
+    # the twelfth leaves the first ten results identical. The node cache alone
+    # cannot see that — the boolean node's own key changed — so each partial
+    # result is keyed on the children consumed so far. Adding or tuning the last
+    # feature of a part, which is what people spend their time doing, then costs
+    # one boolean rather than all of them.
+    child_keys = [_subtree_key(c) for c in f.children]
+    stem = f"{_owner(f)}|{operation}"
+
+    def prefix(upto: int) -> Optional[str]:
+        keys = child_keys[:upto + 1]
+        if any(k is None for k in keys):
+            return None
+        return hashlib.sha256("|".join([stem, *keys]).encode("utf-8")).hexdigest()
+
+    result = children[0]
+    for index, other in enumerate(children[1:], start=1):
+        key = prefix(index)
+        cached = _reuse(key)
+        if cached is not None:
+            result = cached
+            continue
         if operation == "subtract":
             builder = BRepAlgoAPI_Cut(result, other)
         elif operation == "intersect":
@@ -307,6 +454,12 @@ def _boolean(f):
         # consumes them, and its history is filled properly — so this is the one
         # place `IsDeleted` is believed.
         result = _record(f, builder.Shape(), builder, [result, other], trust_deleted=True)
+        # A boolean files no reference verdicts of its own, so the mark is taken
+        # *after* the fold step and the remembered slice is empty. Taking it as
+        # zero instead would cache whatever an earlier sibling filed and replay
+        # it every time this prefix is reused.
+        recorder = _RECORDER.get()
+        _remember(key, result, len(recorder.reports) if recorder is not None else 0)
     return result
 
 
@@ -1149,14 +1302,22 @@ def _build(feature):
     builder = _BUILDERS.get(name)
     if builder is None:
         raise BrepUnsupported(f"no B-rep builder for {name}")
+
+    key = _subtree_key(feature)
+    cached = _reuse(key)
+    if cached is not None:
+        return cached
+    recorder = _RECORDER.get()
+    mark = len(recorder.reports) if recorder is not None else 0
+
     shape = builder(feature)
     if shape is None or shape.IsNull():
         raise BrepUnsupported(f"{name} produced no shape")
-    recorder = _RECORDER.get()
     if recorder is not None and recorder.get(shape) is None:
         # A leaf — a primitive, a sheet-metal body, an imported solid. It has no
         # input to inherit from, so this is where its entities are first named.
         recorder.set(shape, history.seed(shape, _owner(feature), recorder.keys))
+    _remember(key, shape, mark)
     return shape
 
 
@@ -1171,9 +1332,52 @@ def tessellate(shape, resolution: int = 128):
     50 mm part and a 500 mm part come back equally smooth, rather than the
     latter looking faceted at the same setting.
     """
+    vertices, faces, _ = _tessellate(shape, resolution)
+    return vertices, faces
+
+
+def tessellate_owned(shape, entities, resolution: int = 128):
+    """``(vertices, faces, owners)`` — the same mesh, plus who made each triangle.
+
+    ``owners`` holds one feature id (or ``None``) per triangle, read from the
+    tag on the OCC face the triangle was meshed from. This is the exact answer
+    to "what did I click on": the triangle either came from that feature's
+    solid or it did not, with no nearest-thing guess anywhere in it. Contrast
+    the *face* picker, which stays a list precisely because there is no such
+    mapping for a marching-cubes body.
+    """
+    owners = _face_owners(shape, entities)
+    vertices, faces, face_index = _tessellate(shape, resolution, owners)
+    if face_index is None:
+        return vertices, faces, None
+    return vertices, faces, face_index
+
+
+def _face_owners(shape, entities) -> Optional[List[Optional[str]]]:
+    """The owning feature id for each face of ``shape``, in `MapShapes` order."""
+    if entities is None:
+        return None
+    out: List[Optional[str]] = []
+    for face in history._explore(shape, "face"):
+        tag = entities.tag_of(face)
+        if not tag:
+            out.append(None)
+            continue
+        # A tag is `{feature_id}:{kind}:{index}`, with a pattern instance's
+        # suffix on the end. `~` marks a namespace a feature made for a body of
+        # its own — a hole's cutting cylinder — and the bore wall it leaves
+        # belongs to the hole, which is the feature someone clicking it means.
+        out.append(tag.split(":", 1)[0].split("~", 1)[0])
+    return out
+
+
+def _tessellate(shape, resolution: int = 128,
+                owners: Optional[List[Optional[str]]] = None):
+    """``(vertices, faces, per_triangle_owner)``. See `tessellate`."""
     from OCP.Bnd import Bnd_Box
     from OCP.BRep import BRep_Tool
     from OCP.BRepBndLib import BRepBndLib
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
     from OCP.BRepMesh import BRepMesh_IncrementalMesh
     from OCP.BRepTools import BRepTools
     from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
@@ -1181,6 +1385,38 @@ def tessellate(shape, resolution: int = 128):
     from OCP.TopLoc import TopLoc_Location
     from OCP.TopoDS import TopoDS
     from OCP.TopTools import TopTools_IndexedMapOfShape
+
+    # Meshed on a copy, because meshing is not a read. `BRepMesh` widens edge and
+    # vertex tolerances to cover the deflection it just achieved, and that
+    # survives `BRepTools.Clean_s` — so tessellating a body twice at the same
+    # resolution returns two different meshes, the second one built against a
+    # slightly slackened shape. It never showed while every build was thrown away
+    # after one mesh; the moment a shape is kept and reused (see the build cache
+    # above, and `document_service._BREP_CACHE`, which has handed out shared
+    # bodies all along) it turns into a `mesh_hash` that changes for a document
+    # nobody edited. One `BRepBuilderAPI_Copy` costs 1 ms against a 280 ms mesh.
+    copier = BRepBuilderAPI_Copy(shape)
+    original, shape = shape, copier.Shape()
+
+    # Ownership is known about the *original* faces, and the copy's faces are
+    # different objects. `ModifiedShape` is the copier's own answer to which is
+    # which — matching by exploration order would be a guess that happens to
+    # hold, which is the kind of assumption this file exists to avoid.
+    owner_by_face: Optional[List[Optional[str]]] = None
+    if owners is not None:
+        lookup = TopTools_IndexedMapOfShape()
+        TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_FACE, lookup)
+        owner_by_face = [None] * lookup.Extent()
+        for source, owner in zip(history._explore(original, "face"), owners):
+            try:
+                twin = copier.ModifiedShape(source)
+            except Exception:  # noqa: BLE001 — a face the copier does not know
+                continue
+            if twin is None or twin.IsNull():
+                continue
+            index = lookup.FindIndex(twin)
+            if 1 <= index <= len(owner_by_face):
+                owner_by_face[index - 1] = owner
 
     bounds = Bnd_Box()
     BRepBndLib.Add_s(shape, bounds)
@@ -1200,32 +1436,61 @@ def tessellate(shape, resolution: int = 128):
     mapping = TopTools_IndexedMapOfShape()
     TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_FACE, mapping)
 
-    all_vertices: List[List[float]] = []
-    all_faces: List[List[int]] = []
+    # Read out through `MapNodeArray` / `MapTriangleArray` and `np.fromiter`
+    # rather than indexing `Node(n)` / `Triangle(n)` into Python lists. Same
+    # numbers — the test compares them — but a mesh of this size crosses into
+    # OCC tens of thousands of times, and the indexed form built two throwaway
+    # objects per node where iteration builds one.
+    vertex_blocks: List[np.ndarray] = []
+    face_blocks: List[np.ndarray] = []
+    owner_blocks: List[Optional[str]] = []
+    offset = 0
     for i in range(1, mapping.Extent() + 1):
         face = TopoDS.Face_s(mapping.FindKey(i))
         location = TopLoc_Location()
         triangulation = BRep_Tool.Triangulation_s(face, location)
         if triangulation is None:
             continue
-        transform = location.Transformation()
-        offset = len(all_vertices)
-        for n in range(1, triangulation.NbNodes() + 1):
-            point = triangulation.Node(n).Transformed(transform)
-            all_vertices.append([point.X(), point.Y(), point.Z()])
+        node_count = triangulation.NbNodes()
+        triangle_count = triangulation.NbTriangles()
+        if not node_count or not triangle_count:
+            continue
+
+        vertices = np.fromiter(
+            (c for p in triangulation.MapNodeArray() for c in (p.X(), p.Y(), p.Z())),
+            dtype=np.float64, count=node_count * 3).reshape(node_count, 3)
+        # Most faces of a built body sit at the identity, and applying it costs
+        # a matrix read and a multiply over every node to change nothing.
+        if not location.IsIdentity():
+            transform = location.Transformation()
+            matrix = np.array([[transform.Value(r, c) for c in (1, 2, 3, 4)]
+                               for r in (1, 2, 3)], dtype=np.float64)
+            vertices = vertices @ matrix[:, :3].T + matrix[:, 3]
+
+        faces = np.fromiter(
+            (n for tri in triangulation.MapTriangleArray() for n in tri.Get()),
+            dtype=np.int64, count=triangle_count * 3).reshape(triangle_count, 3)
+        faces = faces - 1 + offset
         # A face whose orientation is REVERSED has its triangles wound the other
         # way; flipping them keeps every normal pointing out of the solid, which
         # the mesh-validity checks and STL both rely on.
-        reversed_face = face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED
-        for n in range(1, triangulation.NbTriangles() + 1):
-            a, b, c = triangulation.Triangle(n).Get()
-            tri = [a - 1 + offset, c - 1 + offset, b - 1 + offset] if reversed_face \
-                else [a - 1 + offset, b - 1 + offset, c - 1 + offset]
-            all_faces.append(tri)
+        if face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED:
+            faces = faces[:, [0, 2, 1]]
 
-    if not all_faces:
-        return np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=int)
-    return _weld(np.asarray(all_vertices, dtype=float), np.asarray(all_faces, dtype=int))
+        vertex_blocks.append(vertices)
+        face_blocks.append(faces)
+        if owner_by_face is not None:
+            owner_blocks.extend([owner_by_face[i - 1]] * triangle_count)
+        offset += node_count
+
+    if not face_blocks:
+        return (np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=int),
+                [] if owner_by_face is not None else None)
+    merged, welded, keep = _weld(np.vstack(vertex_blocks), np.vstack(face_blocks))
+    if owner_by_face is None:
+        return merged, welded, None
+    # `_weld` drops triangles that collapsed to a line; their owners go with them.
+    return merged, welded, [o for o, alive in zip(owner_blocks, keep) if alive]
 
 
 def _weld(vertices: np.ndarray, faces: np.ndarray, decimals: int = 9):
@@ -1246,9 +1511,10 @@ def _weld(vertices: np.ndarray, faces: np.ndarray, decimals: int = 9):
     faces = remap[inverse.reshape(-1)][faces]
 
     # Triangles that collapsed to a line or point carry no area and upset
-    # winding checks downstream.
+    # winding checks downstream. The mask is returned as well so a caller
+    # carrying anything per-triangle can drop the same rows.
     keep = (faces[:, 0] != faces[:, 1]) & (faces[:, 1] != faces[:, 2]) & (faces[:, 0] != faces[:, 2])
-    return merged, faces[keep]
+    return merged, faces[keep], keep
 
 
 def volume(shape) -> float:

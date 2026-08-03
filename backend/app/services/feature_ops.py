@@ -310,7 +310,11 @@ def resolve_suppressed(tree: Dict[str, Any]) -> Dict[str, Any]:
     op); suppressing a primitive or boolean drops that subtree. Booleans that fall
     to one child collapse; an empty result becomes a tiny placeholder box.
     """
-    t = copy.deepcopy(tree)
+    return _suppressed(copy.deepcopy(tree))
+
+
+def _suppressed(t: Dict[str, Any]) -> Dict[str, Any]:
+    """`resolve_suppressed` on a tree the caller has already copied."""
 
     def resolve(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         kids = children_of(node)
@@ -392,13 +396,16 @@ def resolve_sketches(tree: Dict[str, Any]) -> Dict[str, Any]:
     gone (deleted, or suppressed before this runs) leaves the consumer's last
     substituted profile in place — the same fallback `resolve_datums` uses.
     """
+    return _sketches(copy.deepcopy(tree))
+
+
+def _sketches(t: Dict[str, Any]) -> Dict[str, Any]:
+    """`resolve_sketches` on a tree the caller has already copied."""
     sketches = {node["id"]: (node.get("params") or {})
-                for node in walk_nodes(tree)
+                for node in walk_nodes(t)
                 if node.get("type") == SKETCH_TYPE and node.get("id")}
     if not sketches:
-        return copy.deepcopy(tree)
-
-    t = copy.deepcopy(tree)
+        return t
 
     for node in walk_nodes(t):
         refs = _SKETCH_CONSUMERS.get(node.get("type"))
@@ -450,9 +457,12 @@ def resolve_datums(tree: Dict[str, Any]) -> Dict[str, Any]:
     A reference that cannot be resolved (missing/suppressed feature, empty solid)
     is left as-is — the node keeps its last concrete plane/offset as a fallback.
     """
-    from app.services import datum
+    return _datums(copy.deepcopy(tree))
 
-    t = copy.deepcopy(tree)
+
+def _datums(t: Dict[str, Any]) -> Dict[str, Any]:
+    """`resolve_datums` on a tree the caller has already copied."""
+    from app.services import datum
 
     def _subtree_ids(node: Dict[str, Any]) -> set:
         ids = {node.get("id")}
@@ -505,6 +515,22 @@ def resolve_datums(tree: Dict[str, Any]) -> Dict[str, Any]:
     if t.get("root"):
         walk(t["root"])
     return t
+
+
+def resolve_for_evaluation(tree: Dict[str, Any]) -> Dict[str, Any]:
+    """Suppression, then sketches, then datums — on **one** copy of the tree.
+
+    Each of the three defends itself by deep-copying its input, which is right
+    for a caller holding a document's own tree and wasteful three times in a
+    row: the second and third were copying a tree nobody else could still reach.
+    The stages themselves are unchanged and still run in the order they must
+    (see `document_service.resolved_tree`); only the copying is shared.
+
+    Not exported as the general entry point: `document_service.resolved_tree` is
+    still the one place a document's evaluation tree is derived, because it also
+    applies parameters and the active configuration.
+    """
+    return _datums(_sketches(_suppressed(copy.deepcopy(tree))))
 
 
 def ensure_ids(tree: Dict[str, Any]) -> Dict[str, Any]:

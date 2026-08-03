@@ -331,9 +331,7 @@ def resolved_tree(doc: DesignDocument) -> dict:
     # Sketches are substituted before datums, so an extrude that adopted its
     # sketch's `on_face` is resolved by the one datum path rather than a second
     # copy of it.
-    active = feature_ops.resolve_datums(
-        feature_ops.resolve_sketches(
-            feature_ops.resolve_suppressed(doc.feature_tree)))
+    active = feature_ops.resolve_for_evaluation(doc.feature_tree)
     if doc.parameters:
         from app.services import parameters
 
