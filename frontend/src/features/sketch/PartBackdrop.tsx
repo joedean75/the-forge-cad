@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
+import { fetchForgeMesh, type ForgeMesh } from '../../util/forgeMesh'
 import { collectProxies } from '../../util/featureTree'
 import type { FeatureNode } from '../../../../shared/types'
 
@@ -94,29 +94,26 @@ export function faceToPlaneOffset(
   return { plane, offsetMm: (takeMax ? hi[axis] : lo[axis]) * 1000, originMm: [u0, v0] }
 }
 
-/** Fetch + parse the document's STL data-URI into raw triangle positions (metres). */
-export function useMeshTriangles(url: string | null | undefined): Float32Array | null {
-  const [positions, setPositions] = useState<Float32Array | null>(null)
+/** Fetch the document's mesh (indexed positions, metres). */
+export function useMeshTriangles(url: string | null | undefined): ForgeMesh | null {
+  const [mesh, setMesh] = useState<ForgeMesh | null>(null)
   useEffect(() => {
     let alive = true
-    if (!url) { setPositions(null); return }
-    fetch(url)
-      .then((r) => r.arrayBuffer())
-      .then((buf) => {
-        const geom = new STLLoader().parse(buf)
-        if (alive) setPositions(geom.getAttribute('position').array as Float32Array)
-      })
-      .catch(() => { if (alive) setPositions(null) })
+    if (!url) { setMesh(null); return }
+    fetchForgeMesh(url)
+      .then((m) => { if (alive) setMesh(m) })
+      .catch(() => { if (alive) setMesh(null) })
     return () => { alive = false }
   }, [url])
-  return positions
+  return mesh
 }
 
 /** The part's extent in sketch millimetres, for framing the view. */
 export function partBounds(
-  positions: Float32Array | null, plane: Plane, originMm: [number, number],
+  mesh: ForgeMesh | null, plane: Plane, originMm: [number, number],
 ): { u0: number; v0: number; u1: number; v1: number } | null {
-  if (!positions || !positions.length) return null
+  if (!mesh || !mesh.positions.length) return null
+  const positions = mesh.positions
   const [ui, vi] = AXES[plane]
   let u0 = Infinity, v0 = Infinity, u1 = -Infinity, v1 = -Infinity
   for (let i = 0; i + 2 < positions.length; i += 3) {
@@ -141,12 +138,23 @@ const RASTER_W = 1100
 
 /** Segments (display mm, y-up) where the mesh crosses the plane w = sectionM. */
 function computeSection(
-  pos: Float32Array, plane: Plane, sectionM: number, origin: [number, number],
+  mesh: ForgeMesh, plane: Plane, sectionM: number, origin: [number, number],
 ): number[][] {
   const [ui, vi, wi] = AXES[plane]
   const [ox, oy] = origin
+  const { positions, indices } = mesh
   const segs: number[][] = []
-  for (let t = 0; t + 8 < pos.length; t += 9) {
+  // One scratch triangle, reused: the mesh is indexed now, so the three corners
+  // have to be gathered rather than read off consecutive slots.
+  const pos = new Float32Array(9)
+  for (let f = 0; f + 2 < indices.length; f += 3) {
+    for (let c = 0; c < 3; c++) {
+      const base = indices[f + c] * 3
+      pos[c * 3] = positions[base]
+      pos[c * 3 + 1] = positions[base + 1]
+      pos[c * 3 + 2] = positions[base + 2]
+    }
+    const t = 0
     const wa = pos[t + wi] - sectionM
     const wb = pos[t + 3 + wi] - sectionM
     const wc = pos[t + 6 + wi] - sectionM
@@ -206,12 +214,15 @@ type Projection = {
 }
 
 /** Triangles in display millimetres, depth-sorted far-to-near, with normals. */
-function projected(pos: Float32Array, plane: Plane, origin: [number, number]): Projection {
+function projected(mesh: ForgeMesh, plane: Plane, origin: [number, number]): Projection {
   const [ui, vi, wi] = AXES[plane]
   const [ox, oy] = origin
-  const total = Math.floor(pos.length / 9)
-  const stride = 9 * Math.max(1, Math.ceil(total / MAX_TRIS))
-  const count = Math.ceil(total / (stride / 9))
+  const { positions, indices } = mesh
+  const total = Math.floor(indices.length / 3)
+  const step = Math.max(1, Math.ceil(total / MAX_TRIS))
+  const stride = 3 * step
+  const count = Math.ceil(total / step)
+  const pos = new Float32Array(9)
 
   const u = new Float32Array(count * 3)
   const v = new Float32Array(count * 3)
@@ -225,7 +236,14 @@ function projected(pos: Float32Array, plane: Plane, origin: [number, number]): P
   // out-of-range write silently, so an off-by-one would not throw — it would
   // leave `count` claiming triangles whose coordinates read back `undefined`,
   // and `undefined` maps to NaN in the rasterizer.
-  for (let t = 0; t + 8 < pos.length && n < count; t += stride) {
+  for (let f = 0; f + 2 < indices.length && n < count; f += stride) {
+    for (let c = 0; c < 3; c++) {
+      const base = indices[f + c] * 3
+      pos[c * 3] = positions[base]
+      pos[c * 3 + 1] = positions[base + 1]
+      pos[c * 3 + 2] = positions[base + 2]
+    }
+    const t = 0
     const au = pos[t + ui] * 1000 - ox, av = pos[t + vi] * 1000 - oy, aw = pos[t + wi] * 1000
     const bu = pos[t + 3 + ui] * 1000 - ox, bv = pos[t + 3 + vi] * 1000 - oy, bw = pos[t + 3 + wi] * 1000
     const cu = pos[t + 6 + ui] * 1000 - ox, cv = pos[t + 6 + vi] * 1000 - oy, cw = pos[t + 6 + wi] * 1000
@@ -436,14 +454,14 @@ function backdropImage(
 }
 
 export function PartBackdrop({
-  positions,
+  mesh,
   plane,
   sectionMm,
   originMm = [0, 0],
   view,
   mode = 'shaded',
 }: {
-  positions: Float32Array | null
+  mesh: ForgeMesh | null
   plane: Plane
   /** Plane position along its normal, in mm (sketch units). */
   sectionMm: number
@@ -463,7 +481,7 @@ export function PartBackdrop({
   // The cleanup cancels a pending pass, so a burst of wheel events rasterizes
   // once, for wherever the burst ended.
   useEffect(() => {
-    if (!positions || mode === 'off') {
+    if (!mesh || mode === 'off') {
       setImage(null)
       setEdges([])
       return
@@ -472,15 +490,15 @@ export function PartBackdrop({
     const id = window.setTimeout(() => {
       if (!alive) return
       const f = frameOf({ cx, cy, span })
-      const tri = projected(positions, plane, [ox, oy])
-      const segments = computeSection(positions, plane, sectionMm / 1000, [ox, oy])
+      const tri = projected(mesh, plane, [ox, oy])
+      const segments = computeSection(mesh, plane, sectionMm / 1000, [ox, oy])
       setEdges(segments)
       setImage(backdropImage(tri, segments, f, mode))
     }, 0)
     return () => { alive = false; window.clearTimeout(id) }
-  }, [positions, plane, sectionMm, ox, oy, cx, cy, span, mode])
+  }, [mesh, plane, sectionMm, ox, oy, cx, cy, span, mode])
 
-  if (!positions || mode === 'off') return null
+  if (!mesh || mode === 'off') return null
   const line = span / 260   // keep stroke weight constant on screen
 
   return (

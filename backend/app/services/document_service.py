@@ -32,7 +32,7 @@ from app.models.schemas import (
     Vector3,
 )
 from app.services import persistence
-from app.services.cad_service import solid_to_stl_data_uri
+from app.cad_kernel.io.mesh_binary import write_mesh_binary
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -103,6 +103,26 @@ _SOLID_CACHE: Dict[str, Solid] = _LruCache(_SOLID_CACHE_SIZE)
 # silently stops agreeing with the document.
 _BREP_CACHE: Dict[str, Any] = _LruCache(_BREP_CACHE_SIZE)
 
+# Encoded meshes, keyed by `(doc_id, mesh_hash)`.
+#
+# Two reasons this exists rather than re-tessellating per request. It makes a
+# mesh GET a dict lookup instead of an evaluation. And it keeps a *superseded*
+# mesh available: the client is handed a URL with the current hash, and by the
+# time it asks, another edit may have landed — without this the viewport goes
+# blank on a 404 for geometry the server had a moment ago. The hash still names
+# exactly those triangles, which is the whole contract; nothing here weakens it,
+# it only extends how long the answer stays reachable.
+_MESH_CACHE_SIZE = 48
+_MESH_CACHE: Dict[str, bytes] = _LruCache(_MESH_CACHE_SIZE)
+
+
+def cache_mesh(doc_id: str, digest: str, payload: bytes) -> None:
+    _MESH_CACHE[f"{doc_id}:{digest}"] = payload
+
+
+def cached_mesh(doc_id: str, digest: str) -> Optional[bytes]:
+    return _MESH_CACHE.get(f"{doc_id}:{digest}")
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -152,9 +172,11 @@ def _default_tree_dict() -> dict:
 def _persist(doc: DesignDocument) -> None:
     try:
         data = doc.model_dump()
-        # Derived meshes/G-code are pure evaluation products, re-created on
-        # demand (ensure_derived / re-slice) — writing them would add MBs per save.
-        data["derived"]["mesh_url"] = None
+        # `mesh_url` is now a short hash-keyed URL rather than megabytes of
+        # base64, so it is worth persisting: the mesh behind it is re-derived
+        # lazily, and keeping the link means a reload does not have to
+        # re-evaluate just to learn where the triangles are. G-code and STEP are
+        # still stripped — those really are payloads.
         data["derived"]["step_url"] = None
         if data["derived"].get("cam"):
             data["derived"]["cam"]["gcode_url"] = None
@@ -172,14 +194,66 @@ def _persist(doc: DesignDocument) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _evaluation_key(doc: DesignDocument, resolution: int) -> str:
+    """Everything that changes what `evaluate_document` would produce.
+
+    Not just the feature tree: a parameter value, the active configuration and
+    the resolution all move the body without touching a single node. Anything
+    missing here becomes a stale mesh served under a fresh hash, which is the
+    one failure a cache must not have — so this is deliberately generous, and
+    excludes only what provably cannot change geometry (the material, the name,
+    the spec).
+    """
+    def dumped(models, drop=()):
+        # The whole model, minus named outputs. Listing the fields to *include*
+        # is how a later schema addition silently stops being part of the key,
+        # so this inverts it: everything counts unless it is provably derived.
+        return [{k: v for k, v in m.model_dump().items() if k not in drop}
+                for m in (models or [])]
+
+    parts = [
+        _hash_tree(doc.feature_tree),
+        str(resolution),
+        doc.active_configuration or "",
+        # `value` is the *resolved* number this function's caller is about to
+        # write back, not an input — including it would invalidate the key on
+        # the very evaluation that produced it.
+        json.dumps(dumped(doc.parameters, drop=("value",)), sort_keys=True, default=str),
+        json.dumps(dumped(doc.configurations), sort_keys=True, default=str),
+    ]
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+
+
+def _refresh_mass(doc: DesignDocument) -> None:
+    """Recompute mass from the cached volume — the only thing a material moves."""
+    from app.services import materials
+
+    doc.derived.mass = round(doc.derived.volume * materials.density_of(doc.material_id), 12)
+
+
 def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool = True) -> DesignDocument:
     """Evaluate the document's feature tree into a solid and refresh DerivedCache.
 
     Evaluation failures are captured in `derived.error` rather than raised, so a
     malformed edit never wedges the document.
+
+    **An edit that cannot move the body does not re-evaluate one.** Assigning a
+    material, writing a spec, renaming — none of them touches geometry, and all
+    of them used to pay a full evaluate-and-tessellate (measured at 85-90 ms)
+    plus a re-send of the whole mesh. `_evaluation_key` decides; mass is the one
+    derived number a material *does* move, so it is recomputed from the cached
+    volume rather than from a new solid.
     """
     _ensure_feature_ids(doc.feature_tree)
     tree_hash = _hash_tree(doc.feature_tree)
+    key = _evaluation_key(doc, resolution)
+    if (doc.derived.eval_key == key and doc.derived.mesh_url and not doc.derived.error
+            and doc.id in _SOLID_CACHE):
+        _refresh_mass(doc)
+        doc.updated_at = _now()
+        if persist:
+            _persist(doc)
+        return doc
     try:
         if doc.parameters:
             # Evaluating is also when a driving parameter's computed value is
@@ -215,9 +289,13 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
         from app.services import materials
 
         density = materials.density_of(doc.material_id)
+        digest = mesh_hash(mesh)
+        cache_mesh(doc.id, digest, write_mesh_binary(mesh))
         doc.derived = DerivedCache(
             solid_hash=tree_hash,
-            mesh_url=solid_to_stl_data_uri(solid),
+            eval_key=key,
+            # A URL, not a payload. See `routers/documents.get_document_mesh`.
+            mesh_url=f"/api/documents/{doc.id}/mesh/{digest}",
             bbox=bbox,
             # Rounded well below anything meaningful, not to a "tidy" number of
             # decimals: these are SI (m^3 and kg), so round(v, 6) quantised
@@ -227,7 +305,7 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
             volume=round(volume, 15),
             resolution=resolution,
             sampler=sampler,
-            mesh_hash=mesh_hash(mesh),
+            mesh_hash=digest,
         )
         _SOLID_CACHE[doc.id] = solid
     except Exception as exc:

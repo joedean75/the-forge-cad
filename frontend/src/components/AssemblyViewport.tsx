@@ -1,7 +1,7 @@
 import { Suspense, useEffect, useMemo, useRef } from 'react'
 import { Canvas, useLoader } from '@react-three/fiber'
 import { CameraControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei'
-import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
+import { ForgeMeshLoader } from '../util/forgeMesh'
 import { Boxes } from 'lucide-react'
 import type { AssemblyComponent, BBox, Vector3 } from '../../../shared/types'
 
@@ -40,7 +40,7 @@ function ComponentMesh({
   dim: boolean
   onSelect: () => void
 }) {
-  const loaded = useLoader(STLLoader, url)
+  const loaded = useLoader(ForgeMeshLoader, url)
   // Clone so we can compute normals without mutating the loader's cached geometry
   // (the same part may be instanced by several components). Crucially we do NOT
   // recenter — components must share one coordinate frame.

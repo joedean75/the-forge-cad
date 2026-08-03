@@ -20,7 +20,7 @@ def test_create_document_from_prompt():
     assert resp.status_code == 200
     doc = resp.json()
     assert doc["id"] == doc_id
-    assert doc["derived"]["mesh_url"].startswith("data:")
+    assert "/mesh/" in doc["derived"]["mesh_url"]
     assert doc["derived"]["volume"] > 0
 
 

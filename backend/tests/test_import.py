@@ -28,7 +28,7 @@ def _bbox_mm(doc):
 def test_import_stl_metres():
     doc = import_service.import_document("bracket.stl", _box_stl())
     assert doc.provenance == "imported"
-    assert doc.derived.mesh_url.startswith("data:")
+    assert "/mesh/" in doc.derived.mesh_url
     x, y, z = _bbox_mm(doc)
     # Voxel bridge tolerance: within ~2 cells of the true 100x60x20.
     assert abs(x - 100) < 5 and abs(y - 60) < 5 and abs(z - 20) < 5
@@ -85,7 +85,7 @@ def test_import_endpoint_multipart():
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["provenance"] == "imported"
-    assert body["derived"]["mesh_url"].startswith("data:")
+    assert "/mesh/" in body["derived"]["mesh_url"]
 
 
 def test_import_endpoint_rejects_unknown_format():

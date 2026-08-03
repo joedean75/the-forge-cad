@@ -36,7 +36,7 @@ def test_copilot_run_executes_a_plan_directly():
     assert all(s["ok"] for s in ops)
     assert "plate" in out["summary"].lower()
     assert out["document"] is not None
-    assert out["document"].derived.mesh_url.startswith("data:")
+    assert "/mesh/" in out["document"].derived.mesh_url
 
 
 def test_copilot_stops_at_max_steps():
@@ -76,7 +76,7 @@ def test_copilot_endpoint_runs_scripted_plan(monkeypatch):
     assert body["ok"] is True and body["status"] == "done"
     ok_ops = [s for s in body["steps"] if s.get("kind") == "op" and s.get("ok")]
     assert len(ok_ops) == 2
-    assert body["document"]["derived"]["mesh_url"].startswith("data:")
+    assert "/mesh/" in body["document"]["derived"]["mesh_url"]
     # Version history is fetched via /versions, never inlined in job responses.
     assert "version_history" not in body["document"]
 

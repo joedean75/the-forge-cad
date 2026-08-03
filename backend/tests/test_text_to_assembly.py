@@ -39,7 +39,7 @@ def test_scripted_plan_builds_parts_and_placements():
     assert abs(posts[0].transform.translate.x - (-0.02)) < 1e-9
     assert abs(posts[1].transform.translate.x - 0.02) < 1e-9
     # Components resolve real geometry from their parts.
-    assert all(c.mesh_url and c.mesh_url.startswith("data:") for c in asm.components)
+    assert all(c.mesh_url and "/mesh/" in c.mesh_url for c in asm.components)
 
 
 def test_credential_free_fallback_is_single_part():

@@ -33,6 +33,7 @@ from app.models.schemas import (
     UpdateDocumentRequest,
     VersionSummary,
 )
+from app.cad_kernel.io import mesh_binary
 from app.services import document_analysis, document_service as docs, slicer
 from app.services.simp_optimizer import ProgressState
 
@@ -280,6 +281,37 @@ def dfm_document(
 ):
     return document_analysis.dfm_document(
         doc.id, build_axis=build_axis, resolution=resolution, process=process)
+
+
+@router.get("/{doc_id}/mesh/{mesh_hash}")
+def get_document_mesh(
+    mesh_hash: str,
+    doc: DesignDocument = Depends(readable_document),
+):
+    """The body's triangles, addressed by the hash of the triangles themselves.
+
+    The mesh used to be base64-inlined into `derived.mesh_url`, which made it
+    part of the document body — 99% of it, in fact, and re-downloaded on every
+    edit including ones that could not move the geometry. Behind a URL keyed by
+    `mesh_hash` it is *immutable by construction*: the same hash is the same
+    triangles, so the browser can cache it forever and an edit that leaves the
+    body alone costs nothing.
+
+    `private`, not `public`: this is behind an access check, and a shared proxy
+    caching it publicly would hand one tenant's geometry to another.
+    """
+    payload = document_analysis.mesh_payload(doc.id, mesh_hash)
+    if payload is None:
+        # The hash names geometry this document does not currently have. Almost
+        # always a stale client holding a URL from before an edit — 404 rather
+        # than quietly serving the *current* mesh under the old hash, which
+        # would poison every cache that saw it.
+        raise HTTPException(status_code=404, detail="No mesh with that hash on this document")
+    return Response(
+        content=payload,
+        media_type=mesh_binary.MIME,
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
 
 
 @router.get("/{doc_id}/step")

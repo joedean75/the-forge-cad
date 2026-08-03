@@ -137,7 +137,7 @@ export function SketchCanvas() {
 
   // The existing body, shown behind the sketch so you can see what you're drawing
   // on. Only fetched/parsed while the sketch is actually open.
-  const partTris = useMeshTriangles(
+  const partMesh = useMeshTriangles(
     sketchOpen && backdrop !== 'off' ? doc?.derived.mesh_url : null)
   // Display plane + section position: when sketching on a face, mirror the
   // backend datum resolution from that feature's live geometry; else the free plane.
@@ -255,7 +255,7 @@ export function SketchCanvas() {
     for (const p of pts) grow(p.x, p.y)
     for (const c of circles) { const ct = getPt(c.center); if (ct) grow(ct.x, ct.y, c.radius) }
     if (backdrop !== 'off') {
-      const b = partBounds(partTris, frame.plane, frame.originMm)
+      const b = partBounds(partMesh, frame.plane, frame.originMm)
       if (b) { grow(b.u0, b.v0); grow(b.u1, b.v1) }
     }
     if (!Number.isFinite(u0)) { setView(DEFAULT_VIEW); return }
@@ -744,7 +744,7 @@ export function SketchCanvas() {
             <SketchGrid view={view} />
 
             {/* the existing part, behind the sketch */}
-            <PartBackdrop positions={partTris} plane={frame.plane} sectionMm={frame.sectionMm}
+            <PartBackdrop mesh={partMesh} plane={frame.plane} sectionMm={frame.sectionMm}
               originMm={frame.originMm} view={view} mode={backdrop} />
 
             {/* circles */}
@@ -818,7 +818,7 @@ export function SketchCanvas() {
           </div>
 
           {/* backdrop legend */}
-          {backdrop !== 'off' && partTris && (
+          {backdrop !== 'off' && partMesh && (
             <div className="absolute top-3 right-3 flex flex-col gap-1 text-[9px] text-cad-text/70 bg-cad-panel/70 px-2 py-1.5 rounded-sm border border-cad-border pointer-events-none">
               {backdrop === 'shaded' && (
                 <span className="flex items-center gap-1.5"><span className="w-3 h-2 rounded-sm" style={{ background: 'linear-gradient(135deg,#5f6c80,#39414f)' }} /> part, from this plane</span>

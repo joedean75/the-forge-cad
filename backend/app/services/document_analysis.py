@@ -438,6 +438,39 @@ def _step_triangle_budget() -> int:
         return 100000
 
 
+def mesh_payload(doc_id: str, mesh_hash: str) -> Optional[bytes]:
+    """The document's triangles in transport form, if they hash to `mesh_hash`.
+
+    Returns ``None`` when they do not. That is the whole safety of serving a
+    cacheable URL: the hash is checked against the geometry actually produced,
+    so a stale link can only 404 — never quietly return a *different* body under
+    a hash that browsers and proxies have been told to keep forever.
+
+    The solid is re-derived on a cache miss the way `get_solid` already does, so
+    a process restart costs one evaluation rather than a broken viewport.
+    """
+    from app.cad_kernel.geom.meshing import mesh_hash as hash_of
+    from app.cad_kernel.io import mesh_binary
+    from app.cad_kernel.kernel import Kernel
+
+    cached = docs.cached_mesh(doc_id, mesh_hash)
+    if cached is not None:
+        return cached
+
+    doc = docs.get_document(doc_id)
+    if doc is None:
+        return None
+    try:
+        solid = docs.get_solid(doc_id, resolution=doc.derived.resolution or 128)
+    except (KeyError, ValueError):
+        return None
+    mesh = Kernel.tessellate(solid)
+    digest = hash_of(mesh)
+    payload = mesh_binary.write_mesh_binary(mesh)
+    docs.cache_mesh(doc_id, digest, payload)
+    return payload if digest == mesh_hash else None
+
+
 def stream_step_document(doc_id: str, resolution: int = 128):
     """Return ``(chunk_iterator, triangle_count)`` for a document's STEP export.
 

@@ -1,7 +1,7 @@
 import { useRef, useEffect, useMemo } from 'react'
 import { useLoader } from '@react-three/fiber'
 import * as THREE from 'three'
-import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
+import { ForgeMeshLoader } from '../util/forgeMesh'
 
 // Map a world-space face normal to one of the six datum faces. Mirrors the
 // backend datum FACE_MAP: +z top / -z bottom, +x right / -x left, +y back / -y front.
@@ -30,7 +30,7 @@ export function MeshLoader({
    * mesh uses it instead of self-fitting, so edits never rescale the view. */
   fit?: { c: [number, number, number]; s: number }
 }) {
-  const loadedGeometry = useLoader(STLLoader, url)
+  const loadedGeometry = useLoader(ForgeMeshLoader, url)
   const meshRef = useRef<THREE.Mesh>(null)
   const geometry = useMemo(() => {
     const g = loadedGeometry.clone()
@@ -39,13 +39,13 @@ export function MeshLoader({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fit identity churn
   }, [loadedGeometry, fit?.c[0], fit?.c[1], fit?.c[2]])
 
-  // Every edit produces a new multi-MB data-URI, and useLoader's suspense
-  // cache is keyed by that string — without eviction, every mesh version of a
-  // session (URI + parsed geometry) stays resident. Evict the entry and free
-  // the GPU buffers as soon as the url changes or the component unmounts.
+  // `useLoader`'s suspense cache is keyed by URL and never evicts, so without
+  // this every mesh version of a session stays resident. Less dramatic now the
+  // URL is a hash rather than megabytes of base64 — but the parsed geometry and
+  // its GPU buffers are still real, so free them when the url changes.
   useEffect(() => {
     return () => {
-      useLoader.clear(STLLoader, url)
+      useLoader.clear(ForgeMeshLoader, url)
       geometry.dispose()
     }
   }, [url, geometry])

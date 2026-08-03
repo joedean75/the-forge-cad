@@ -166,7 +166,7 @@ def test_endpoint_builds_an_editable_document():
 
     doc = resp.json()
     assert doc["name"] == "Traced plate"
-    assert doc["derived"]["mesh_url"].startswith("data:")
+    assert "/mesh/" in doc["derived"]["mesh_url"]
     bbox = doc["derived"]["bbox"]
     assert (bbox["max"]["x"] - bbox["min"]["x"]) * 1000 == pytest.approx(150.0, abs=1.0)
 

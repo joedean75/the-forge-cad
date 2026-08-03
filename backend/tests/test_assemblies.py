@@ -1,3 +1,4 @@
+import re
 """Tests for the assembly-document endpoints (compose parts into a whole)."""
 
 from fastapi.testclient import TestClient
@@ -38,7 +39,7 @@ def test_insert_part_resolves_mesh_and_bbox():
     assert len(body["components"]) == 1
     comp = body["components"][0]
     assert comp["part_id"] == part
-    assert comp["mesh_url"].startswith("data:")
+    assert re.fullmatch(r"/api/documents/[^/]+/mesh/[0-9a-f]+", comp["mesh_url"])
     assert comp["bbox"] is not None
     assert comp["missing"] is False
     assert body["bbox"] is not None  # assembly envelope resolved

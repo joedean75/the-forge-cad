@@ -25,7 +25,7 @@ def test_document_persists_across_restarts():
     fresh = TestClient(app)
     got = fresh.get(f"/api/documents/{doc_id}")
     assert got.status_code == 200
-    assert got.json()["derived"]["mesh_url"].startswith("data:")
+    assert "/mesh/" in got.json()["derived"]["mesh_url"]
 
     export = fresh.get(f"/api/documents/{doc_id}/step")
     assert export.status_code == 200

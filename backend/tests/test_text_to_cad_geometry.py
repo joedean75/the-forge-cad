@@ -53,7 +53,7 @@ def test_text_to_cad_generate_endpoint():
     assert resp.status_code == 200, resp.text
     doc = resp.json()
     assert doc["provenance"] == "text_to_cad"
-    assert doc["derived"]["mesh_url"].startswith("data:")
+    assert "/mesh/" in doc["derived"]["mesh_url"]
     assert doc["feature_tree"]["root"]["type"] == "BooleanFeature"
 
 
@@ -130,7 +130,7 @@ def test_subject_prompt_still_builds_a_document():
     )
     assert resp.status_code == 200, resp.text
     doc = resp.json()
-    assert doc["derived"]["mesh_url"].startswith("data:")
+    assert "/mesh/" in doc["derived"]["mesh_url"]
     assert doc["feature_tree"]["root"] is not None
 
 

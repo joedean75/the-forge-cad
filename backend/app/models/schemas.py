@@ -170,6 +170,13 @@ class DerivedCache(BaseModel):
     """Cached evaluation products for a document body."""
 
     solid_hash: Optional[str] = None
+    # Everything that changes what an evaluation would produce — tree, resolution,
+    # parameters, configuration. `evaluate_document` skips the work when it still
+    # matches, so an edit that cannot move the body does not rebuild one.
+    eval_key: Optional[str] = None
+    # A URL now, not a payload: `/api/documents/{id}/mesh/{mesh_hash}`. It used
+    # to be a base64 data URI, which made the triangles 99% of the document body
+    # and re-sent them on every edit.
     mesh_url: Optional[str] = None
     step_url: Optional[str] = None
     bbox: Optional[BBox] = None
