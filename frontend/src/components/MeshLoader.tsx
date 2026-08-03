@@ -1,7 +1,7 @@
 import { useRef, useEffect, useMemo } from 'react'
 import { useLoader } from '@react-three/fiber'
 import * as THREE from 'three'
-import { ForgeMeshLoader } from '../util/forgeMesh'
+import { ForgeMeshLoader, ownerOfTriangle } from '../util/forgeMesh'
 
 // Map a world-space face normal to one of the six datum faces. Mirrors the
 // backend datum FACE_MAP: +z top / -z bottom, +x right / -x left, +y back / -y front.
@@ -23,8 +23,10 @@ export function MeshLoader({
   url: string
   onPick?: (point: [number, number, number]) => void
   onPickFace?: (face: string, point: [number, number, number]) => void
-  /** Plain click on the body (no measure/sketch active) — for feature selection. */
-  onSelect?: (point: [number, number, number]) => void
+  /** Plain click on the body (no measure/sketch active) — for feature selection.
+   * `feature` is the id the triangle came from when the mesh carries provenance;
+   * null means the caller has to fall back to its own guess. */
+  onSelect?: (point: [number, number, number], feature: string | null) => void
   dim?: boolean
   /** Frozen display transform (centre in part metres + scale). When given, the
    * mesh uses it instead of self-fitting, so edits never rescale the view. */
@@ -86,7 +88,7 @@ export function MeshLoader({
               } else if (onPick) {
                 onPick(pt)
               } else if (onSelect) {
-                onSelect(pt)
+                onSelect(pt, ownerOfTriangle(geometry, e.faceIndex))
               }
             }
           : undefined

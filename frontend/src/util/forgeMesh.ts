@@ -17,8 +17,14 @@ import { authHeaders } from '../api/client'
 
 const MAGIC = 0x48534d46 // "FMSH" read little-endian as a uint32
 const HEADER = 16
+const NO_OWNER = 0xffffffff
 
-export type ForgeMesh = { positions: Float32Array; indices: Uint32Array }
+export type ForgeMesh = {
+  positions: Float32Array
+  indices: Uint32Array
+  /** One feature id per triangle, or null where the body cannot be attributed. */
+  owners: (string | null)[] | null
+}
 
 export function parseForgeMesh(buffer: ArrayBuffer): ForgeMesh {
   const view = new DataView(buffer)
@@ -26,14 +32,37 @@ export function parseForgeMesh(buffer: ArrayBuffer): ForgeMesh {
     throw new Error('not a Forge mesh')
   }
   const version = view.getUint32(4, true)
-  if (version !== 1) throw new Error(`unsupported Forge mesh version ${version}`)
+  if (version !== 1 && version !== 2) {
+    throw new Error(`unsupported Forge mesh version ${version}`)
+  }
   const vertexCount = view.getUint32(8, true)
   const faceCount = view.getUint32(12, true)
   const coordsEnd = HEADER + vertexCount * 12
-  return {
+  const facesEnd = coordsEnd + faceCount * 12
+  const mesh: ForgeMesh = {
     positions: new Float32Array(buffer, HEADER, vertexCount * 3),
     indices: new Uint32Array(buffer, coordsEnd, faceCount * 3),
+    owners: null,
   }
+  // v1 had no owner block, and a v2 body the kernel could not attribute writes
+  // a zero-length one. Both mean "select in the tree instead" rather than an
+  // error — provenance is a nicety, geometry is not.
+  if (version < 2 || buffer.byteLength < facesEnd + 8) return mesh
+
+  const ownerCount = view.getUint32(facesEnd, true)
+  const tableBytes = view.getUint32(facesEnd + 4, true)
+  if (!ownerCount) return mesh
+  const ownersEnd = facesEnd + 8 + ownerCount * 4
+  if (buffer.byteLength < ownersEnd + tableBytes) return mesh
+
+  const packed = new Uint32Array(buffer, facesEnd + 8, ownerCount)
+  const table: string[] = JSON.parse(
+    new TextDecoder().decode(new Uint8Array(buffer, ownersEnd, tableBytes)),
+  )
+  mesh.owners = Array.from(packed, (slot) =>
+    slot === NO_OWNER || slot >= table.length ? null : table[slot],
+  )
+  return mesh
 }
 
 /**
@@ -68,7 +97,22 @@ export function toGeometry(mesh: ForgeMesh): THREE.BufferGeometry {
   geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3))
   geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1))
   geometry.computeVertexNormals()
+  // Carried on the geometry so a raycast hit — which reports a triangle index
+  // against this exact buffer — can be turned into a feature id without the
+  // click handler having to hold the parse result separately. `clone()` copies
+  // userData, so the per-mesh translate in `MeshLoader` keeps it.
+  geometry.userData.owners = mesh.owners
   return geometry
+}
+
+/** The feature that made a raycast-hit triangle, if the body could be attributed. */
+export function ownerOfTriangle(
+  geometry: THREE.BufferGeometry | undefined,
+  faceIndex: number | null | undefined,
+): string | null {
+  const owners = geometry?.userData?.owners as (string | null)[] | null | undefined
+  if (!owners || faceIndex == null) return null
+  return owners[faceIndex] ?? null
 }
 
 /**

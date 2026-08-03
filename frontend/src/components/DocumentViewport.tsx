@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import { Boxes, Ruler, Crosshair, X, ScanEye, PencilRuler, Maximize } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { MeshLoader } from './MeshLoader'
+import { MoveHandles } from './MoveHandles'
 import { collectSnapPoints, collectProxies, findNode, pickFeatureAt, type FeatureProxy } from '../util/featureTree'
 import type { BBox, Dimension, Vector3, FeatureNode } from '../../../shared/types'
 
@@ -222,14 +223,22 @@ function TopologyMarkers({ fit }: { fit: NonNullable<ReturnType<typeof useFit>> 
   )
 }
 
-function SelectionHighlight({ node, fit }: { node: FeatureNode; fit: NonNullable<ReturnType<typeof useFit>> }) {
+function SelectionHighlight({ node, fit, offset }: {
+  node: FeatureNode
+  fit: NonNullable<ReturnType<typeof useFit>>
+  /** Where a drag in progress would put it, in part metres. */
+  offset?: Vector3 | null
+}) {
   const proxies = useMemo(() => collectProxies(node), [node])
+  const shift: Vec3 = offset
+    ? [offset.x * fit.s, offset.y * fit.s, offset.z * fit.s]
+    : [0, 0, 0]
   return (
-    <>
+    <group position={shift}>
       {proxies.map((px, i) => (
         <ProxyMesh key={i} px={px} fit={fit} />
       ))}
-    </>
+    </group>
   )
 }
 
@@ -242,11 +251,16 @@ const EXAMPLE_PROMPTS = [
 
 export function DocumentViewport() {
   const { doc, busy, selectedFeatureId, select, addDimension, removeDimension, createFromPrompt, newBlank,
-    sketchPick, pickSketchOnFace, pickSketchPlane, cancelSketchPick } = useDocumentStore()
+    sketchPick, pickSketchOnFace, pickSketchPlane, cancelSketchPick, runOp } = useDocumentStore()
   const [isolate, setIsolate] = useState(false)
   const [showDims, setShowDims] = useState(false)
   const [measuring, setMeasuring] = useState(false)
   const [pending, setPending] = useState<Vector3 | null>(null)
+  const [dragOffset, setDragOffset] = useState<Vector3 | null>(null)
+  // Orbit is suspended while a move handle is under the pointer. Driven as a
+  // prop rather than by poking `.enabled` on the instance: the ref is a
+  // `<primitive>` and React owns what is on it.
+  const [orbit, setOrbit] = useState(true)
   const meshUrl = doc?.derived.mesh_url
   const evalError = doc?.derived.error
   const bbox = doc?.derived.bbox
@@ -257,7 +271,9 @@ export function DocumentViewport() {
   // auto-frame it (OrbitControls did implicitly), so an empty viewport greets a
   // freshly opened part until you interact. Frame it explicitly on load and on
   // Fit. Ref holds the camera-controls instance drei forwards.
-  const controlsRef = useRef<{ setLookAt: (px: number, py: number, pz: number, tx: number, ty: number, tz: number, t?: boolean) => void } | null>(null)
+  const controlsRef = useRef<{
+    setLookAt: (px: number, py: number, pz: number, tx: number, ty: number, tz: number, t?: boolean) => void
+  } | null>(null)
   const frameModel = (animate: boolean) => controlsRef.current?.setLookAt(2.6, 1.9, 3.4, 0, 0, 0, animate)
   useEffect(() => {
     // When a document's geometry becomes available, frame it.
@@ -322,12 +338,29 @@ export function DocumentViewport() {
     }
   }
 
-  // Click the body to select the feature that owns the surface under the cursor
-  // (converts the display hit back to part space, then nearest-proxy).
-  const handleSelect = (hit: Vec3) => {
-    if (!fit || !doc) return
-    const id = pickFeatureAt(doc.feature_tree, fit.toPart(hit))
-    select(id)
+  // Click the body to select the feature that owns the surface under the cursor.
+  //
+  // `owner` is the real answer: the mesh carries the feature that made each
+  // triangle (`services/picking`), so this is not a guess. The proxy fallback
+  // stays for bodies that could not be attributed — an all-suppressed tree, or
+  // a mesh cached before the field existed — and is a guess, which is why it is
+  // second rather than first.
+  const handleSelect = (hit: Vec3, owner: string | null) => {
+    if (!doc) return
+    if (owner) {
+      select(owner)
+      return
+    }
+    if (!fit) return
+    select(pickFeatureAt(doc.feature_tree, fit.toPart(hit)))
+  }
+
+  // Drag the selected feature: preview locally, then one `set_feature_params`.
+  // The offset lives here rather than in the store because nothing outside this
+  // viewport can act on a position that is still under the pointer.
+  const moveFeature = (key: string, next: Vector3) => {
+    if (!selectedFeatureId) return
+    void runOp('set_feature_params', { feature_id: selectedFeatureId, params: { [key]: next } })
   }
 
   const toggleMeasure = () => {
@@ -381,7 +414,18 @@ export function DocumentViewport() {
               dim={isolate && !!selectedNode}
             />
           )}
-          {fit && selectedNode && <SelectionHighlight node={selectedNode} fit={fit} />}
+          {fit && selectedNode && (
+            <SelectionHighlight node={selectedNode} fit={fit} offset={dragOffset} />
+          )}
+          {fit && selectedNode && !measuring && !sketchPick && (
+            <MoveHandles
+              node={selectedNode}
+              fit={fit}
+              onPreview={setDragOffset}
+              onCommit={moveFeature}
+              setControlsEnabled={setOrbit}
+            />
+          )}
           {fit && <TopologyMarkers fit={fit} />}
           {showDims && bbox && fit && <DimensionOverlay bbox={bbox} fit={fit} />}
       {fit && dims.length > 0 && <DimensionLines dims={dims} fit={fit} onRemove={removeDimension} />}
@@ -407,6 +451,7 @@ export function DocumentViewport() {
               dolly clamps at close working distance */}
           <CameraControls
             ref={controlsRef as never}
+            enabled={orbit}
             makeDefault
             minDistance={0.08}
             maxDistance={50}

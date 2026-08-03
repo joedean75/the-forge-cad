@@ -35,11 +35,22 @@ class Kernel:
         return make_cone(base_radius, height, center, axis)
 
     @staticmethod
-    def from_mesh(vertices: np.ndarray, faces: np.ndarray, id: Optional[str] = None) -> Solid:
-        """Wrap an arbitrary triangle mesh as a single-faced solid."""
+    def from_mesh(vertices: np.ndarray, faces: np.ndarray, id: Optional[str] = None,
+                  owners=None) -> Solid:
+        """Wrap an arbitrary triangle mesh as a single-faced solid.
+
+        ``owners`` is one feature id (or None) per triangle, when the evaluator
+        knew. It rides on ``attrs`` rather than becoming a field of `Solid`,
+        because it is provenance about *this* tessellation rather than part of
+        the topology — and there is exactly one face, so the triangle order the
+        caller passed is the order `solid_to_mesh` gives back.
+        """
         mesh = FaceMesh(np.array(vertices, dtype=float), np.array(faces, dtype=int))
         face = Face(surface=None, mesh=mesh, id=str(uuid.uuid4()))
-        return Solid(Shell([face]), id=id or str(uuid.uuid4()))
+        solid = Solid(Shell([face]), id=id or str(uuid.uuid4()))
+        if owners is not None:
+            solid.attrs["triangle_owners"] = list(owners)
+        return solid
 
     @staticmethod
     def evaluate_feature(feature: Feature, resolution: int = 128) -> Solid:
@@ -62,11 +73,15 @@ class Kernel:
         from app.cad_kernel.evaluator import brep
         from app.cad_kernel.evaluator.sdf_native import evaluate_feature_native
 
-        shape = brep.brep_from_feature(feature)
+        shape, recorded = brep.build_with_history(feature)
         if shape is not None:
-            vertices, faces = brep.tessellate(shape, resolution=resolution)
+            # The same build, with the entity tags kept: they are what turns a
+            # triangle back into the feature that made it, and re-deriving them
+            # afterwards would mean tessellating the body a second time.
+            vertices, faces, owners = brep.tessellate_owned(
+                shape, (recorded or {}).get("entities"), resolution=resolution)
             if len(faces):
-                return Kernel.from_mesh(vertices, faces)
+                return Kernel.from_mesh(vertices, faces, owners=owners)
 
         if brep.requires_exact(feature):
             # There is no SDF form of an edge fillet or a face shell, so falling

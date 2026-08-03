@@ -464,9 +464,13 @@ def mesh_payload(doc_id: str, mesh_hash: str) -> Optional[bytes]:
         solid = docs.get_solid(doc_id, resolution=doc.derived.resolution or 128)
     except (KeyError, ValueError):
         return None
+    from app.services import picking
+
     mesh = Kernel.tessellate(solid)
     digest = hash_of(mesh)
-    payload = mesh_binary.write_mesh_binary(mesh)
+    payload = mesh_binary.write_mesh_binary(
+        mesh, picking.owners_for(solid, mesh, docs.resolved_tree(doc),
+                                 doc.derived.resolution or 128))
     docs.cache_mesh(doc_id, digest, payload)
     return payload if digest == mesh_hash else None
 

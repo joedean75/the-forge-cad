@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState, type ComponentType } from 'react'
+import { Loader2 } from 'lucide-react'
 import { EditorHeader } from '../components/EditorHeader'
 import { ToolRibbon } from '../components/ToolRibbon'
 import { CommandPalette } from '../components/CommandPalette'
@@ -6,19 +7,27 @@ import { AccountDrawer } from '../components/AccountDrawer'
 import { HistoryShareDrawer } from '../components/HistoryShareDrawer'
 import { CopilotPanel } from '../components/CopilotPanel'
 import { ModeSpine } from '../components/ModeSpine'
-import { SketchCanvas } from '../features/sketch/SketchCanvas'
 import { DocumentViewport } from '../components/DocumentViewport'
 import { FeatureTreePanel } from '../features/tree/FeatureTreePanel'
 import { ModelInspector } from '../features/model/ModelInspector'
-import { OptimizePanel } from '../features/optimize/OptimizePanel'
-import { AnalysisPanel } from '../features/analysis/AnalysisPanel'
-import { ValidatePanel } from '../features/validate/ValidatePanel'
-import { MakePanel } from '../features/make/MakePanel'
-import { MachinePanel } from '../features/machine/MachinePanel'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { useNavStore } from '../store/useNavStore'
 import { useCollab } from '../hooks/useCollab'
 import type { EditorMode } from '../../../shared/types'
+
+// Model is the mode the editor opens in and the one most sessions never leave;
+// the other five carry the slicer, the drawing viewer and the FEA readouts
+// between them. Same for the sketch canvas, which is mounted always and open
+// rarely. Each is its own chunk, fetched the first time the mode is entered.
+const lazyPanel = (load: () => Promise<Record<string, ComponentType>>, name: string) =>
+  lazy(() => load().then((m) => ({ default: m[name] })))
+
+const OptimizePanel = lazyPanel(() => import('../features/optimize/OptimizePanel'), 'OptimizePanel')
+const AnalysisPanel = lazyPanel(() => import('../features/analysis/AnalysisPanel'), 'AnalysisPanel')
+const ValidatePanel = lazyPanel(() => import('../features/validate/ValidatePanel'), 'ValidatePanel')
+const MakePanel = lazyPanel(() => import('../features/make/MakePanel'), 'MakePanel')
+const MachinePanel = lazyPanel(() => import('../features/machine/MachinePanel'), 'MachinePanel')
+const SketchCanvas = lazyPanel(() => import('../features/sketch/SketchCanvas'), 'SketchCanvas')
 
 const MODE_TITLE: Record<EditorMode, string> = {
   model: 'Model',
@@ -27,6 +36,14 @@ const MODE_TITLE: Record<EditorMode, string> = {
   make: 'Make',
   validate: 'Validate',
   machine: 'Machine',
+}
+
+function PanelFallback() {
+  return (
+    <div className="flex items-center gap-2 text-xs text-cad-text/50 py-6">
+      <Loader2 size={13} className="animate-spin" /> Loading panel…
+    </div>
+  )
 }
 
 function RightPanel() {
@@ -43,6 +60,7 @@ function RightPanel() {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto p-4">
+        <Suspense fallback={<PanelFallback />}>
         {mode === 'model' ? (
           <ModelInspector />
         ) : mode === 'optimize' ? (
@@ -56,6 +74,7 @@ function RightPanel() {
         ) : (
           <MachinePanel />
         )}
+        </Suspense>
       </div>
     </aside>
   )
@@ -128,7 +147,9 @@ export function EditorScreen() {
       <AccountDrawer open={accountOpen} onClose={() => setAccountOpen(false)} />
       <HistoryShareDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} />
       <CopilotPanel open={copilotOpen} onClose={() => setCopilotOpen(false)} />
-      <SketchCanvas />
+      {/* No fallback: the canvas renders nothing until it is opened, so a
+          spinner here would be a spinner over the viewport for no reason. */}
+      <Suspense fallback={null}><SketchCanvas /></Suspense>
     </div>
   )
 }

@@ -19,6 +19,7 @@ import type {
   Vector3,
   CopilotResult,
   DocumentParameter,
+  DerivedCache,
 } from '../../../shared/types'
 import { api } from '../api/client'
 import { ensureIds } from '../util/featureTree'
@@ -66,8 +67,8 @@ interface DocumentState {
    *  whole problem. */
   dfmProcess: DfmProcess | null
   cam: CamResult | null
-  past: FeatureTreeDict[]
-  future: FeatureTreeDict[]
+  past: HistoryEntry[]
+  future: HistoryEntry[]
   undo: () => Promise<void>
   redo: () => Promise<void>
   sketchOpen: boolean
@@ -175,6 +176,37 @@ const STALE = {
   refs: null, topo: BLANK_TOPOLOGY,
 } as const
 
+/**
+ * One step of history: the tree *and* the geometry that tree evaluated to.
+ *
+ * It used to be the tree alone, which is why undo was as slow as the edit it
+ * reversed — the tree came back instantly and the body did not, so every undo
+ * waited on a server round trip and a re-evaluation. Since the mesh became an
+ * immutable hash-keyed URL the browser already holds, restoring the `derived`
+ * cache alongside the tree puts the old body back with no network at all.
+ */
+export type HistoryEntry = { tree: FeatureTreeDict; derived: DerivedCache }
+
+const HISTORY_DEPTH = 50
+
+function pushHistory(past: HistoryEntry[], doc: DesignDocument): HistoryEntry[] {
+  return [...past, { tree: doc.feature_tree, derived: doc.derived }].slice(-HISTORY_DEPTH)
+}
+
+/**
+ * The undo/redo write that is still on its way to the server.
+ *
+ * Undo applies locally and syncs in the background, so the server can briefly
+ * hold the tree the user just undid. A real edit issued in that window would
+ * race it — and whichever request landed second would win — so every edit waits
+ * for this first. It is normally already settled by the time anyone looks.
+ */
+let pendingSync: Promise<unknown> | null = null
+
+export function historySyncSettled(): Promise<unknown> {
+  return pendingSync ?? Promise.resolve()
+}
+
 export const useDocumentStore = create<DocumentState>((set, get) => ({
   doc: null,
   mode: 'model',
@@ -248,9 +280,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   setTopoSelection: (ids) => set({ topo: { ...get().topo, selected: ids } }),
 
   applyTopology: async (op, sizeMm) => {
+    await historySyncSettled()
     const { doc, topo, past } = get()
     if (!doc || topo.selected.length === 0) return
-    set({ past: [...past, doc.feature_tree].slice(-50), future: [], busy: true, error: null })
+    set({ past: pushHistory(past, doc), future: [], busy: true, error: null })
     try {
       const call = op === 'fillet' ? api.filletEdges : op === 'chamfer' ? api.chamferEdges : api.shellFaces
       const env = await call(doc.id, topo.selected, sizeMm)
@@ -359,9 +392,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   runOp: async (op, args) => {
+    await historySyncSettled()
     const { doc, past } = get()
     if (!doc) return undefined
-    set({ past: [...past, doc.feature_tree].slice(-50), future: [], busy: true, error: null })
+    set({ past: pushHistory(past, doc), future: [], busy: true, error: null })
     try {
       const res = await api.runOperation(doc.id, op, args)
       if (res.document) {
@@ -395,9 +429,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   setParameters: async (parameters) => {
+    await historySyncSettled()
     const { doc, past } = get()
     if (!doc) return
-    set({ past: [...past, doc.feature_tree].slice(-50), future: [], busy: true, error: null })
+    set({ past: pushHistory(past, doc), future: [], busy: true, error: null })
     try {
       const updated = withIds(await api.setParameters(doc.id, parameters))
       set({ doc: updated, error: updated.derived.error ?? null, ...STALE })
@@ -409,9 +444,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   aiEdit: async (instruction) => {
+    await historySyncSettled()
     const { doc, past } = get()
     if (!doc || !instruction.trim()) return
-    set({ past: [...past, doc.feature_tree].slice(-50), future: [], busy: true, error: null })
+    set({ past: pushHistory(past, doc), future: [], busy: true, error: null })
     try {
       const updated = withIds(await api.aiEditDocument(doc.id, instruction))
       set({
@@ -429,9 +465,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   runCopilot: async (goal, onProgress) => {
+    await historySyncSettled()
     const { doc, past } = get()
     if (!doc || !goal.trim()) return undefined
-    set({ past: [...past, doc.feature_tree].slice(-50), future: [], busy: true, error: null })
+    set({ past: pushHistory(past, doc), future: [], busy: true, error: null })
     try {
       const res = await api.runCopilot(doc.id, goal, 8, onProgress)
       if (res.document) {
@@ -637,10 +674,11 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
 
   commitTree: async (tree) => {
+    await historySyncSettled()
     const { doc, past } = get()
     if (!doc) return
     // snapshot current tree for undo, then optimistic update
-    set({ past: [...past, doc.feature_tree].slice(-50), future: [], busy: true, error: null, doc: { ...doc, feature_tree: tree } })
+    set({ past: pushHistory(past, doc), future: [], busy: true, error: null, doc: { ...doc, feature_tree: tree } })
     try {
       const updated = withIds(
         await api.updateDocument(doc.id, { feature_tree: tree, resolution: DEFAULT_RESOLUTION }),
@@ -656,30 +694,61 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   undo: async () => {
     const { doc, past, future } = get()
     if (!doc || past.length === 0) return
-    const prev = past[past.length - 1]
-    set({ past: past.slice(0, -1), future: [...future, doc.feature_tree], busy: true, error: null, doc: { ...doc, feature_tree: prev } })
-    try {
-      const updated = withIds(await api.updateDocument(doc.id, { feature_tree: prev, resolution: DEFAULT_RESOLUTION }))
-      set({ doc: updated, error: updated.derived.error ?? null, ...STALE })
-    } catch (e) {
-      set({ error: e instanceof Error ? e.message : 'Undo failed' })
-    } finally {
-      set({ busy: false })
-    }
+    step(set, get, doc, past[past.length - 1], {
+      past: past.slice(0, -1),
+      future: [...future, { tree: doc.feature_tree, derived: doc.derived }],
+    }, 'Undo failed')
   },
 
   redo: async () => {
     const { doc, past, future } = get()
     if (!doc || future.length === 0) return
-    const next = future[future.length - 1]
-    set({ future: future.slice(0, -1), past: [...past, doc.feature_tree], busy: true, error: null, doc: { ...doc, feature_tree: next } })
-    try {
-      const updated = withIds(await api.updateDocument(doc.id, { feature_tree: next, resolution: DEFAULT_RESOLUTION }))
-      set({ doc: updated, error: updated.derived.error ?? null, ...STALE })
-    } catch (e) {
-      set({ error: e instanceof Error ? e.message : 'Redo failed' })
-    } finally {
-      set({ busy: false })
-    }
+    step(set, get, doc, future[future.length - 1], {
+      future: future.slice(0, -1),
+      past: [...past, { tree: doc.feature_tree, derived: doc.derived }],
+    }, 'Redo failed')
   },
 }))
+
+type Setter = (partial: Partial<DocumentState>) => void
+
+/**
+ * Move to a remembered state: locally now, on the server shortly.
+ *
+ * The local half is the whole point — the tree is in hand and the mesh behind
+ * `derived.mesh_url` is immutable and already in the browser's cache, so there
+ * is nothing to wait for. Two things it must still do:
+ *
+ * - **Everything measured from the geometry goes stale.** `derived` is the
+ *   body's own cache and travels with the step; a simulation, a DFM report or a
+ *   face listing is a *reading* of a body that is no longer on screen, and an
+ *   undo that left one next to the restored geometry would be showing an answer
+ *   to a question nobody asked.
+ * - **The server has to catch up, and the catch-up must not clobber a newer
+ *   edit.** The adopt-the-response step checks the tree is still the one it
+ *   sent; `historySyncSettled` is what the edit path waits on so the two cannot
+ *   land out of order.
+ */
+function step(set: Setter, get: () => DocumentState, doc: DesignDocument,
+              target: HistoryEntry, stacks: Partial<DocumentState>, failure: string) {
+  set({
+    ...stacks,
+    doc: { ...doc, feature_tree: target.tree, derived: target.derived },
+    error: null,
+    ...STALE,
+  })
+  pendingSync = api
+    .updateDocument(doc.id, { feature_tree: target.tree, resolution: DEFAULT_RESOLUTION })
+    .then((fresh) => {
+      const current = get().doc
+      if (current && current.feature_tree === target.tree) {
+        set({ doc: withIds(fresh), error: fresh.derived.error ?? null })
+      }
+    })
+    .catch((e) => set({ error: e instanceof Error ? e.message : failure }))
+  const mine = pendingSync
+  // Only the *latest* step clears the slot: a second undo lands while the first
+  // is still in flight, and nulling unconditionally would let an edit through
+  // while a write it must follow was still open.
+  void mine.finally(() => { if (pendingSync === mine) pendingSync = null })
+}

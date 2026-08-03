@@ -183,11 +183,21 @@ export interface CamResult {
 
 export interface DerivedCache {
   solid_hash?: string
+  /** Everything that changes what an evaluation would produce. An edit whose key
+   *  still matches does not rebuild the body — see `document_service`. */
+  eval_key?: string
+  /** `/api/documents/{id}/mesh/{mesh_hash}` — a URL, not a payload. Immutable
+   *  and cached forever, because the hash *is* the identity of the triangles. */
   mesh_url?: string
+  mesh_hash?: string
   step_url?: string
   bbox?: BBox
   mass: number
   volume: number
+  /** The conditions the geometry was produced under. Two meshes are only
+   *  comparable when these match. */
+  resolution?: number
+  sampler?: 'brep' | 'native' | 'numpy'
   sim?: SimulationResult
   dfm?: DfmReport
   cam?: CamResult

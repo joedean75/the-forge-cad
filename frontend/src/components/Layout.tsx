@@ -1,13 +1,32 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useAuthStore } from '../store/useAuthStore'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { useAssemblyStore } from '../store/useAssemblyStore'
 import { useNavStore } from '../store/useNavStore'
 import { SignInScreen } from '../screens/SignInScreen'
-import { LibraryScreen } from '../screens/LibraryScreen'
-import { EditorScreen } from '../screens/EditorScreen'
-import { AssemblyScreen } from '../screens/AssemblyScreen'
+
+// Split at the screen boundary. Sign-in is the only screen a first visit is
+// certain to reach, and it was paying for three.js, the slicer, the drawing
+// viewer and the sketch canvas before it could draw a password field. It stays
+// in the first chunk because it *is* the first paint; everything behind it
+// loads when it is navigated to.
+const LibraryScreen = lazy(() =>
+  import('../screens/LibraryScreen').then((m) => ({ default: m.LibraryScreen })))
+const EditorScreen = lazy(() =>
+  import('../screens/EditorScreen').then((m) => ({ default: m.EditorScreen })))
+const AssemblyScreen = lazy(() =>
+  import('../screens/AssemblyScreen').then((m) => ({ default: m.AssemblyScreen })))
+
+/** The same shell every loading state uses, so a lazy boundary reads as the app
+ *  thinking rather than as a blank frame. */
+export function ScreenFallback({ label = 'Loading…' }: { label?: string }) {
+  return (
+    <div className="h-full flex items-center justify-center bg-cad-bg text-cad-text gap-2 text-sm">
+      <Loader2 size={16} className="animate-spin" /> {label}
+    </div>
+  )
+}
 
 /**
  * App shell / top-level router: sign-in → library → editor|assembly.
@@ -43,16 +62,14 @@ export function Layout() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  if (!ready) {
-    return (
-      <div className="h-full flex items-center justify-center bg-cad-bg text-cad-text gap-2 text-sm">
-        <Loader2 size={16} className="animate-spin" /> Loading Forge…
-      </div>
-    )
-  }
-
+  if (!ready) return <ScreenFallback label="Loading Forge…" />
   if (!account) return <SignInScreen />
-  if (screen === 'editor' && doc) return <EditorScreen />
-  if (screen === 'assembly' && assembly) return <AssemblyScreen />
-  return <LibraryScreen />
+
+  return (
+    <Suspense fallback={<ScreenFallback label="Loading workspace…" />}>
+      {screen === 'editor' && doc ? <EditorScreen />
+        : screen === 'assembly' && assembly ? <AssemblyScreen />
+        : <LibraryScreen />}
+    </Suspense>
+  )
 }

@@ -271,7 +271,8 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
             _, resolved = parameters.resolve_values(doc.parameters, overrides)
             for p, rd in zip(doc.parameters, resolved):
                 p.value = rd.get("value")
-        tree = FeatureTree.from_dict(resolved_tree(doc))
+        active = resolved_tree(doc)
+        tree = FeatureTree.from_dict(active)
         sampler = Kernel.sampler_for(tree.root)
         solid = Kernel.evaluate_tree(tree, resolution=resolution)
         mesh = Kernel.tessellate(solid)
@@ -289,8 +290,15 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
         from app.services import materials
 
         density = materials.density_of(doc.material_id)
+        from app.services import picking
+
         digest = mesh_hash(mesh)
-        cache_mesh(doc.id, digest, write_mesh_binary(mesh))
+        # Provenance rides with the triangles rather than being re-derived on
+        # demand: on the exact path it is a by-product of the tessellation that
+        # just ran, and re-deriving it would mean meshing the body twice.
+        cache_mesh(doc.id, digest,
+                   write_mesh_binary(mesh, picking.owners_for(solid, mesh, active,
+                                                              resolution)))
         doc.derived = DerivedCache(
             solid_hash=tree_hash,
             eval_key=key,

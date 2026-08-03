@@ -1,5 +1,39 @@
 # Performance & experience roadmap — three sprints
 
+> **Status: P1, P2 and P3 are done.** What each actually cost, measured the same
+> way as the numbers below:
+>
+> | | before | after |
+> |---|---|---|
+> | Document JSON per edit | 1164 KB | 1.5 KB + a mesh fetched once |
+> | `set_material` | 90 ms + full mesh | 16.6 ms, mesh URL unchanged |
+> | Edit the last of 12 features | 467 ms | 268 ms (1 boolean, not 11) |
+> | `get_exact_body` after a display build | a second full build | free |
+> | 300-curve profile extruded at res 128 (numpy SDF) | 23.5 s | 0.51 s |
+> | First-paint JavaScript | 1,435 KB / 388 KB gz | 195 KB / 62 KB gz |
+> | Undo | full round trip + re-evaluation | local, ~400 ms to the restored body |
+> | Clicking the body | nearest analytic proxy (a guess) | the feature that made the triangle |
+>
+> **One item was deliberately not done: P2's "evaluate off the request."** After
+> the per-node cache, an edit is 268 ms and about 85% of that is OpenCascade's
+> mesher — work that streaming would *move* rather than remove. Removing it from
+> the request means the response cannot carry `mesh_hash`, `volume` or `bbox`,
+> all of which are computed *from* the mesh, so every derived reading becomes
+> provisional. That is exactly the trap this sprint's own notes flag ("a body
+> that is becoming current needs its own state"), and it is a larger change than
+> the rest of P2 put together. Doing it properly needs volume and bbox to come
+> from the B-rep rather than the mesh — a change to what those numbers *mean* —
+> and a `refining` state the store, the STALE rule and the decompiler all
+> understand. It is worth its own sprint, not a corner of this one.
+>
+> **P2's spatial index was kept but is honest about its limits.** A bounding-box
+> cull leaves 57 of 300 curves per cell for a circle and 29 for a lobed outline:
+> real, but not the "O(samples × local)" the plan assumed, because points deep
+> inside a closed profile are genuinely near-equidistant from all of it. The 46×
+> on the quoted 27 s case came from *not evaluating the same (u, v) once per
+> extrusion slice*, which the plan did not anticipate.
+
+
 The exact-kernel programme and the sketch programme both went after
 *capability*: things the system could not do. This one goes after the two
 things that decide whether the capability is usable — how long an edit takes,
