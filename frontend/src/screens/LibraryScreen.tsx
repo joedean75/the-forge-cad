@@ -8,7 +8,8 @@ import { useAssemblyStore } from '../store/useAssemblyStore'
 import { useAuthStore } from '../store/useAuthStore'
 import { useNavStore } from '../store/useNavStore'
 import { AccountDrawer } from '../components/AccountDrawer'
-import type { DocumentSummary, AssemblySummary } from '../../../shared/types'
+import { Thumbnail } from '../components/Thumbnail'
+import type { CatalogMaterial, DocumentSummary, AssemblySummary } from '../../../shared/types'
 
 function relTime(iso: string): string {
   const s = (Date.now() - new Date(iso).getTime()) / 1000
@@ -16,6 +17,63 @@ function relTime(iso: string): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`
   return `${Math.floor(s / 86400)}d ago`
+}
+
+/** Grams below a kilogram: "0.02 kg" is a number nobody pictures. */
+function massLabel(kg?: number | null): string | null {
+  if (!kg || kg <= 0) return null
+  if (kg < 1) return `${Math.round(kg * 1000)} g`
+  return `${kg.toFixed(kg < 10 ? 2 : 1)} kg`
+}
+
+type Lifecycle = DocumentSummary['lifecycle_state']
+
+/** The state a part is in, said in the card's own colour language: released is
+ *  verified, in-review is caution, obsolete is dimmed rather than shouted. */
+const LIFECYCLE: Record<Lifecycle, { label: string; className: string }> = {
+  draft: { label: 'Draft', className: 'text-cad-text/70 border-cad-border' },
+  in_review: { label: 'In review', className: 'text-cad-warning border-cad-warning/40' },
+  released: { label: 'Released', className: 'text-cad-success border-cad-success/40' },
+  obsolete: { label: 'Obsolete', className: 'text-cad-text/40 border-cad-border/60' },
+}
+
+type SortKey = 'edited' | 'created' | 'name'
+type OwnerFilter = 'all' | 'mine' | 'shared'
+type StateFilter = 'all' | Lifecycle
+
+const SORTS: [SortKey, string][] = [['edited', 'Last edited'], ['created', 'Newest'], ['name', 'Name']]
+const OWNERS: [OwnerFilter, string][] = [['all', 'Everything'], ['mine', 'Mine'], ['shared', 'Shared with me']]
+const STATES: [StateFilter, string][] = [
+  ['all', 'Any state'], ['draft', 'Draft'], ['in_review', 'In review'],
+  ['released', 'Released'], ['obsolete', 'Obsolete'],
+]
+
+function ownedAs(filter: OwnerFilter, shared: boolean) {
+  return filter === 'all' || (filter === 'shared') === shared
+}
+
+function bySort(key: SortKey) {
+  return (a: { name: string; updated_at: string; created_at: string },
+          b: { name: string; updated_at: string; created_at: string }) => {
+    if (key === 'name') return a.name.localeCompare(b.name)
+    const field = key === 'created' ? 'created_at' : 'updated_at'
+    return (b[field] || '').localeCompare(a[field] || '')
+  }
+}
+
+function Select<T extends string>({
+  value, onChange, options, title,
+}: { value: T; onChange: (v: T) => void; options: [T, string][]; title: string }) {
+  return (
+    <select
+      value={value}
+      title={title}
+      onChange={(e) => onChange(e.target.value as T)}
+      className="h-8 px-2 rounded-sm bg-cad-bg border border-cad-border text-[11px] text-cad-text hover:text-cad-text-heading focus:border-cad-accent outline-none transition-colors"
+    >
+      {options.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+    </select>
+  )
 }
 
 function TrussMark() {
@@ -42,6 +100,10 @@ export function LibraryScreen() {
   const [assemblies, setAssemblies] = useState<AssemblySummary[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<SortKey>('edited')
+  const [owner, setOwner] = useState<OwnerFilter>('all')
+  const [state, setState] = useState<StateFilter>('all')
+  const [materials, setMaterials] = useState<Record<string, string>>({})
   const [accountOpen, setAccountOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -61,6 +123,15 @@ export function LibraryScreen() {
       .finally(() => setLoading(false))
   }
   useEffect(reload, [])
+  // The catalog is small and static, and it is what turns `ss-17-4ph` on a card
+  // into "Stainless 17-4 PH". Fetched beside the listing rather than before it,
+  // so a slow or failed catalog never delays the library.
+  useEffect(() => {
+    api.listMaterials()
+      .then(({ materials: list }: { materials: CatalogMaterial[] }) =>
+        setMaterials(Object.fromEntries(list.map((m) => [m.id, m.name]))))
+      .catch(() => {})
+  }, [])
 
   const openPart = async (id: string) => { await openDocument(id); go('editor') }
   const newPart = async () => { setCreating(true); try { await newBlank(); go('editor') } finally { setCreating(false) } }
@@ -113,8 +184,20 @@ export function LibraryScreen() {
   }
 
   const q = query.trim().toLowerCase()
-  const shownParts = useMemo(() => parts.filter((p) => !q || p.name.toLowerCase().includes(q)), [parts, q])
-  const shownAsm = useMemo(() => assemblies.filter((a) => !q || a.name.toLowerCase().includes(q)), [assemblies, q])
+  // The name is often the one thing nobody remembers about a generated part —
+  // `source_prompt` is what they actually asked for, and the material is how
+  // people describe a part they made twice in two alloys.
+  const shownParts = useMemo(() => parts.filter((p) => {
+    if (!ownedAs(owner, p.shared)) return false
+    if (state !== 'all' && p.lifecycle_state !== state) return false
+    if (!q) return true
+    const haystack = [p.name, p.source_prompt || '', materials[p.material_id || ''] || p.material_id || '']
+    return haystack.some((s) => s.toLowerCase().includes(q))
+  }).sort(bySort(sort)), [parts, q, sort, owner, state, materials])
+  const shownAsm = useMemo(() => assemblies.filter(
+    (a) => ownedAs(owner, a.shared) && (!q || a.name.toLowerCase().includes(q)),
+  ).sort(bySort(sort)), [assemblies, q, sort, owner])
+  const narrowed = !!q || owner !== 'all' || (tab === 'parts' && state !== 'all')
 
   return (
     <div className="h-full flex flex-col" style={{ background: 'radial-gradient(130% 120% at 50% 0%, #171b22 0%, var(--color-cad-bg) 45%)' }}>
@@ -131,7 +214,7 @@ export function LibraryScreen() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search parts and assemblies"
+            placeholder="Search name, prompt or material"
             className="flex-1 bg-transparent text-xs text-cad-text-heading placeholder:text-cad-text/50 outline-none"
           />
         </div>
@@ -220,21 +303,42 @@ export function LibraryScreen() {
         </button>
       </div>
 
+      {/* sort + filter */}
+      <div className="border-b border-cad-border bg-cad-panel/20 px-5 py-2 flex items-center gap-2 shrink-0 flex-wrap">
+        <Select value={sort} onChange={setSort} options={SORTS} title="Sort by" />
+        <Select value={owner} onChange={setOwner} options={OWNERS} title="Ownership" />
+        {tab === 'parts' && <Select value={state} onChange={setState} options={STATES} title="Lifecycle state" />}
+        <div className="flex-1" />
+        <span className="tabular text-[10px] text-cad-text/50">
+          {tab === 'parts' ? shownParts.length : shownAsm.length} shown
+        </span>
+      </div>
+
       {/* grid */}
       <div className="flex-1 overflow-y-auto p-5">
         {loading ? (
           <div className="flex items-center justify-center h-48 text-cad-text gap-2 text-sm"><Loader2 size={16} className="animate-spin" /> Loading your library…</div>
         ) : tab === 'parts' ? (
           shownParts.length === 0 ? (
-            <EmptyState icon={<Package size={34} className="text-cad-border" />} title={q ? 'No parts match your search' : 'No parts yet'} hint={q ? undefined : 'Create a blank part, then describe or model it in the editor.'} action={q ? undefined : { label: 'New part', onClick: newPart }} />
+            <EmptyState icon={<Package size={34} className="text-cad-border" />} title={narrowed ? 'No parts match those filters' : 'No parts yet'} hint={narrowed ? undefined : 'Create a blank part, then describe or model it in the editor.'} action={narrowed ? undefined : { label: 'New part', onClick: newPart }} />
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
               {shownParts.map((it) => (
                 <Card
                   key={it.id}
                   icon={<Package size={18} className="text-cad-text/70 group-hover:text-cad-accent" />}
+                  preview={
+                    <Thumbnail
+                      documentId={it.id}
+                      meshHash={it.mesh_hash}
+                      fallback={<Package size={26} className="text-cad-border" />}
+                    />
+                  }
                   title={it.name}
+                  badge={<StateBadge state={it.lifecycle_state} revision={it.revision} />}
                   meta={it.provenance.replace('_', '-')}
+                  detail={[materials[it.material_id || ''] || it.material_id, massLabel(it.mass_kg)]
+                    .filter(Boolean).join(' · ')}
                   time={relTime(it.updated_at)}
                   shared={it.shared}
                   onOpen={() => openPart(it.id)}
@@ -244,7 +348,7 @@ export function LibraryScreen() {
             </div>
           )
         ) : shownAsm.length === 0 ? (
-          <EmptyState icon={<Boxes size={34} className="text-cad-border" />} title={q ? 'No assemblies match your search' : 'No assemblies yet'} hint={q ? undefined : 'Create an assembly, then insert parts to compose it.'} action={q ? undefined : { label: 'New assembly', onClick: newAssembly }} />
+          <EmptyState icon={<Boxes size={34} className="text-cad-border" />} title={narrowed ? 'No assemblies match those filters' : 'No assemblies yet'} hint={narrowed ? undefined : 'Create an assembly, then insert parts to compose it.'} action={narrowed ? undefined : { label: 'New assembly', onClick: newAssembly }} />
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
             {shownAsm.map((it) => (
@@ -268,12 +372,26 @@ export function LibraryScreen() {
   )
 }
 
+/** Lifecycle plus the released revision letter — one chip, because a released
+ *  part with no letter and a draft at revision B are both real states. */
+function StateBadge({ state, revision }: { state: Lifecycle; revision?: string | null }) {
+  const { label, className } = LIFECYCLE[state] || LIFECYCLE.draft
+  return (
+    <span className={`px-1.5 py-px rounded-sm border text-[9px] font-medium tracking-wide uppercase whitespace-nowrap ${className}`}>
+      {label}{revision ? ` · Rev ${revision}` : ''}
+    </span>
+  )
+}
+
 function Card({
-  icon, title, meta, time, shared, onOpen, onRemove,
+  icon, preview, title, badge, meta, detail, time, shared, onOpen, onRemove,
 }: {
   icon: React.ReactNode
+  preview?: React.ReactNode
   title: string
+  badge?: React.ReactNode
   meta: string
+  detail?: string
   time: string
   shared: boolean
   onOpen: () => void
@@ -284,20 +402,25 @@ function Card({
       onClick={onOpen}
       className="group relative text-left p-3.5 rounded-md border border-cad-border bg-cad-panel/60 hover:border-cad-accent/50 hover:bg-cad-accent/[0.04] transition-colors"
     >
-      <div className="flex items-start justify-between">
-        {icon}
-        {shared && <Users size={12} className="text-cad-text/50" />}
+      {preview}
+      <div className={`flex items-start justify-between gap-2 ${preview ? 'mt-3' : ''}`}>
+        {preview ? <span className="min-w-0 flex-1 text-[13px] text-cad-text-heading font-medium truncate">{title}</span> : icon}
+        <span className="flex items-center gap-1.5 shrink-0">
+          {badge}
+          {shared && <Users size={12} className="text-cad-text/50" />}
+        </span>
       </div>
-      <div className="mt-3 text-[13px] text-cad-text-heading font-medium truncate">{title}</div>
-      <div className="mt-1.5 flex items-center justify-between">
-        <span className="eyebrow text-cad-text/60">{meta}</span>
-        <span className="tabular text-[9px] text-cad-text/50">{time}</span>
+      {!preview && <div className="mt-3 text-[13px] text-cad-text-heading font-medium truncate">{title}</div>}
+      {detail && <div className="mt-1 text-[10px] text-cad-text/70 truncate" title={detail}>{detail}</div>}
+      <div className="mt-1.5 flex items-center justify-between gap-2">
+        <span className="eyebrow text-cad-text/60 truncate">{meta}</span>
+        <span className="tabular text-[9px] text-cad-text/50 shrink-0">{time}</span>
       </div>
       {onRemove && (
         <span
           onClick={onRemove}
           title="Delete"
-          className="absolute top-2.5 right-2.5 opacity-0 group-hover:opacity-100 p-1 rounded-sm text-cad-text hover:text-cad-danger transition"
+          className="absolute top-2.5 right-2.5 opacity-0 group-hover:opacity-100 p-1 rounded-sm bg-cad-panel/80 text-cad-text hover:text-cad-danger transition"
         >
           <Trash2 size={13} />
         </span>

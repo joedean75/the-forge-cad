@@ -223,8 +223,11 @@ def tool_definitions() -> List[Dict[str, Any]]:
     return [{
         "type": "function",
         "function": {
+            # Which kind of id the operation takes is part of what it does, and
+            # a tools payload has nowhere else to put it.
             "name": op.name,
-            "description": op.description,
+            "description": (f"[operates on an assembly] {op.description}"
+                            if op.subject == "assembly" else op.description),
             "parameters": json_schema(annotated(op.params)),
         },
     } for op in cad_operations.OPERATIONS.values()]

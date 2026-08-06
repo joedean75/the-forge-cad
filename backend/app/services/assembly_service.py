@@ -131,6 +131,7 @@ def list_assemblies(owner_id: Optional[str] = None) -> List[AssemblySummary]:
                 name=asm.name,
                 component_count=len(asm.components),
                 updated_at=asm.updated_at,
+                created_at=asm.created_at or asm.updated_at,
                 role=role or "owner",
                 shared=bool(owner_id is not None and asm.owner_id not in (None, owner_id)),
             )
@@ -158,6 +159,14 @@ def add_component(asm_id: str, part_id: str) -> Optional[AssemblyDoc]:
     if asm is None:
         return None
     part = document_service.get_document(part_id)
+    # A part the assembly's owner cannot open is not a part they can place.
+    # Checked here rather than at each caller because the consequence is not
+    # cosmetic: a component is a *reference*, so an assembly holding someone
+    # else's document reads its geometry straight back out through the BOM and
+    # the interference check. Legacy assemblies carry no owner and are left
+    # alone, exactly as `can_access` treats their documents.
+    if part is not None and asm.owner_id and not document_service.can_access(part, asm.owner_id):
+        part = None
     if part is None:
         raise ValueError("part not found")
     asm.components.append(

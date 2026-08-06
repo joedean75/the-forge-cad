@@ -15,7 +15,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 from app.services import document_service, feature_ops
 from app.services.op_errors import (
@@ -42,6 +42,12 @@ class Operation:
     description: str
     params: Dict[str, Any]
     handler: Callable[[str, Dict[str, Any]], Dict[str, Any]]
+    # Which kind of thing the id addresses. Every operation used to take a
+    # document, so `doc_id` was the whole story; an assembly is neither a
+    # `DesignDocument` nor squeezable into one — it has no feature tree, and what
+    # an agent needs to see is which part sits where. Published in the catalog so
+    # a caller knows what id to pass rather than discovering it from a 404.
+    subject: str = "document"
 
 
 _VEC = {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"}}}
@@ -102,17 +108,19 @@ _MODIFIER_PARAMS = {
 OPERATIONS: Dict[str, Operation] = {}
 
 
-def operation(name: str, kind: str, description: str, params: Dict[str, Any]):
+def operation(name: str, kind: str, description: str, params: Dict[str, Any],
+              subject: str = "document"):
     """Register a handler as a callable operation.
 
     `kind` is "query" (read-only) or "mutate". `params` is the JSON-schema-ish
-    shape published to agents in the catalog.
+    shape published to agents in the catalog. `subject` is what the id argument
+    names — a part document, or an assembly.
     """
 
     def decorate(fn):
         if name in OPERATIONS:
             raise ValueError(f"duplicate operation {name!r}")
-        OPERATIONS[name] = Operation(name, kind, description, params, fn)
+        OPERATIONS[name] = Operation(name, kind, description, params, fn, subject)
         return fn
 
     return decorate
@@ -1729,7 +1737,8 @@ def catalog() -> List[Dict[str, Any]]:
     """
     from app.services import op_schema
 
-    return [op_schema.describe(o.name, o.kind, o.description, o.params)
+    return [{**op_schema.describe(o.name, o.kind, o.description, o.params),
+             "subject": o.subject}
             for o in OPERATIONS.values()]
 
 
@@ -1765,6 +1774,40 @@ def _as_operation_error(exc: BaseException) -> OperationError:
     if isinstance(exc, (ValueError, TypeError)):
         return BadArgument(str(exc))
     return InternalError(f"{type(exc).__name__}: {exc}")
+
+
+class _Subject(NamedTuple):
+    """How to fetch, observe and diff whatever an operation's id names."""
+
+    fetch: Callable[[str], Any]
+    summarize: Callable[[Any], dict]
+    snapshot: Callable[[Any], dict]
+    delta: Callable[[dict, dict], dict]
+
+
+def _subjects() -> Dict[str, _Subject]:
+    from app.services import assembly_service, observation
+
+    return {
+        "document": _Subject(document_service.get_document, observation.summarize,
+                             observation.snapshot, observation.delta),
+        "assembly": _Subject(assembly_service.get_assembly, observation.summarize_assembly,
+                             observation.snapshot_assembly, observation.assembly_delta),
+    }
+
+
+class _SubjectTable:
+    """Built on first use — `assembly_service` imports this module back."""
+
+    _table: Optional[Dict[str, _Subject]] = None
+
+    def __getitem__(self, name: str) -> _Subject:
+        if _SubjectTable._table is None:
+            _SubjectTable._table = _subjects()
+        return _SubjectTable._table[name]
+
+
+_SUBJECTS = _SubjectTable()
 
 
 def execute(
@@ -1812,16 +1855,17 @@ def execute(
         trajectories.record_step(op_name, doc_id, args, env, rationale=rationale)
         return env
 
-    doc = document_service.get_document(doc_id)
+    subject = _SUBJECTS[op.subject]
+    doc = subject.fetch(doc_id)
     if doc is None:
         env = {"ok": False, "op": op_name, "result": {}, "warnings": [],
-               "error": NoSuchDocument(f"no document {doc_id!r}").to_dict()}
+               "error": NoSuchDocument(f"no {op.subject} {doc_id!r}").to_dict()}
         trajectories.record_step(op_name, doc_id, args, env, rationale=rationale)
         return env
 
     mutates = op.kind == "mutate"
-    before = observation.snapshot(doc)
-    obs_before = observation.summarize(doc)
+    before = subject.snapshot(doc)
+    obs_before = subject.summarize(doc)
     # Only a mutating op can need rolling back, and only then is the copy worth it.
     tree_before = copy.deepcopy(doc.feature_tree) if (mutates and rollback_on_eval_error) else None
 
@@ -1837,10 +1881,10 @@ def execute(
         err = _as_operation_error(exc)
         if isinstance(err, InternalError):
             _LOGGER.exception("operation %s failed unexpectedly", op_name)
-        after_doc = document_service.get_document(doc_id)
+        after_doc = subject.fetch(doc_id)
         env = {
             "ok": False, "op": op_name, "result": {}, "error": err.to_dict(), "warnings": [],
-            "state": observation.summarize(after_doc) if (include_state and after_doc) else None,
+            "state": subject.summarize(after_doc) if (include_state and after_doc) else None,
         }
         # A failed call is training data too — arguably the most valuable kind,
         # since it is what teaches recovery.
@@ -1850,7 +1894,7 @@ def execute(
 
     from app.services import units
 
-    after_doc = document_service.get_document(doc_id)
+    after_doc = subject.fetch(doc_id)
     envelope: Dict[str, Any] = {
         "ok": True,
         "op": op_name,
@@ -1864,7 +1908,7 @@ def execute(
         "warnings": units.implausible(args, op.params),
     }
 
-    if mutates and after_doc is not None and after_doc.derived.error:
+    if op.subject == "document" and mutates and after_doc is not None and after_doc.derived.error:
         eval_error = after_doc.derived.error
         if rollback_on_eval_error:
             document_service.update_document(doc_id, feature_tree=tree_before)
@@ -1876,7 +1920,8 @@ def execute(
         else:
             envelope["warnings"].append({"code": EvaluationFailed.code, "message": eval_error})
 
-    if mutates and after_doc is not None and not after_doc.derived.error:
+    if (op.subject == "document" and mutates and after_doc is not None
+            and not after_doc.derived.error):
         lost = _lost_references(doc_id, after_doc)
         if lost:
             # The body built, so nothing else here will notice — but a fillet that
@@ -1889,10 +1934,17 @@ def execute(
                            f"edit; call check_references to see which"})
 
     if after_doc is not None:
-        envelope["delta"] = observation.delta(before, observation.snapshot(after_doc))
+        envelope["delta"] = subject.delta(before, subject.snapshot(after_doc))
         if include_state:
-            envelope["state"] = observation.summarize(after_doc)
+            envelope["state"] = subject.summarize(after_doc)
 
     trajectories.record_step(op_name, doc_id, args, envelope, obs_before=obs_before,
                              latency_ms=_elapsed_ms(), rationale=rationale)
     return envelope
+
+
+# Registration by import, at the bottom because `assembly_operations` imports
+# `operation` from this module: by the time this line runs everything it needs
+# exists. The alternative — a list of modules to load — is the import list this
+# codebase has removed everywhere else.
+from app.services import assembly_operations  # noqa: E402,F401  (registers assembly ops)

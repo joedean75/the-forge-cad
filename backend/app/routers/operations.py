@@ -173,6 +173,13 @@ def run_operation(
     if op is None:
         raise HTTPException(status_code=400, detail={
             "code": "UNKNOWN_OP", "message": f"unknown operation: {body.op}", "arg": "op"})
+    if op.subject != "document":
+        # Pointed at the right door rather than 404ing on a real assembly id.
+        raise HTTPException(status_code=400, detail={
+            "code": "BAD_ARG",
+            "message": f"{body.op} operates on an assembly; "
+                       f"call POST /api/assemblies/{{id}}/op",
+            "arg": "op"})
     # Enforce tenant isolation before doing any work (404, never 403, to avoid
     # leaking the existence of other tenants' documents).
     doc = document_service.get_document(doc_id)
@@ -300,3 +307,56 @@ def copilot_job(doc_id: str, job_id: str, acc: accounts.Account = Depends(curren
         raise HTTPException(status_code=404, detail="Copilot job not found")
     document = document_service.get_document(doc_id) if job["status"] == "done" else None
     return _copilot_state(job, document)
+
+
+@router.post("/api/assemblies/{assembly_id}/op", response_model=OperationResponse)
+def run_assembly_operation(
+    assembly_id: str,
+    body: OperationRequest,
+    acc: accounts.Account = Depends(current_account),
+    envelope: bool = Query(
+        False,
+        description="Return 200 with ok=false instead of raising on operation failure.",
+    ),
+):
+    """Run one catalog operation against an assembly.
+
+    The same contract as the document route — typed failures, `delta`, `state`,
+    `?envelope=1` — against the other kind of thing the catalog addresses. An
+    operation declares which it takes as `subject` in `GET /api/operations`, so
+    a caller knows before it calls rather than after a 404.
+    """
+    from app.services import assembly_service
+
+    op = cad_operations.OPERATIONS.get(body.op)
+    if op is None:
+        raise HTTPException(status_code=400, detail={
+            "code": "UNKNOWN_OP", "message": f"unknown operation: {body.op}", "arg": "op"})
+    if op.subject != "assembly":
+        raise HTTPException(status_code=400, detail={
+            "code": "BAD_ARG",
+            "message": f"{body.op} operates on a part document; "
+                       f"call POST /api/documents/{{id}}/op",
+            "arg": "op"})
+
+    asm = assembly_service.get_assembly(assembly_id)
+    if asm is None or not assembly_service.can_access(asm, acc.id):
+        raise HTTPException(status_code=404, detail={
+            "code": "NO_SUCH_DOCUMENT", "message": "Assembly not found"})
+    if op.kind == "mutate":
+        # Assemblies carry no separate editor role today; access is ownership.
+        meter_operation(acc)
+
+    env = cad_operations.execute(body.op, assembly_id, body.args)
+    if not env["ok"] and not envelope:
+        raise HTTPException(status_code=_http_status(env["error"]), detail=env["error"])
+    return OperationResponse(
+        ok=env["ok"],
+        op=env["op"],
+        result=env.get("result") or {},
+        error=env.get("error"),
+        warnings=env.get("warnings") or [],
+        delta=env.get("delta"),
+        state=env.get("state"),
+        document=None,
+    )

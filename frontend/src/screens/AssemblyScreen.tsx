@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   ArrowLeft, Plus, Trash2, Boxes, Package, X, Loader2, AlertTriangle, ScanEye, UserCircle2, PencilRuler,
+  Link2,
 } from 'lucide-react'
 import { api } from '../api/client'
 import { useAssemblyStore } from '../store/useAssemblyStore'
@@ -9,6 +10,7 @@ import { useAuthStore } from '../store/useAuthStore'
 import { useNavStore } from '../store/useNavStore'
 import { AccountDrawer } from '../components/AccountDrawer'
 import { AssemblyViewport } from '../components/AssemblyViewport'
+import { BomPanel, ClashPanel, MatesPanel } from '../features/assembly/AssemblyInspector'
 import type { AssemblyComponent, ComponentTransform, DocumentSummary } from '../../../shared/types'
 
 /** A labelled numeric field bound to one axis of a component transform. */
@@ -27,7 +29,12 @@ function NumField({ label, value, step, onChange }: { label: string; value: numb
   )
 }
 
-function PlacementInspector({ component, onChange }: { component: AssemblyComponent; onChange: (t: ComponentTransform) => void }) {
+function PlacementInspector({ component, onChange, driven }: {
+  component: AssemblyComponent
+  onChange: (t: ComponentTransform) => void
+  /** This component's position is an *output* of the mate solver. */
+  driven: boolean
+}) {
   const t = component.transform
   const set = (patch: Partial<ComponentTransform>) => onChange({ ...t, ...patch })
   const setT = (axis: 'x' | 'y' | 'z', vMm: number) => set({ translate: { ...t.translate, [axis]: vMm / 1000 } })
@@ -35,7 +42,16 @@ function PlacementInspector({ component, onChange }: { component: AssemblyCompon
 
   return (
     <div className="space-y-4">
-      <div>
+      {/* A mate writes this component's translation, so typing one here is a
+          number the next solve overwrites — the user types, watches it snap
+          back, and concludes the tool is broken. Disable it and say why. */}
+      {driven && (
+        <p className="flex items-start gap-1.5 p-2 rounded-sm border border-cad-accent/30 bg-cad-accent/[0.05] text-[10px] text-cad-accent-hot">
+          <Link2 size={11} className="mt-px shrink-0" />
+          A mate positions this part. Remove the mate to place it by hand.
+        </p>
+      )}
+      <div className={driven ? 'opacity-45 pointer-events-none' : undefined}>
         <span className="eyebrow text-cad-text/60 block mb-1.5">Position (mm)</span>
         <div className="grid grid-cols-3 gap-2">
           <NumField label="X" step={1} value={t.translate.x * 1000} onChange={(v) => setT('x', v)} />
@@ -127,8 +143,22 @@ function PartPicker({ onPick, onCreate, creating, onClose }: {
   )
 }
 
+type InspectorTab = 'place' | 'mates' | 'fit' | 'bom'
+
+const TABS: { id: InspectorTab; label: string }[] = [
+  { id: 'place', label: 'Place' },
+  { id: 'mates', label: 'Mates' },
+  { id: 'fit', label: 'Fit' },
+  { id: 'bom', label: 'BOM' },
+]
+
+const TAB_TITLE: Record<InspectorTab, string> = {
+  place: 'Placement', mates: 'Mates', fit: 'Interference', bom: 'Bill of materials',
+}
+
 export function AssemblyScreen() {
-  const { assembly, busy, error, selectedComponentId, insertPart, removeComponent, setTransform, rename, select, markStale, refresh } = useAssemblyStore()
+  const { assembly, busy, error, selectedComponentId, insertPart, removeComponent, setTransform,
+    rename, select, markStale, refresh, drivenComponentIds } = useAssemblyStore()
   const { openDocument, newBlank } = useDocumentStore()
   const account = useAuthStore((s) => s.account)
   const go = useNavStore((s) => s.go)
@@ -138,6 +168,7 @@ export function AssemblyScreen() {
   const [accountOpen, setAccountOpen] = useState(false)
   const [editingName, setEditingName] = useState(false)
   const [creatingPart, setCreatingPart] = useState(false)
+  const [tab, setTab] = useState<InspectorTab>('place')
 
   // Coming back from the part editor: pull the assembly again so a component
   // shows the geometry as just edited rather than the copy we left with.
@@ -182,6 +213,7 @@ export function AssemblyScreen() {
   }
 
   const selected = assembly.components.find((c) => c.id === selectedComponentId) ?? null
+  const driven = drivenComponentIds()
 
   return (
     <div className="flex flex-col h-full">
@@ -293,16 +325,16 @@ export function AssemblyScreen() {
           onSelect={select}
         />
 
-        {/* placement inspector */}
+        {/* inspector: placement, mates, fit and the parts list */}
         <aside className="w-80 border-l border-cad-border bg-cad-panel flex flex-col shrink-0 z-10">
           <div className="h-11 border-b border-cad-border flex items-center justify-between px-4">
-            <div className="leading-none">
-              <span className="eyebrow text-cad-text/70">Placement</span>
+            <div className="leading-none min-w-0">
+              <span className="eyebrow text-cad-text/70">Assembly</span>
               <h2 className="font-display text-sm font-semibold text-cad-text-heading leading-none mt-1 truncate max-w-[180px]">
-                {selected ? selected.name : 'No selection'}
+                {TAB_TITLE[tab]}
               </h2>
             </div>
-            {selected && (
+            {tab === 'place' && selected && (
               <button
                 onClick={() => setIsolate((v) => !v)}
                 title="Isolate the selected part"
@@ -314,16 +346,38 @@ export function AssemblyScreen() {
               </button>
             )}
           </div>
+          <div className="flex border-b border-cad-border">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={`flex-1 py-1.5 text-[10px] font-medium border-b-2 transition-colors ${
+                  tab === t.id
+                    ? 'border-cad-accent text-cad-accent-hot'
+                    : 'border-transparent text-cad-text hover:text-cad-text-heading'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
           <div className="flex-1 overflow-y-auto p-4">
-            {selected ? (
+            {tab === 'place' && (selected ? (
               selected.missing ? (
                 <p className="text-[11px] text-cad-danger">This component's part was deleted. Remove it from the assembly.</p>
               ) : (
-                <PlacementInspector component={selected} onChange={(t) => setTransform(selected.id, t)} />
+                <PlacementInspector
+                  component={selected}
+                  driven={driven.has(selected.id)}
+                  onChange={(t) => setTransform(selected.id, t)}
+                />
               )
             ) : (
               <p className="text-[11px] text-cad-text/60">Select a component to position it, or insert a part to begin.</p>
-            )}
+            ))}
+            {tab === 'mates' && <MatesPanel components={assembly.components} />}
+            {tab === 'fit' && <ClashPanel />}
+            {tab === 'bom' && <BomPanel />}
             {error && <p className="mt-4 text-[11px] text-cad-danger">{error}</p>}
           </div>
         </aside>

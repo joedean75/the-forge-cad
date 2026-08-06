@@ -32,6 +32,7 @@ _RULES = """You are Forge Copilot, an engineering agent that builds and edits a 
 Rules:
 - ALL lengths are in METRES (100 mm = 0.1). The document summary reports sizes in MILLIMETRES, so a part the summary calls 100 mm is 0.1 in an argument. Centre parts near the origin.
 - Use ONLY the operations listed, with their exact parameter names. A name that is not listed will be rejected.
+- Most operations act on a part document. The ones marked [assembly] act on an assembly instead — they take an assembly id, and a part id will not work.
 - Take the minimum number of purposeful steps.
 - To change an existing feature, read its CURRENT params in the document summary and pass the same structure to set_feature_params. Do not invent parameter names.
 - Query operations (bounding_box, list_features, verify_against_spec) do not change the part — use them to check rather than to guess.
@@ -86,7 +87,9 @@ def catalog_text(kinds: Optional[Sequence[str]] = None) -> str:
             continue
         params = op["params"] or {}
         rendered = "; ".join(_one_param(n, d) for n, d in params.items()) or "—"
-        lines.append(f"- {op['name']} ({op['kind']}): {op['description']}\n    args: {rendered}")
+        subject = " [assembly]" if op.get("subject") == "assembly" else ""
+        lines.append(f"- {op['name']} ({op['kind']}){subject}: {op['description']}"
+                     f"\n    args: {rendered}")
     return "\n".join(lines)
 
 

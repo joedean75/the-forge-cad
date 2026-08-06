@@ -1,5 +1,5 @@
-import { lazy, Suspense, useState, type ComponentType } from 'react'
-import { Loader2 } from 'lucide-react'
+import { lazy, Suspense, useState, type ComponentType, type ReactNode } from 'react'
+import { Loader2, ListTree, Box, SlidersHorizontal } from 'lucide-react'
 import { EditorHeader } from '../components/EditorHeader'
 import { ToolRibbon } from '../components/ToolRibbon'
 import { CommandPalette } from '../components/CommandPalette'
@@ -13,6 +13,7 @@ import { ModelInspector } from '../features/model/ModelInspector'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { useNavStore } from '../store/useNavStore'
 import { useCollab } from '../hooks/useCollab'
+import { useNarrow } from '../hooks/useNarrow'
 import type { EditorMode } from '../../../shared/types'
 
 // Model is the mode the editor opens in and the one most sessions never leave;
@@ -80,6 +81,50 @@ function RightPanel() {
   )
 }
 
+type Pane = 'tree' | 'model' | 'inspector'
+
+const PANES: [Pane, string, ComponentType<{ size?: number }>][] = [
+  ['tree', 'Tree', ListTree], ['model', 'Model', Box], ['inspector', 'Inspector', SlidersHorizontal],
+]
+
+/**
+ * One of the editor's three columns.
+ *
+ * The wrapper is always in the tree, whatever the width, so crossing the
+ * breakpoint hides and shows columns rather than re-parenting them — moving
+ * `DocumentViewport` between two parents would tear down and rebuild the WebGL
+ * context and lose the camera. On a narrow screen the wrapper takes the whole
+ * width and overrides the panel's own fixed width; on a wide one it is
+ * `display: contents` and the layout is exactly what it always was.
+ */
+function Column({ show, fill, children }: { show: boolean; fill: boolean; children: ReactNode }) {
+  // `contents` is what makes the wide layout byte-for-byte the original one:
+  // the wrapper is in the tree but not in the box model, so the panel is still a
+  // direct flex item of the row.
+  const className = fill
+    ? `${show ? 'flex' : 'hidden'} flex-1 min-w-0 [&>aside]:w-full`
+    : 'contents'
+  return <div className={className}>{children}</div>
+}
+
+function PaneSwitcher({ pane, onPick }: { pane: Pane; onPick: (p: Pane) => void }) {
+  return (
+    <div className="h-10 border-b border-cad-border bg-cad-panel flex items-center gap-1 px-2 shrink-0">
+      {PANES.map(([id, label, Icon]) => (
+        <button
+          key={id}
+          onClick={() => onPick(id)}
+          className={`flex-1 flex items-center justify-center gap-1.5 h-7 rounded-sm text-[11px] font-medium transition-colors ${
+            pane === id ? 'bg-cad-accent/15 text-cad-accent-hot' : 'text-cad-text hover:text-cad-text-heading'
+          }`}
+        >
+          <Icon size={13} /> {label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function Readout({ label, value }: { label: string; value: string }) {
   return (
     <span className="flex items-baseline gap-1">
@@ -124,6 +169,8 @@ export function EditorScreen() {
   const go = useNavStore((s) => s.go)
   const docId = useDocumentStore((s) => s.doc?.id)
   const peers = useCollab(docId)
+  const narrow = useNarrow()
+  const [pane, setPane] = useState<Pane>('model')
 
   return (
     <div className="flex flex-col h-full">
@@ -136,11 +183,12 @@ export function EditorScreen() {
         peers={peers}
       />
       <ToolRibbon />
+      {narrow && <PaneSwitcher pane={pane} onPick={setPane} />}
       <div className="flex flex-1 min-h-0">
         <ModeSpine />
-        <FeatureTreePanel />
-        <DocumentViewport />
-        <RightPanel />
+        <Column show={pane === 'tree'} fill={narrow}><FeatureTreePanel /></Column>
+        <Column show={pane === 'model'} fill={narrow}><DocumentViewport /></Column>
+        <Column show={pane === 'inspector'} fill={narrow}><RightPanel /></Column>
       </div>
       <StatusBar />
       <CommandPalette onOpenCopilot={() => setCopilotOpen(true)} />

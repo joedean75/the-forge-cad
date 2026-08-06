@@ -604,10 +604,24 @@ export interface DocumentSummary {
   name: string
   provenance: string
   updated_at: string
+  created_at: string
+  /** What the document was asked for, when it was asked for in words — often the
+   *  only thing the user remembers about a generated part. */
+  source_prompt?: string | null
   /** The caller's access level on this document. */
   role: 'owner' | 'editor' | 'viewer'
   /** True when the document is shared with the caller (they are not the owner). */
   shared: boolean
+  /** What the card shows about the part itself, so two documents are not
+   *  indistinguishable until one of them is opened. */
+  lifecycle_state: 'draft' | 'in_review' | 'released' | 'obsolete'
+  material_id?: string | null
+  mass_kg?: number | null
+  /** Latest released revision letter, if any. */
+  revision?: string | null
+  /** The geometry's content hash — what the thumbnail is a picture of.
+   *  Null when the document has never been evaluated. */
+  mesh_hash?: string | null
 }
 
 // --- Instant quotes + orders ("Get it made") ---
@@ -780,11 +794,36 @@ export interface InterferenceReport {
   clear: boolean
 }
 
+export interface BomLine {
+  item: number
+  part_number: string
+  name: string
+  part_id: string
+  quantity: number
+  material: string
+  unit_mass_g: number
+  ext_mass_g: number
+  ext_material_cost_usd: number
+  /** The referenced part document was deleted; the line is a placeholder. */
+  missing: boolean
+}
+
+export interface BomReport {
+  assembly_id: string
+  assembly_name: string
+  line_count: number
+  component_count: number
+  total_mass_g: number
+  total_material_cost_usd: number
+  lines: BomLine[]
+}
+
 export interface AssemblySummary {
   id: string
   name: string
   component_count: number
   updated_at: string
+  created_at: string
   role: 'owner' | 'editor' | 'viewer'
   shared: boolean
 }

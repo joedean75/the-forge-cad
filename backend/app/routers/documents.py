@@ -314,6 +314,34 @@ def get_document_mesh(
     )
 
 
+@router.get("/{doc_id}/thumbnail/{mesh_hash}")
+def get_document_thumbnail(
+    mesh_hash: str,
+    doc: DesignDocument = Depends(readable_document),
+):
+    """A shaded picture of the body, addressed by the hash of its triangles.
+
+    The library showed a generic icon per card, so two parts were
+    indistinguishable until one was opened. Keyed on `mesh_hash` for the same
+    reason the mesh is: the picture is of a *specific* body, and one keyed on the
+    document id would confidently show last week's part.
+
+    404 rather than a placeholder when the hash is not this document's geometry
+    — a placeholder cached forever under a real hash is the failure this
+    addressing scheme exists to prevent.
+    """
+    from app.services import thumbnail
+
+    payload = thumbnail.for_document(doc.id, mesh_hash)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="No thumbnail for that hash")
+    return Response(
+        content=payload,
+        media_type=thumbnail.MIME,
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
+
+
 @router.get("/{doc_id}/step")
 def export_document_step(
     resolution: int = Query(128, ge=32, le=512),

@@ -377,10 +377,25 @@ class DocumentSummary(BaseModel):
     name: str
     provenance: str
     updated_at: str
+    created_at: str = ""
+    # What the document was asked for, when it was asked for in words. Often the
+    # only thing the user remembers about a generated part, so the library
+    # searches it alongside the name.
+    source_prompt: Optional[str] = None
     # The caller's access level: "owner" | "editor" | "viewer".
     role: str = "owner"
     # True when the document is shared with the caller (they are not the owner).
     shared: bool = False
+    # What the library card shows about the part itself. Two documents were
+    # indistinguishable in a list until one of them was opened; all of this is
+    # extracted in the same SQL pass that already ran.
+    lifecycle_state: str = "draft"
+    material_id: Optional[str] = None
+    mass_kg: Optional[float] = None
+    revision: Optional[str] = None
+    # The geometry's content hash, which is what a thumbnail is a picture of.
+    # None when the document has never been evaluated.
+    mesh_hash: Optional[str] = None
 
 
 class CreateDocumentRequest(BaseModel):
@@ -460,6 +475,7 @@ class AssemblySummary(BaseModel):
     name: str
     component_count: int = 0
     updated_at: str
+    created_at: str = ""
     role: str = "owner"
     shared: bool = False
 

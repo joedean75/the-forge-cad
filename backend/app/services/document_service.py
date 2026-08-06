@@ -124,6 +124,21 @@ def cached_mesh(doc_id: str, digest: str) -> Optional[bytes]:
     return _MESH_CACHE.get(f"{doc_id}:{digest}")
 
 
+# Rendered library thumbnails, keyed the same way and for the same reason: a
+# thumbnail is a picture of *these* triangles. Smaller and longer-lived than the
+# meshes — a library view asks for a dozen at once and asks again on every visit.
+_THUMBNAIL_CACHE_SIZE = 256
+_THUMBNAIL_CACHE: Dict[str, bytes] = _LruCache(_THUMBNAIL_CACHE_SIZE)
+
+
+def cache_thumbnail(doc_id: str, digest: str, payload: bytes) -> None:
+    _THUMBNAIL_CACHE[f"{doc_id}:{digest}"] = payload
+
+
+def cached_thumbnail(doc_id: str, digest: str) -> Optional[bytes]:
+    return _THUMBNAIL_CACHE.get(f"{doc_id}:{digest}")
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -712,7 +727,14 @@ def list_documents(owner_id: Optional[str] = None) -> List[DocumentSummary]:
             "name": doc.name,
             "provenance": doc.provenance,
             "updated_at": doc.updated_at,
+            "created_at": doc.created_at,
+            "source_prompt": doc.source_prompt,
             "collaborators": [c.model_dump() for c in doc.collaborators],
+            "lifecycle_state": doc.lifecycle_state,
+            "material_id": doc.material_id,
+            "mass": doc.derived.mass,
+            "mesh_hash": doc.derived.mesh_hash,
+            "revision": doc.revisions[-1].letter if doc.revisions else None,
         }
     summaries: List[DocumentSummary] = []
     for r in rows.values():
@@ -725,8 +747,15 @@ def list_documents(owner_id: Optional[str] = None) -> List[DocumentSummary]:
                 name=r["name"],
                 provenance=r["provenance"],
                 updated_at=r["updated_at"],
+                created_at=r.get("created_at") or r["updated_at"],
+                source_prompt=r.get("source_prompt"),
                 role=role or "owner",
                 shared=bool(owner_id is not None and r["owner_id"] not in (None, owner_id)),
+                lifecycle_state=r.get("lifecycle_state") or "draft",
+                material_id=r.get("material_id"),
+                mass_kg=r.get("mass"),
+                revision=r.get("revision"),
+                mesh_hash=r.get("mesh_hash"),
             )
         )
     summaries.sort(key=lambda s: s.updated_at, reverse=True)

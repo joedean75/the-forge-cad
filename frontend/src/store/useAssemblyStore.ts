@@ -1,5 +1,7 @@
 import { create } from 'zustand'
-import type { AssemblyDoc, ComponentTransform } from '../../../shared/types'
+import type {
+  AssemblyDoc, AssemblyMate, BomReport, ComponentTransform, InterferenceReport,
+} from '../../../shared/types'
 import { api } from '../api/client'
 
 interface AssemblyState {
@@ -19,7 +21,39 @@ interface AssemblyState {
   removeComponent: (componentId: string) => Promise<void>
   setTransform: (componentId: string, transform: ComponentTransform) => Promise<void>
   select: (componentId: string | null) => void
+
+  /** Add a mate and re-solve every placement; the server returns the whole assembly. */
+  addMate: (mate: Omit<AssemblyMate, 'id'>) => Promise<void>
+  removeMate: (mateId: string) => Promise<void>
+  /**
+   * Which components a mate positions.
+   *
+   * A component named as a mate's `moved` is placed by the solver, so its
+   * translation is an *output*. Dragging it writes a number the next solve
+   * overwrites — the user drags, sees it snap back, and concludes the tool is
+   * broken. The screen reads this to disable the fields rather than letting
+   * that happen.
+   */
+  drivenComponentIds: () => Set<string>
+
+  /** Pairwise clash, and the parts list. Both are readings of the assembly as
+   *  it stands, so both are cleared the moment it changes. */
+  clash: InterferenceReport | null
+  bom: BomReport | null
+  checkClash: (clearanceMm?: number) => Promise<void>
+  loadBom: () => Promise<void>
+  downloadBomCsv: () => Promise<void>
 }
+
+/**
+ * The readings taken *from* an assembly, cleared the moment it changes.
+ *
+ * The same rule the document store follows: a clash report from before a
+ * component moved still looks like an answer, and a parts list from before an
+ * insert is missing a part. `useDocumentStore`'s `STALE` exists for exactly
+ * this and for exactly this reason.
+ */
+const STALE = { clash: null, bom: null } as const
 
 export const useAssemblyStore = create<AssemblyState>((set, get) => ({
   assembly: null,
@@ -27,11 +61,13 @@ export const useAssemblyStore = create<AssemblyState>((set, get) => ({
   error: null,
   selectedComponentId: null,
   stale: false,
+  clash: null,
+  bom: null,
 
   open: async (id) => {
     set({ busy: true, error: null })
     try {
-      set({ assembly: await api.getAssemblyDoc(id), selectedComponentId: null, stale: false })
+      set({ assembly: await api.getAssemblyDoc(id), selectedComponentId: null, stale: false, ...STALE })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Failed to open assembly' })
     } finally {
@@ -89,7 +125,7 @@ export const useAssemblyStore = create<AssemblyState>((set, get) => ({
     try {
       const updated = await api.addComponent(assembly.id, partId)
       const last = updated.components[updated.components.length - 1]
-      set({ assembly: updated, selectedComponentId: last?.id ?? null })
+      set({ assembly: updated, selectedComponentId: last?.id ?? null, ...STALE })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Failed to insert part' })
     } finally {
@@ -106,6 +142,7 @@ export const useAssemblyStore = create<AssemblyState>((set, get) => ({
       set({
         assembly: updated,
         selectedComponentId: selectedComponentId === componentId ? null : selectedComponentId,
+        ...STALE,
       })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Failed to remove component' })
@@ -126,11 +163,75 @@ export const useAssemblyStore = create<AssemblyState>((set, get) => ({
     })
     try {
       const updated = await api.updateComponent(assembly.id, componentId, transform)
-      set({ assembly: updated })
+      set({ assembly: updated, ...STALE })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Failed to move component' })
     }
   },
 
   select: (componentId) => set({ selectedComponentId: componentId }),
+
+  addMate: async (mate) => {
+    const { assembly } = get()
+    if (!assembly) return
+    set({ busy: true, error: null })
+    try {
+      set({ assembly: await api.addMate(assembly.id, mate), ...STALE })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Could not add that mate' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  removeMate: async (mateId) => {
+    const { assembly } = get()
+    if (!assembly) return
+    set({ busy: true, error: null })
+    try {
+      set({ assembly: await api.removeMate(assembly.id, mateId), ...STALE })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Could not remove that mate' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  drivenComponentIds: () => new Set((get().assembly?.mates ?? []).map((m) => m.moved)),
+
+  checkClash: async (clearanceMm = 1.0) => {
+    const { assembly } = get()
+    if (!assembly) return
+    set({ busy: true, error: null })
+    try {
+      set({ clash: await api.assemblyInterference(assembly.id, clearanceMm) })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Interference check failed' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  loadBom: async () => {
+    const { assembly } = get()
+    if (!assembly) return
+    set({ busy: true, error: null })
+    try {
+      set({ bom: await api.assemblyBom(assembly.id) })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Could not build the parts list' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  downloadBomCsv: async () => {
+    const { assembly } = get()
+    if (!assembly) return
+    try {
+      await api.downloadAssemblyBomCsv(assembly.id, assembly.name)
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'CSV download failed' })
+    }
+  },
 }))

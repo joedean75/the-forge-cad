@@ -107,9 +107,12 @@ def delete_document(document_id: str) -> bool:
 def list_document_summaries() -> List[dict]:
     """Lightweight listing fields for every document, extracted in SQL.
 
-    Returns dicts with id/owner_id/name/provenance/updated_at/collaborators
-    without ever deserializing full document payloads (feature trees, meshes,
-    version history) into Python.
+    Returns dicts with the listing fields — id, owner_id, name, provenance,
+    updated_at, collaborators, plus what the library card shows about the part
+    itself (lifecycle state, material, mass, revision letters and the geometry's
+    hash) — without ever deserializing full document payloads (feature trees,
+    meshes, version history) into Python. The card gained four fields; the
+    listing query stays one pass over the rows.
     """
     from sqlalchemy import text
 
@@ -119,7 +122,14 @@ def list_document_summaries() -> List[dict]:
             " json_extract(data, '$.name'),"
             " json_extract(data, '$.provenance'),"
             " json_extract(data, '$.updated_at'),"
-            " json_extract(data, '$.collaborators')"
+            " json_extract(data, '$.created_at'),"
+            " json_extract(data, '$.source_prompt'),"
+            " json_extract(data, '$.collaborators'),"
+            " json_extract(data, '$.lifecycle_state'),"
+            " json_extract(data, '$.material_id'),"
+            " json_extract(data, '$.derived.mass'),"
+            " json_extract(data, '$.derived.mesh_hash'),"
+            " json_extract(data, '$.revisions')"
             " FROM records WHERE kind = :kind"
         )
     else:  # postgres
@@ -128,19 +138,30 @@ def list_document_summaries() -> List[dict]:
             " data::json ->> 'name',"
             " data::json ->> 'provenance',"
             " data::json ->> 'updated_at',"
-            " data::json ->> 'collaborators'"
+            " data::json ->> 'created_at',"
+            " data::json ->> 'source_prompt',"
+            " data::json ->> 'collaborators',"
+            " data::json ->> 'lifecycle_state',"
+            " data::json ->> 'material_id',"
+            " data::json #>> '{derived,mass}',"
+            " data::json #>> '{derived,mesh_hash}',"
+            " data::json ->> 'revisions'"
             " FROM records WHERE kind = :kind"
         )
+    def _json(value, fallback):
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except ValueError:
+                return fallback
+        return value if value is not None else fallback
+
     out: List[dict] = []
     with SessionLocal() as s:
-        for rec_id, owner_id, name, provenance, updated_at, collaborators in s.execute(
-            sql, {"kind": _DOCUMENT}
-        ):
-            if isinstance(collaborators, str):
-                try:
-                    collaborators = json.loads(collaborators)
-                except ValueError:
-                    collaborators = []
+        for (rec_id, owner_id, name, provenance, updated_at, created_at, prompt,
+             collaborators, state, material_id, mass, mesh_hash,
+             revisions) in s.execute(sql, {"kind": _DOCUMENT}):
+            revs = _json(revisions, []) or []
             out.append(
                 {
                     "id": rec_id,
@@ -148,7 +169,16 @@ def list_document_summaries() -> List[dict]:
                     "name": name or "Untitled Part",
                     "provenance": provenance or "manual",
                     "updated_at": updated_at or "",
-                    "collaborators": collaborators or [],
+                    "created_at": created_at or updated_at or "",
+                    "source_prompt": prompt,
+                    "collaborators": _json(collaborators, []) or [],
+                    "lifecycle_state": state or "draft",
+                    "material_id": material_id,
+                    "mass": float(mass) if mass is not None else None,
+                    "mesh_hash": mesh_hash,
+                    # Only the latest letter reaches the card; the full list is
+                    # behind the history drawer.
+                    "revision": (revs[-1] or {}).get("letter") if revs else None,
                 }
             )
     return out

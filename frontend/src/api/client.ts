@@ -27,6 +27,9 @@ import type {
   DocumentVersion,
   Collaborator,
   AssemblyDoc,
+  AssemblyMate,
+  BomReport,
+  InterferenceReport,
   AssemblyPromptJob,
   AssemblySummary,
   ComponentTransform,
@@ -86,6 +89,25 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw err
   }
   return res.json() as Promise<T>
+}
+
+/**
+ * Fetch a file behind the auth header and save it.
+ *
+ * Every export in this client had its own copy of blob → anchor → click →
+ * revoke; the interesting part of each is only the URL and the filename. The
+ * revoke matters and is the bit that gets forgotten: an object URL holds the
+ * whole blob alive for the life of the document, and a STEP body is not small.
+ */
+async function downloadAuthed(url: string, filename: string, init?: RequestInit): Promise<void> {
+  const res = await fetch(`${API_BASE}${url}`, { ...init, headers: authHeaders(init?.headers as Record<string, string>) })
+  if (!res.ok) throw new Error(`Download failed (${res.status})`)
+  const blob = await res.blob()
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename.slice(0, 80).replace(/[/\\?%*:|"<>]/g, '_')
+  a.click()
+  URL.revokeObjectURL(a.href)
 }
 
 export interface OAuthProvider {
@@ -491,6 +513,28 @@ export const api = {
     }),
   removeComponent: (id: string, componentId: string) =>
     fetchJson<AssemblyDoc>(`/assemblies/${id}/components/${componentId}`, { method: 'DELETE' }),
+
+  /**
+   * Mates, clash and the parts list.
+   *
+   * All three were implemented, routed and tested on the server and had no way
+   * in: an assembly was a set of parts you nudged into place with numbers.
+   * Adding a mate re-solves every placement, so the response is the whole
+   * assembly rather than the mate — the same reason `addComponent` returns one.
+   */
+  addMate: (id: string, mate: Omit<AssemblyMate, 'id'>) =>
+    fetchJson<AssemblyDoc>(`/assemblies/${id}/mates`, {
+      method: 'POST',
+      body: JSON.stringify(mate),
+    }),
+  removeMate: (id: string, mateId: string) =>
+    fetchJson<AssemblyDoc>(`/assemblies/${id}/mates/${mateId}`, { method: 'DELETE' }),
+  assemblyInterference: (id: string, clearanceMm = 1.0) =>
+    fetchJson<InterferenceReport>(
+      `/assemblies/${id}/interference?clearance_mm=${clearanceMm}`),
+  assemblyBom: (id: string) => fetchJson<BomReport>(`/assemblies/${id}/bom`),
+  downloadAssemblyBomCsv: (id: string, name: string) =>
+    downloadAuthed(`/assemblies/${id}/bom.csv`, `${name || 'assembly'}-bom.csv`),
 
   // ── Version history & collaboration ──
   listVersions: (id: string) => fetchJson<VersionSummary[]>(`/documents/${id}/versions`),

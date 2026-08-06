@@ -100,6 +100,84 @@ def summarize(doc) -> dict:
     return out
 
 
+def summarize_assembly(asm) -> dict:
+    """The same job as `summarize`, for an assembly rather than a part.
+
+    An assembly is not a `DesignDocument` and cannot be squeezed into one: it has
+    no feature tree, and the thing an agent needs to reason about is *which part
+    sits where and what holds it there*. Positions are in millimetres for the
+    same reason every other observation is — see `services/units`.
+    """
+    components = []
+    for c in getattr(asm, "components", []) or []:
+        t = c.transform
+        components.append({
+            "id": c.id,
+            "part_id": c.part_id,
+            "name": c.name,
+            "position_mm": {"x": round(t.translate.x * MM, 3),
+                            "y": round(t.translate.y * MM, 3),
+                            "z": round(t.translate.z * MM, 3)},
+            "size_mm": _bbox_mm(c.bbox),
+            # A component whose part was deleted is still in the tree and is not
+            # geometry; an agent that cannot see that will try to mate to it.
+            "missing": bool(c.missing),
+        })
+    return {
+        # Which kind of thing this observation describes. An agent driving both
+        # subjects gets two differently-shaped states, and one that has to infer
+        # which from the presence of a key will eventually infer wrong.
+        "kind": "assembly",
+        "name": asm.name,
+        "components": components,
+        "mates": [{"id": m.id, "type": m.type, "base": m.base, "moved": m.moved,
+                   "axis": m.axis, "offset_mm": m.offset_mm}
+                  for m in (getattr(asm, "mates", []) or [])],
+        "bbox_size_mm": _bbox_mm(getattr(asm, "bbox", None)),
+    }
+
+
+def snapshot_assembly(asm) -> dict:
+    if asm is None:
+        return {}
+    return {
+        "component_ids": [c.id for c in (getattr(asm, "components", []) or [])],
+        "mate_ids": [m.id for m in (getattr(asm, "mates", []) or [])],
+        "bbox_mm": _bbox_mm(getattr(asm, "bbox", None)),
+        "positions": {c.id: (round(c.transform.translate.x * MM, 3),
+                             round(c.transform.translate.y * MM, 3),
+                             round(c.transform.translate.z * MM, 3))
+                      for c in (getattr(asm, "components", []) or [])},
+    }
+
+
+def assembly_delta(before: dict, after: dict) -> dict:
+    """What one assembly operation changed.
+
+    Deliberately the same shape of answer as `delta`: what was added, what was
+    removed, and — the part that matters for a mate — **whether anything
+    actually moved**. Adding a mate that positions nothing differently is the
+    assembly-side version of an edit that reports success and does nothing.
+    """
+    if not before or not after:
+        return {}
+    before_c, after_c = before.get("component_ids") or [], after.get("component_ids") or []
+    before_m, after_m = before.get("mate_ids") or [], after.get("mate_ids") or []
+    moved = [cid for cid, pos in (after.get("positions") or {}).items()
+             if cid in (before.get("positions") or {})
+             and (before["positions"][cid] != pos)]
+    return {
+        "components": {"added": [c for c in after_c if c not in set(before_c)],
+                       "removed": [c for c in before_c if c not in set(after_c)],
+                       "count_before": len(before_c), "count_after": len(after_c)},
+        "mates": {"added": [m for m in after_m if m not in set(before_m)],
+                  "removed": [m for m in before_m if m not in set(after_m)]},
+        "moved": moved,
+        "bbox_mm": {"before": before.get("bbox_mm"), "after": after.get("bbox_mm")},
+        "changed_placement": bool(moved) or before_c != after_c,
+    }
+
+
 def snapshot(doc) -> dict:
     """The measurable state that a delta is computed against.
 
