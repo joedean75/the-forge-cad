@@ -644,6 +644,45 @@ export interface ManufacturingOrder {
   status: string
   provider: string
   created_at: string
+  /** The released-revision package sent with the order — STEP, drawing, BOM and
+   *  spec score. Null when the part has no released revision, with the reason
+   *  in `package_note`: a prototype is a real thing to order. */
+  package?: OrderPackage | null
+  package_note?: string
+}
+
+export interface OrderPackage {
+  revision: string
+  url: string
+  filename: string
+  bytes: number
+  spec_score?: number | null
+  contents: string[]
+}
+
+/** A file exported from a document, addressed by the hash of its own bytes. */
+export interface ExportArtifact {
+  format: string
+  description: string
+  url: string
+  hash: string
+  bytes: number
+  filename: string
+  media_type: string
+}
+
+export interface ReleasePackageJob {
+  id: string
+  status: 'running' | 'done' | 'error'
+  message: string
+  result?: {
+    revision: string
+    url: string
+    filename: string
+    bytes: number
+    hash: string
+    manifest: Record<string, unknown>
+  } | null
 }
 
 // --- Forge Copilot: agentic operation loop ---

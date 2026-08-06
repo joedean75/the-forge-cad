@@ -153,6 +153,33 @@ def quote_document(doc_id: str, quantity: int = 1, resolution: int = 96) -> dict
     }
 
 
+def _attached_package(doc_id: str) -> dict:
+    """The release package this order is for, or why there isn't one.
+
+    "Get it made" used to send a process, a quantity and a document id — a
+    supplier receiving that has a price and no geometry. It now carries what a
+    person would have attached: the STEP body, the drawing, the BOM and the spec
+    score, from the latest **released revision**.
+
+    Deliberately not fatal. A part with no released revision is a real thing to
+    order — a prototype, a one-off — and refusing the order would be inventing a
+    process requirement the shop never asked for. What is refused is *pretending*:
+    an order with no package says so, in the field a reader is already looking at.
+    """
+    from app.services import release_package
+
+    try:
+        built = release_package.build(doc_id)
+    except Exception as exc:  # noqa: BLE001 — an order must not fail on its attachment
+        _LOGGER.info("no release package for order on %s: %s", doc_id, exc)
+        return {"package": None, "package_note": str(exc)}
+    return {"package": {"revision": built["revision"], "url": built["url"],
+                        "filename": built["filename"], "bytes": built["bytes"],
+                        "spec_score": built["manifest"].get("spec_score"),
+                        "contents": [c["format"] for c in built["manifest"]["contents"]]},
+            "package_note": ""}
+
+
 def place_order(doc_id: str, process: str, quantity: int, owner_id: Optional[str], notes: str = "") -> dict:
     """Create a persisted order (RFQ) for the selected process quote."""
     quoted = quote_document(doc_id, quantity)
@@ -173,6 +200,7 @@ def place_order(doc_id: str, process: str, quantity: int, owner_id: Optional[str
         "status": "submitted",
         "provider": quoted["provider"],
         "created_at": datetime.now(timezone.utc).isoformat(),
+        **_attached_package(doc_id),
     }
     persistence.save_order(order["id"], order)
     return order

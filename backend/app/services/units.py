@@ -84,6 +84,8 @@ UNITLESS = frozenset({
     # assembly operations: ids, constraint kinds and bounding-box extremes
     "part_id", "component_id", "mate_id", "type", "base", "moved",
     "base_face", "moved_face",
+    # export + release package: a file format and a revision letter
+    "format", "revision",
 })
 
 

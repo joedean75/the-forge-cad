@@ -184,7 +184,19 @@ def _default_tree_dict() -> dict:
     return tree
 
 
+#: Documents that exist only for the length of one operation and must never
+#: reach the datastore. A released revision is evaluated by materialising its
+#: snapshot as a document — every reader downstream (drawing, DFM, spec) is
+#: keyed by document id, so the alternative is threading a tree through nine
+#: call sites. The guard lives in `_persist` rather than at the caller because
+#: the evaluate path persists from four places and a phantom row in the library
+#: is exactly what "temporary" must not mean.
+EPHEMERAL: set = set()
+
+
 def _persist(doc: DesignDocument) -> None:
+    if doc.id in EPHEMERAL:
+        return
     try:
         data = doc.model_dump()
         # `mesh_url` is now a short hash-keyed URL rather than megabytes of

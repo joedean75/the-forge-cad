@@ -6,7 +6,7 @@ simulate, DFM and CAM endpoints are added by their respective phases.
 
 import asyncio
 import uuid
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import PlainTextResponse, StreamingResponse
@@ -340,6 +340,99 @@ def get_document_thumbnail(
         media_type=thumbnail.MIME,
         headers={"Cache-Control": "private, max-age=31536000, immutable"},
     )
+
+
+@router.get("/{doc_id}/artifact/{digest}")
+def get_document_artifact(
+    digest: str,
+    doc: DesignDocument = Depends(readable_document),
+):
+    """An exported file, addressed by the hash of its own bytes.
+
+    The same contract as the mesh and the thumbnail: immutable, cached forever,
+    and a 404 rather than a *different* file under a digest a client has been
+    told to keep. `private` because the endpoint is access-checked — a shared
+    proxy caching it publicly would hand one tenant's geometry to another.
+
+    Exports are held in a bounded LRU, so an old digest eventually stops
+    resolving. That is a 404 the caller re-exports from, not a wrong answer.
+    """
+    from app.services import artifacts
+
+    artifact = artifacts.fetch(doc.id, digest)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="No export with that hash")
+    return Response(
+        content=artifact.payload,
+        media_type=artifact.media_type,
+        headers={
+            "Cache-Control": "private, max-age=31536000, immutable",
+            "Content-Disposition": f'attachment; filename="{artifact.filename}"',
+        },
+    )
+
+
+class ReleasePackageRequest(BaseModel):
+    revision: Optional[str] = None
+    drawing_spec: Optional[dict] = None
+
+
+class ReleasePackageJob(BaseModel):
+    id: str
+    status: str                       # "running" | "done" | "error"
+    message: str = ""
+    result: Optional[dict] = None
+
+
+# Bounded, process-local, and lost on restart — the same shape as the optimize
+# job store, and for the same reason: the *artifact* is the durable thing and it
+# is addressed by its own hash.
+_PACKAGE_JOBS: Dict[str, ReleasePackageJob] = {}
+
+
+@router.post("/{doc_id}/package", response_model=ReleasePackageJob)
+async def start_release_package(
+    body: ReleasePackageRequest,
+    background_tasks: BackgroundTasks,
+    doc: DesignDocument = Depends(readable_document),
+):
+    """Start building the handover package for a released revision.
+
+    A job rather than a request because a package is a fan-out of every slow
+    thing in the system — a drawing render is ~2.9 s, the STEP export is a build
+    and the spec report meshes the body. Poll `GET /{doc_id}/package/{job_id}`.
+    """
+    job_id = str(uuid.uuid4())
+    _PACKAGE_JOBS[job_id] = ReleasePackageJob(
+        id=job_id, status="running", message="Building the release package")
+    while len(_PACKAGE_JOBS) > 200:
+        _PACKAGE_JOBS.pop(next(iter(_PACKAGE_JOBS)), None)
+    background_tasks.add_task(_run_package_job, job_id, doc.id, body.revision,
+                              body.drawing_spec)
+    return _PACKAGE_JOBS[job_id]
+
+
+async def _run_package_job(job_id: str, doc_id: str, revision: Optional[str],
+                           drawing_spec: Optional[dict]):
+    from app.services import release_package
+
+    try:
+        result = await asyncio.to_thread(
+            release_package.build, doc_id, revision=revision, drawing_spec=drawing_spec)
+        _PACKAGE_JOBS[job_id] = ReleasePackageJob(
+            id=job_id, status="done",
+            message=f"Revision {result['revision']} packaged", result=result)
+    except Exception as exc:  # noqa: BLE001 — the message is the deliverable here
+        _PACKAGE_JOBS[job_id] = ReleasePackageJob(
+            id=job_id, status="error", message=str(exc))
+
+
+@router.get("/{doc_id}/package/{job_id}", response_model=ReleasePackageJob)
+def get_release_package_job(job_id: str, doc: DesignDocument = Depends(readable_document)):
+    job = _PACKAGE_JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Package job not found")
+    return job
 
 
 @router.get("/{doc_id}/step")

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Loader2, Factory, Download, Check, AlertTriangle, X, Route, FileText, GitBranch, Tag, Scissors, Grid2x2, FileCog, Layers } from 'lucide-react'
+import { Loader2, Factory, Download, Check, AlertTriangle, X, Route, FileText, GitBranch, Tag, Scissors, Grid2x2, FileCog, Layers, Package } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
 import { api } from '../../api/client'
-import type { DfmCheck, DfmProcess, DrawingResult, DocumentRevisionMeta, MachineSpec, NestResult, SliceResponse } from '../../../../shared/types'
+import type { DfmCheck, DfmProcess, DrawingResult, DocumentRevisionMeta, MachineSpec, NestResult, ReleasePackageJob, SliceResponse } from '../../../../shared/types'
 
 const LIFECYCLE_LABEL: Record<string, string> = {
   draft: 'Draft', in_review: 'In review', released: 'Released', obsolete: 'Obsolete',
@@ -123,6 +123,18 @@ function Documentation({ docId, docName }: { docId: string; docName: string }) {
               className="flex items-center justify-center px-2.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading transition text-[10px]">
               <Download size={12} className="mr-1" /> DXF
             </button>
+            {/* The same sheet, as the thing that gets attached to a purchase
+                order. Goes through `export` in the catalog rather than a
+                bespoke endpoint — the UI makes the call an agent makes. */}
+            <button onClick={() => api.downloadExport(docId, 'pdf', {
+                views: views.length ? views : ['front'],
+                sections: section === 'none' ? [] : [{ plane: section, label: 'A-A' }],
+                projection, sheet, show_hidden: hidden,
+              }).catch((e) => setErr(e instanceof Error ? e.message : 'PDF failed'))}
+              title="Download PDF — the sheet a shop receives"
+              className="flex items-center justify-center px-2.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading transition text-[10px]">
+              <Download size={12} className="mr-1" /> PDF
+            </button>
           </>
         )}
       </div>
@@ -171,6 +183,91 @@ function Documentation({ docId, docName }: { docId: string; docName: string }) {
               <span className="tabular text-cad-text/40">{r.released_at.slice(0, 10)}</span>
             </div>
           ))}
+        </div>
+      )}
+
+      <ReleasePackage docId={docId} revisions={revs} />
+    </div>
+  )
+}
+
+/**
+ * The handover package — everything a supplier needs, pinned to a letter.
+ *
+ * Only offered once a revision exists, because that is the whole point: a
+ * package built from the document as it stands is a screenshot of a moving
+ * target, not a release. The revision picker defaults to the latest and is
+ * shown at all rather than hidden behind "current", so what is being packaged
+ * is never in doubt.
+ */
+function ReleasePackage({ docId, revisions }: { docId: string; revisions: DocumentRevisionMeta[] }) {
+  const [letter, setLetter] = useState('')
+  const [job, setJob] = useState<ReleasePackageJob | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const running = job?.status === 'running'
+  const built = job?.status === 'done' ? job.result : null
+  const manifest = (built?.manifest ?? {}) as Record<string, unknown>
+  const score = manifest.spec_score as number | null | undefined
+
+  if (!revisions.length) {
+    return (
+      <p className="text-[10px] text-cad-text/50 pt-1">
+        Release a revision to build a handover package — STEP, drawing, BOM and the spec score, in one file.
+      </p>
+    )
+  }
+
+  const build = async () => {
+    setErr(null)
+    try {
+      const done = await api.buildReleasePackage(docId, letter || undefined, setJob)
+      if (done.status === 'error') setErr(done.message)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Package failed')
+    }
+  }
+
+  return (
+    <div className="space-y-2 pt-1">
+      <div className="flex gap-2">
+        <select value={letter} onChange={(e) => setLetter(e.target.value)}
+          className="px-2 py-1.5 rounded-sm bg-cad-bg border border-cad-border text-[11px] text-cad-text outline-none focus:border-cad-accent">
+          <option value="">Latest ({revisions[revisions.length - 1].letter})</option>
+          {revisions.map((r) => <option key={r.letter} value={r.letter}>Rev {r.letter}</option>)}
+        </select>
+        <button onClick={build} disabled={running}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-sm border border-cad-accent/50 text-cad-accent-hot hover:bg-cad-accent/10 text-[11px] font-semibold transition disabled:opacity-50">
+          {running ? <Loader2 size={13} className="animate-spin" /> : <Package size={13} />}
+          {running ? 'Packaging…' : 'Release package'}
+        </button>
+      </div>
+      {err && <p className="text-[10px] text-cad-danger">{err}</p>}
+      {built && (
+        <div className="rounded-sm border border-cad-border bg-cad-bg/60 p-2 space-y-1.5">
+          <div className="flex items-center gap-2 text-[11px]">
+            <span className="tabular font-semibold text-cad-text-heading">Rev {built.revision}</span>
+            <span className="text-cad-text/50 tabular text-[10px]">{(built.bytes / 1024).toFixed(0)} KB</span>
+            {/* The score is the row that says the part is not merely a valid
+                solid but the part that was asked for. */}
+            {score != null && (
+              <span className={`tabular text-[10px] ${score >= 1 ? 'text-cad-success' : 'text-cad-warning'}`}>
+                spec {Math.round(score * 100)}%
+              </span>
+            )}
+            {manifest.document_matches_revision === false && (
+              <span className="text-[10px] text-cad-warning" title="The document has been edited since this revision">
+                document has moved on
+              </span>
+            )}
+          </div>
+          <div className="tabular text-[9px] text-cad-text/50">
+            {(manifest.contents as Array<{ format: string }> | undefined)?.map((c) => c.format).join(' · ')}
+            {' · manifest · bom · spec-report'}
+          </div>
+          <button onClick={() => api.downloadArtifact(built.url, built.filename).catch(() => {})}
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-sm bg-cad-accent text-cad-bg text-[11px] font-semibold hover:bg-cad-accent-hot transition">
+            <Download size={12} /> {built.filename}
+          </button>
         </div>
       )}
     </div>
@@ -658,7 +755,7 @@ function SlicerSection() {
 }
 
 export function MakePanel() {
-  const { doc, busy, cam, runCam, exportStep, downloadGcode } = useDocumentStore()
+  const { doc, busy, cam, runCam, downloadGcode } = useDocumentStore()
   const [diameter, setDiameter] = useState(3)
   const [stepdown, setStepdown] = useState(1)
   const [stepover, setStepover] = useState(1.2)
@@ -680,14 +777,20 @@ export function MakePanel() {
 
       <DfmSection />
 
-      <div className="flex justify-end">
-        <button
-          onClick={exportStep}
-          title="Export STEP"
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void transition text-[11px]"
-        >
-          <Download size={13} /> STEP
-        </button>
+      <div className="flex justify-end gap-2">
+        {/* Both go through `export` in the catalog, which is the same call an
+            agent makes — this used to be the last place the UI could do
+            something the action space could not describe. */}
+        {(['step', 'stl'] as const).map((fmt) => (
+          <button
+            key={fmt}
+            onClick={() => api.downloadExport(doc.id, fmt).catch(() => {})}
+            title={fmt === 'step' ? 'Exact solid, for another CAD package' : 'Mesh, for a slicer'}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void transition text-[11px] uppercase"
+          >
+            <Download size={13} /> {fmt}
+          </button>
+        ))}
       </div>
 
       <JobPrep docId={doc.id} docName={doc.name} />

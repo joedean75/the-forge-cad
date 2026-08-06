@@ -542,6 +542,56 @@ def render_dxf(doc_id: str, spec: Optional[dict] = None) -> str:
                                open_layers=[dxf_io.CUTPLANE_LAYER])
 
 
+def _class_styles() -> Dict[str, Dict[str, str]]:
+    """`_STYLE` as `{class: {property: value}}`.
+
+    Parsed out of the stylesheet rather than restated next to the PDF writer,
+    for the reason every duplicated table in this repository eventually
+    demonstrates: a hidden line whose dash pattern is written twice will one day
+    be dashed in the SVG and solid in the PDF, and nobody will notice until a
+    shop reads the wrong feature as an outline.
+    """
+    body = _STYLE.split("<style>", 1)[-1].split("</style>", 1)[0]
+    out: Dict[str, Dict[str, str]] = {}
+    for rule in body.split("}"):
+        if "{" not in rule:
+            continue
+        selectors, declarations = rule.split("{", 1)
+        properties = {}
+        for declaration in declarations.split(";"):
+            if ":" in declaration:
+                key, value = declaration.split(":", 1)
+                properties[key.strip()] = value.strip().removesuffix("px")
+        for selector in selectors.split(","):
+            selector = selector.strip().lstrip(".")
+            if selector:
+                out.setdefault(selector, {}).update(properties)
+    return out
+
+
+def render_pdf(doc_id: str, spec: Optional[dict] = None) -> bytes:
+    """The same drawing as a PDF — the sheet, as a shop receives it.
+
+    The third form of one drawing, and deliberately rendered *from the SVG*
+    rather than re-derived: sheet size, scale, view placement, dimensions and
+    the title block are all decided once in `generate_drawing`, so the PDF
+    cannot be a different drawing from the one on screen. `_dxf_layers` shares
+    the same `_Sheet` for the same reason.
+
+    Unlike the DXF, this one carries the text. A DXF is taken into another tool
+    that will re-dimension anyway; a PDF is read by a person, and a sheet with
+    no figures on it says nothing.
+    """
+    from app.cad_kernel.io import pdf as pdf_io
+
+    out = generate_drawing(doc_id, spec=spec)
+    sheet_mm = out["sheet_mm"]
+    doc = document_service.get_document(doc_id)
+    page = pdf_io.page_from_svg(out["svg"], sheet_mm["width"], sheet_mm["height"],
+                                _class_styles())
+    return pdf_io.write_pdf([page], title=(doc.name if doc else "") or "Drawing")
+
+
 def _render_cut_marker(sheet: _Sheet, marker: dict) -> None:
     """The cutting-plane line, its direction arrows and its letters."""
     view = marker["view"]

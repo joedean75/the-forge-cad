@@ -48,9 +48,14 @@ import type {
   SliceResponse,
   MachineSpec,
   NestResult,
+  ExportArtifact,
+  ReleasePackageJob,
 } from '../../../shared/types'
 
 const API_BASE = '/api'
+
+/** What `export` can write. Mirrors `services/artifacts.FORMATS`. */
+export type ExportFormat = 'step' | 'stl' | 'pdf' | 'dxf' | 'svg'
 
 // Session token (JWT) attached to every request when present. Persisted so a
 // reload keeps the user signed in.
@@ -222,6 +227,45 @@ export const api = {
     }),
   listOrders: (id: string) =>
     fetchJson<{ orders: ManufacturingOrder[] }>(`/documents/${id}/orders`),
+
+  /**
+   * Write the part out as a file. Goes through the catalog, so the UI makes the
+   * same call an agent does — and the result is a URL keyed by the file's
+   * content hash, never the bytes.
+   */
+  exportDocument: (id: string, format: ExportFormat, spec?: Record<string, unknown>) =>
+    api.runOperation<ExportArtifact>(id, 'export', spec ? { format, spec } : { format }),
+  /** Export and save, in one call — what a toolbar button wants. */
+  downloadExport: async (id: string, format: ExportFormat, spec?: Record<string, unknown>) => {
+    const { result } = await api.exportDocument(id, format, spec)
+    await downloadAuthed(result.url.replace(API_BASE, ''), result.filename)
+    return result
+  },
+
+  /**
+   * Build the handover package for a released revision. A job, not a request:
+   * a package renders the drawing, exports the solid and meshes the body for
+   * the spec report, and doing that inline times out at the worst moment.
+   */
+  buildReleasePackage: async (
+    id: string,
+    revision?: string,
+    onProgress?: (job: ReleasePackageJob) => void,
+  ): Promise<ReleasePackageJob> => {
+    let job = await fetchJson<ReleasePackageJob>(`/documents/${id}/package`, {
+      method: 'POST',
+      body: JSON.stringify({ revision: revision ?? null }),
+    })
+    onProgress?.(job)
+    while (job.status === 'running') {
+      await new Promise((r) => setTimeout(r, 700))
+      job = await fetchJson<ReleasePackageJob>(`/documents/${id}/package/${job.id}`)
+      onProgress?.(job)
+    }
+    return job
+  },
+  downloadArtifact: (url: string, filename: string) =>
+    downloadAuthed(url.replace(API_BASE, ''), filename),
   /**
    * Forge Copilot: an agentic loop that plans + executes a sequence of operations.
    * Runs as a background job on the server (a run can span many LLM turns);

@@ -1588,6 +1588,41 @@ def _verify_against_spec(doc_id, args):
         raise PreconditionFailed(str(exc))
 
 
+@operation("export", "query",
+           "Write the part out as a file somebody else can open. Returns a URL "
+           "keyed by the file's content hash — fetch it with GET, it is never "
+           "inline. step: exact solid for another CAD package. stl: mesh for a "
+           "slicer. pdf: the dimensioned drawing sheet a shop reads. dxf: the "
+           "drawing's geometry on layers, for CAM. svg: the sheet as a web image. "
+           "Exporting the same body twice returns the same URL.",
+           {"format": {"enum": ["step", "stl", "pdf", "dxf", "svg"], "required": True,
+                       "description": "which file to write"},
+            "spec": {**_DRAWING_SPEC,
+                     "description": "drawing formats only (pdf/dxf/svg): which views, "
+                                    "sections, dimensions and sheet — see generate_drawing"}})
+def _export(doc_id, args):
+    from app.services import artifacts
+
+    _get(doc_id)
+    return artifacts.export(doc_id, require(args, "format"), spec=args.get("spec"))
+
+
+@operation("release_package", "query",
+           "Build the handover package for a released revision: the exact STEP "
+           "solid, the drawing as PDF and DXF, the mesh, a one-line BOM, and the "
+           "score against the design spec — one zip, pinned to a revision letter. "
+           "Built from the revision snapshot, not from the document as it stands, "
+           "so it is a release rather than a screenshot. Needs a released "
+           "revision: call release_revision first.",
+           {"revision": {"type": "string",
+                         "description": "revision letter, e.g. 'A'. Defaults to the latest released."}})
+def _release_package(doc_id, args):
+    from app.services import release_package
+
+    _get(doc_id)
+    return release_package.build(doc_id, revision=args.get("revision"))
+
+
 @operation("release_revision", "mutate", "Cut an immutable released revision (next letter A/B/C…) from the current geometry.",
            {"notes": {"type": "string", "description": "what changed in this revision"},
            "label": {"type": "string", "description": "a name for the revision"}})

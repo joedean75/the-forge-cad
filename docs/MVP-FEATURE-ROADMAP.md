@@ -1,5 +1,43 @@
 # MVP feature roadmap — three sprints
 
+> **Status: M1, M2 and M3 are done.** What landed, measured the same way as the
+> numbers below:
+>
+> | | before | after |
+> |---|---|---|
+> | Assembly operations in the catalog | 0 of 58 | 9 of 69 |
+> | Assembly UI | place a component by typing three numbers | mates, clash and BOM panels |
+> | Library card | icon + name + relative time | shaded thumbnail, state, revision, material, mass |
+> | Library organise | name substring only | sort ×3, filter ×2, search name/prompt/material |
+> | Editor below 1024 px | three squeezed columns | one column with a pane switcher |
+> | Operations that export a file | 0 of 58 | 5 formats + the package, all URL-addressed |
+> | Drawing formats | SVG, DXF | + PDF, with the text the DXF drops |
+> | Handover package | absent | STEP + drawing + BOM + spec report, pinned to a letter |
+> | An order's attachments | a process, a quantity and an id | the released package |
+>
+> **The PDF is written rather than depended on.** The sprint's trap said a
+> renderer is a dependency and its absence must be an honest `PRECONDITION`.
+> That rule is right for a renderer that must exist; it is the wrong trade for a
+> drawing sheet, which is polylines, leaders, hatching and monospaced text on one
+> page. `cad_kernel/io/pdf.py` is the whole writer and there is no absent case.
+>
+> **Two things were found and fixed that the sprints did not ask for.**
+> `assembly_service.add_component` accepted any part id, so an assembly could
+> hold a document its owner cannot open and read that geometry back out through
+> the BOM and the interference check — the check now lives in the service, where
+> both callers get it. And `document_service.EPHEMERAL` exists because
+> evaluating a revision snapshot as a document would otherwise have persisted a
+> phantom row in the library from any of four places in the evaluate path.
+>
+> **Item 4 of M3 is narrower than it reads.** "Point the quote/order path at the
+> package" is done, but an order on a part with no released revision is *not*
+> refused — it records why it has no package. Refusing it would invent a process
+> requirement no shop asked for.
+>
+> **Still not in scope, and now the oldest open finding by two roadmaps:** the
+> operation endpoint has no request-body size limit and no rate limit. Only auth
+> is throttled.
+
 The last four programmes went after the engine: an exact kernel, a sketch
 solver, speed and interaction, and an action space a model can drive. The engine
 is in good shape. What this one goes after is the product — the places where a
