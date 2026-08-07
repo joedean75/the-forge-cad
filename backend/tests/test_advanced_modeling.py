@@ -2,6 +2,7 @@
 
 from fastapi.testclient import TestClient
 
+from conftest import base_box
 from main import app
 
 client = TestClient(app)
@@ -33,10 +34,8 @@ def test_revolve_makes_a_turned_part():
 
 def test_mirror_creates_symmetry():
     doc_id = _blank()
-    root = client.get(f"/api/documents/{doc_id}").json()["feature_tree"]["root"]["id"]
     # Off-center box then mirror across yz → symmetric pair spanning ±.
-    _op(doc_id, "set_feature_params", {"feature_id": root,
-        "params": {"size": {"x": 0.02, "y": 0.02, "z": 0.02}, "center": {"x": 0.03, "y": 0, "z": 0}}})
+    base_box(client, doc_id, size=(0.02, 0.02, 0.02), center=(0.03, 0, 0))
     _op(doc_id, "add_mirror", {"plane": "yz", "offset": 0.0})
     bx = client.get(f"/api/documents/{doc_id}").json()["derived"]["bbox"]
     # Now spans from -0.04 to +0.04 in x (two boxes centered at ±0.03, half 0.01).
@@ -58,9 +57,7 @@ def test_sweep_pipe_and_loft_adapter_evaluate():
 
 def test_profile_cut_generates_kerf_compensated_gcode():
     doc_id = _blank()
-    root = client.get(f"/api/documents/{doc_id}").json()["feature_tree"]["root"]["id"]
-    _op(doc_id, "set_feature_params", {"feature_id": root,
-        "params": {"size": {"x": 0.08, "y": 0.05, "z": 0.003}, "center": {"x": 0, "y": 0, "z": 0}}})
+    base_box(client, doc_id, size=(0.08, 0.05, 0.003))
     _op(doc_id, "add_primitive", {"shape": "cylinder", "operation": "subtract",
         "params": {"radius": 0.006, "height": 0.02, "center": {"x": 0.02, "y": 0, "z": 0}}})
 

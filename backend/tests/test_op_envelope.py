@@ -122,9 +122,9 @@ def test_state_omits_the_mesh_and_the_children_array():
 # ------------------------------------------- unevaluatable trees are warnings --
 
 def _bind_to_undefined_parameter(doc):
-    root = doc.feature_tree["root"]["id"]
+    box = ops.dispatch("add_primitive", doc.id, {"shape": "box"})["feature_id"]
     return ops.execute("set_feature_params", doc.id,
-                       {"feature_id": root, "params": {"size": {"x": "=w", "y": 0.02, "z": 0.02}}})
+                       {"feature_id": box, "params": {"size": {"x": "=w", "y": 0.02, "z": 0.02}}})
 
 
 def test_referencing_an_undefined_parameter_is_a_warning_not_a_failure():
@@ -141,9 +141,10 @@ def test_referencing_an_undefined_parameter_is_a_warning_not_a_failure():
 
 def test_rollback_is_available_for_harnesses_that_want_an_always_valid_document():
     doc = _doc()
+    box = ops.dispatch("add_primitive", doc.id, {"shape": "box"})["feature_id"]
     before = doc.feature_tree
     env = ops.execute("set_feature_params", doc.id,
-                      {"feature_id": doc.feature_tree["root"]["id"],
+                      {"feature_id": box,
                        "params": {"size": {"x": "=w", "y": 0.02, "z": 0.02}}},
                       rollback_on_eval_error=True)
     assert env["ok"] is False

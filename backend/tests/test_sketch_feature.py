@@ -70,9 +70,12 @@ def test_a_sketch_contributes_no_geometry():
     """It is geometry other features consume, so on its own the part is empty."""
     doc_id = _doc()
     ops.execute("create_sketch", doc_id, {"sketch": CIRCLE})
-    size = ops.execute("bounding_box", doc_id, {})["result"]["size_mm"]
-    # The same 1 mm stand-in an all-suppressed tree gets — not a 40 mm disc.
-    assert (size["x"], size["y"], size["z"]) == (1.0, 1.0, 1.0)
+    result = ops.execute("bounding_box", doc_id, {})["result"]
+    # No body at all — not a 40 mm disc, and not the 1 mm stand-in the evaluator
+    # needs internally either. The document says it has nothing yet.
+    assert result["body"] is False
+    size = result["size_mm"]
+    assert (size["x"], size["y"], size["z"]) == (0.0, 0.0, 0.0)
 
 
 def test_a_sketch_never_reaches_an_evaluator():

@@ -149,6 +149,14 @@ def for_document(doc_id: str, mesh_hash: str) -> Optional[bytes]:
     doc = docs.get_document(doc_id)
     if doc is None or (doc.derived.mesh_hash or "") != mesh_hash:
         return None
+    # A document with no body evaluates to a 1 mm stand-in, which scales to fit
+    # and renders as a confident little cube — the exact starting block the
+    # datum-plane template exists to stop showing people. The icon is the honest
+    # picture of a part nobody has modelled yet.
+    from app.services import feature_ops
+
+    if not feature_ops.has_solid(doc.feature_tree):
+        return None
     try:
         solid = docs.get_solid(doc_id, resolution=doc.derived.resolution or 128)
         mesh = Kernel.tessellate(solid)

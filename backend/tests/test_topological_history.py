@@ -24,6 +24,7 @@ import pytest
 
 from app.cad_kernel.core import history, naming
 from app.cad_kernel.evaluator import brep
+from conftest import body_id
 from app.services import cad_operations as ops
 from app.services import document_service as docs
 from app.services import feature_ops
@@ -236,7 +237,7 @@ def test_losing_one_reference_of_several_still_warns_though_the_body_builds():
 
 def test_an_edit_that_loses_nothing_does_not_warn():
     doc_id = _plate()
-    root = docs.get_document(doc_id).feature_tree["root"]["id"]
+    root = body_id(docs.get_document(doc_id).feature_tree)
     ops.execute("fillet_edges", doc_id, {"edges": _vertical_edges(doc_id), "radius": .003})
     env = ops.execute("set_feature_params", doc_id,
                       {"feature_id": root, "params": {"size": V(.09, .05, .02)}})
@@ -262,7 +263,7 @@ def test_the_verdict_survives_the_build_failure_it_explains():
 def test_descriptor_matching_still_carries_a_reference_through_a_resize():
     """The property the previous scheme bought is not traded away for this one."""
     doc_id = _plate()
-    root = docs.get_document(doc_id).feature_tree["root"]["id"]
+    root = body_id(docs.get_document(doc_id).feature_tree)
     ops.execute("fillet_edges", doc_id, {"edges": _vertical_edges(doc_id), "radius": .004})
 
     env = ops.execute("set_feature_params", doc_id,

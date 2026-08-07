@@ -2,6 +2,7 @@
 
 from fastapi.testclient import TestClient
 
+from conftest import base_box, body_id
 from main import app
 
 client = TestClient(app)
@@ -38,7 +39,7 @@ def test_release_assigns_sequential_letters_and_snapshots():
 
 def test_revision_snapshot_is_immutable_to_later_edits():
     doc_id = _doc()
-    root = client.get(f"/api/documents/{doc_id}").json()["feature_tree"]["root"]["id"]
+    root = base_box(client, doc_id)
     client.post(f"/api/documents/{doc_id}/revisions", json={"notes": "rev A geometry"})
     # Edit the live part after releasing.
     client.post(f"/api/documents/{doc_id}/op", json={
@@ -48,7 +49,7 @@ def test_revision_snapshot_is_immutable_to_later_edits():
     from app.services import document_service as ds
     doc = ds.get_document(doc_id)
     rev_a = doc.revisions[0]
-    assert rev_a.feature_tree["root"]["id"] == root  # unchanged snapshot
+    assert body_id(rev_a.feature_tree) == root  # unchanged snapshot
 
 
 def test_revision_ops_registered():

@@ -4,7 +4,7 @@ import {
   Box, Circle, Cylinder, Cone, Plus, Minus,
   Blend, Triangle, Shell, CircleDot, Grid3x3, Move3d, PencilRuler,
   Rotate3d, FlipHorizontal2, Spline, Layers, ArrowUpFromLine,
-  Sheet, CornerUpRight, CornerDownRight, UnfoldHorizontal,
+  Sheet, CornerUpRight, CornerDownRight, UnfoldHorizontal, Frame,
 } from 'lucide-react'
 import { api } from '../api/client'
 import { useDocumentStore } from '../store/useDocumentStore'
@@ -211,6 +211,16 @@ export function ToolRibbon() {
           onClick={sketchPick ? cancelSketchPick : startSketchPick}
           disabled={busy}
           active={sketchPick}
+        />
+        {/* Datum planes are ordinary features — deletable from the tree, and
+            put back here. An offset one is how you sketch at a height nothing
+            has a face at yet. */}
+        <Tool
+          icon={Frame}
+          label="Plane"
+          title="Add a datum plane — a reference to sketch on, not material"
+          onClick={() => runOp('add_plane', { plane: 'xy' })}
+          disabled={busy}
         />
       </Group>
 

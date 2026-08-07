@@ -129,6 +129,14 @@ def _pick(params: Optional[dict], keys: Tuple[str, ...]) -> dict:
 # sharing, and the replayed tree would not hash-match the original.
 _SKETCH = "SketchFeature"
 
+# A datum plane is a reference, not material. Like a sketch it lives in the tree
+# and contributes no body, so it is emitted as its own step and filtered out of
+# every "which children are bodies" question. Without this every document made
+# from the blank template — which is three planes — decompiles as unsupported,
+# and `corpus_report` reports zero for feature types that are perfectly fine.
+_PLANE = "DatumPlaneFeature"
+_BODYLESS = (_SKETCH, _PLANE)
+
 # feature type -> {stored reference param: (operation argument, the profile
 # param the sketch supplied)}. The profile is dropped when a sketch supplied it:
 # passing both would be redundant now and would let the two drift apart on the
@@ -160,6 +168,9 @@ class _Emit:
         self.steps: List[dict] = []
         self.sketches: Dict[str, int] = {}
         self.made: Dict[str, int] = {}
+        # Which default orientations have already been accounted for by the
+        # blank template a replay starts from — see `_is_default_plane`.
+        self.default_planes: set = set()
 
     def push(self, op: str, args: dict, node: Optional[dict] = None) -> int:
         self.steps.append({"op": op, "args": args})
@@ -228,8 +239,46 @@ def _sketch_of(tree_node: dict, sketch_id: str) -> Optional[dict]:
 
 
 def _body_children(node: dict) -> List[dict]:
-    """A boolean's children that are actually bodies. Sketches are not."""
-    return [c for c in node_children(node) if c.get("type") != _SKETCH]
+    """A boolean's children that are actually bodies. Sketches and planes are not."""
+    return [c for c in node_children(node) if c.get("type") not in _BODYLESS]
+
+
+def _is_default_plane(node: dict, ctx: _Emit) -> bool:
+    """Whether this plane is one a blank document already has.
+
+    Replay runs into a **new document**, and a new document opens with Top/Front/
+    Right at the origin. Emitting `add_plane` for those would rebuild the source
+    with six planes instead of three — and the verification would not catch it,
+    because planes carry no geometry and the mesh hashes would match exactly. A
+    demonstration that quietly doubles the datums teaches that.
+
+    Matched on orientation and offset rather than on id, because an id is not
+    stable across a rebuild, and once per orientation, because a second XY plane
+    at the origin genuinely was added by hand.
+    """
+    from app.cad_kernel.ops.datum_plane import DEFAULT_PLANES
+
+    params = node.get("params") or {}
+    plane = params.get("plane", "xy")
+    if plane not in {p for _, p in DEFAULT_PLANES}:
+        return False
+    if abs(float(params.get("offset", 0.0) or 0.0)) > 1e-12:
+        return False
+    if plane in ctx.default_planes:
+        return False
+    ctx.default_planes.add(plane)
+    return True
+
+
+def _emit_plane(node: dict, ctx: _Emit) -> Optional[int]:
+    """`add_plane` for one datum plane, or None when the template supplies it."""
+    if _is_default_plane(node, ctx):
+        return None
+    params = node.get("params") or {}
+    args = _pick(params, ("plane", "offset", "size"))
+    if node.get("name"):
+        args["name"] = node["name"]
+    return ctx.push("add_plane", args, node)
 
 
 def _emit_body(node: dict, ctx: _Emit, root: Optional[dict] = None) -> int:
@@ -243,6 +292,10 @@ def _emit_body(node: dict, ctx: _Emit, root: Optional[dict] = None) -> int:
         # placeholder an all-suppressed tree gets.
         return _emit_sketch(node, ctx)
 
+    if node_type == _PLANE:
+        # And a document that is only planes is what every new one starts as.
+        return _emit_plane(node, ctx)
+
     if node_type in _OPAQUE:
         raise Unsupported(
             f"{node_type} carries {_OPAQUE[node_type]}, which no operation can rebuild "
@@ -250,17 +303,31 @@ def _emit_body(node: dict, ctx: _Emit, root: Optional[dict] = None) -> int:
 
     if node_type == "BooleanFeature":
         children = _body_children(node)
+        bodyless = [c for c in node_children(node) if c.get("type") in _BODYLESS]
         if not children:
-            raise Unsupported("BooleanFeature with no children", "BooleanFeature")
+            # A union holding only planes and sketches is a document with no
+            # body yet — which every new one is, so this is the common case
+            # rather than a malformed tree. Rebuilding it is rebuilding them.
+            if not bodyless:
+                raise Unsupported("BooleanFeature with no children", "BooleanFeature")
+            index = -1
+            for child in bodyless:
+                emitted = (_emit_sketch(child, ctx) if child.get("type") == _SKETCH
+                           else _emit_plane(child, ctx))
+                if emitted is not None:
+                    index = emitted
+            return index
         operation = (node.get("params") or {}).get("operation", "union")
         index = _emit_body(children[0], ctx, root)             # the base body
         for child in children[1:]:
             index = _emit_onto(child, operation, ctx, root)     # combined onto it
-        # A sketch nobody reads still has to be created, or the replayed tree is
-        # missing a feature the original has.
-        for child in node_children(node):
+        # A sketch nobody reads, and every datum plane, still have to be
+        # created, or the replayed tree is missing features the original has.
+        for child in bodyless:
             if child.get("type") == _SKETCH:
                 _emit_sketch(child, ctx)
+            else:
+                _emit_plane(child, ctx)
         return index
 
     if node_type == "MirrorFeature":

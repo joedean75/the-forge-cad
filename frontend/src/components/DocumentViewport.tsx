@@ -3,6 +3,7 @@ import { Canvas } from '@react-three/fiber'
 import { CameraControls, Grid, GizmoHelper, GizmoViewport, Html, Line } from '@react-three/drei'
 import * as THREE from 'three'
 import { Boxes, Ruler, Crosshair, X, ScanEye, PencilRuler, Maximize } from 'lucide-react'
+import { DatumPlanes } from './DatumPlanes'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { MeshLoader } from './MeshLoader'
 import { MoveHandles } from './MoveHandles'
@@ -316,6 +317,14 @@ export function DocumentViewport() {
 
   const SNAP_R = 0.11 // display units
 
+  /** Clicking a plane while placing a sketch chooses it — the same call the
+   *  XY/XZ/YZ buttons make, from the thing you are actually looking at. */
+  const pickPlaneFeature = (id: string) => {
+    const node = doc ? findNode(doc.feature_tree, id) : null
+    const plane = String(node?.params?.plane ?? 'xy')
+    if (plane === 'xy' || plane === 'xz' || plane === 'yz') pickSketchPlane(plane)
+  }
+
   const handlePick = (hit: Vec3) => {
     if (!measuring || !fit) return
     // Snap the raycast hit to the nearest feature point within threshold.
@@ -401,6 +410,16 @@ export function DocumentViewport() {
             fadeDistance={15}
             fadeStrength={1}
             infiniteGrid
+          />
+
+          {/* The document's reference planes. A new document is three of these
+              and no body, so this is what greets you instead of the placeholder
+              block that used to be there. */}
+          <DatumPlanes
+            tree={doc?.feature_tree}
+            fit={fit}
+            selectedId={selectedFeatureId}
+            onSelect={(id) => (sketchPick ? pickPlaneFeature(id) : select(id))}
           />
 
           {meshUrl && (

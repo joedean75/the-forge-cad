@@ -2,6 +2,7 @@
 
 from fastapi.testclient import TestClient
 
+from conftest import base_box
 from main import app
 
 client = TestClient(app)
@@ -10,11 +11,8 @@ client = TestClient(app)
 def _bracket() -> str:
     r = client.post("/api/documents", json={"prompt": "", "resolution": 48})
     doc_id = r.json()["id"]
-    root = client.get(f"/api/documents/{doc_id}").json()["feature_tree"]["root"]["id"]
     # A plate with a through-hole so the top view has an inner contour.
-    client.post(f"/api/documents/{doc_id}/op", json={
-        "op": "set_feature_params",
-        "args": {"feature_id": root, "params": {"size": {"x": 0.08, "y": 0.05, "z": 0.02}, "center": {"x": 0, "y": 0, "z": 0}}}})
+    base_box(client, doc_id, size=(0.08, 0.05, 0.02))
     client.post(f"/api/documents/{doc_id}/op", json={
         "op": "add_primitive", "args": {"shape": "cylinder", "operation": "subtract",
                                         "params": {"radius": 0.008, "height": 0.05, "center": {"x": 0.02, "y": 0, "z": 0}}}})

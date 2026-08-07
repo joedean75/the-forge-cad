@@ -137,9 +137,16 @@ def test_replaying_an_op_sequence_reproduces_the_tree_exactly():
 
 
 def test_replayed_documents_have_identical_geometry():
+    from app.services import feature_ops
+
     first, second = _replay(_BUILD), _replay(_BUILD)
+    # Through the resolution pipeline, like every real evaluation: a raw tree
+    # still carries its datum planes, which have no body and no business
+    # reaching an evaluator (`document_service.resolved_tree` is the only way a
+    # document's evaluation tree is derived).
     meshes = [
-        mesh_hash(Kernel.tessellate(Kernel.evaluate_tree(FeatureTree.from_dict(t), resolution=32)))
+        mesh_hash(Kernel.tessellate(Kernel.evaluate_tree(
+            FeatureTree.from_dict(feature_ops.resolve_for_evaluation(t)), resolution=32)))
         for t in (first, second)
     ]
     assert meshes[0] == meshes[1]
@@ -153,6 +160,9 @@ def test_feature_ids_are_readable_sequence_numbers():
 
 def test_evaluation_records_the_conditions_that_produced_the_geometry():
     doc = docs.create_document(name="stamped", resolution=32)
+    # A body: a document of three datum planes has nothing to sample, so there
+    # is no sampler to record.
+    ops.dispatch("add_primitive", doc.id, {"shape": "box"})
     docs.evaluate_document(doc, resolution=32)
     assert doc.derived.resolution == 32
     assert doc.derived.sampler in ("brep", "native", "numpy")

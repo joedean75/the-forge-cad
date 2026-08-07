@@ -13,6 +13,7 @@ because the geometry silently stops agreeing with the document.
 import pytest
 
 from app.cad_kernel.evaluator import brep
+from conftest import body_id
 from app.services import cad_operations as ops
 from app.services import document_service as docs
 from app.services import rollout
@@ -88,7 +89,7 @@ def test_a_parameter_change_invalidates_it_too():
     """Parameters are not in `feature_tree`; they are resolved into it. Hashing
     the raw tree would miss this entirely."""
     doc_id = _doc()
-    root = ops.dispatch("list_features", doc_id, {})["features"][0]["id"]
+    root = body_id(docs.get_document(doc_id).feature_tree)
     ops.dispatch("set_feature_params", doc_id,
                  {"feature_id": root, "params": {"size": {"x": "=w", "y": 0.05, "z": 0.05}}})
     ops.dispatch("set_parameters", doc_id,

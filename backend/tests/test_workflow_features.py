@@ -2,6 +2,7 @@
 
 from fastapi.testclient import TestClient
 
+from conftest import base_box, body_id
 from main import app
 from app.services import document_service as ds
 
@@ -11,10 +12,7 @@ client = TestClient(app)
 def _box_doc(size=(0.05, 0.04, 0.03)) -> str:
     r = client.post("/api/documents", json={"resolution": 48})
     doc_id = r.json()["id"]
-    client.post(f"/api/documents/{doc_id}/op", json={
-        "op": "set_feature_params",
-        "args": {"feature_id": client.get(f"/api/documents/{doc_id}").json()["feature_tree"]["root"]["id"],
-                 "params": {"size": {"x": size[0], "y": size[1], "z": size[2]}, "center": {"x": 0, "y": 0, "z": 0}}}})
+    base_box(client, doc_id, size=size)
     return doc_id
 
 
@@ -39,7 +37,7 @@ def test_material_catalog_and_assignment_changes_mass():
 
 def test_parameters_drive_feature_dimensions():
     doc_id = _box_doc()
-    root = client.get(f"/api/documents/{doc_id}").json()["feature_tree"]["root"]["id"]
+    root = body_id(client.get(f"/api/documents/{doc_id}").json()["feature_tree"])
     # Bind the box width to a parameter expression (mm authored, metres applied).
     client.post(f"/api/documents/{doc_id}/op", json={
         "op": "set_feature_params",
@@ -88,7 +86,7 @@ def test_mass_properties_reports_cog_and_inertia():
 
 def test_configurations_produce_size_variants():
     doc_id = _box_doc()
-    root = client.get(f"/api/documents/{doc_id}").json()["feature_tree"]["root"]["id"]
+    root = body_id(client.get(f"/api/documents/{doc_id}").json()["feature_tree"])
     client.post(f"/api/documents/{doc_id}/op", json={
         "op": "set_feature_params",
         "args": {"feature_id": root, "params": {"size": {"x": "=w", "y": "=w", "z": 0.02}}}})

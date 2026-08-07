@@ -167,21 +167,33 @@ def _ensure_feature_ids(tree: Optional[dict]) -> None:
 
 
 def _default_tree_dict() -> dict:
-    """A blank document starts as a small valid box so it is immediately visible."""
-    from app.cad_kernel.core.types import Point3, Vector3 as KVector3
-    from app.cad_kernel.ops.primitives import BoxFeature
+    """A blank document is three datum planes and no body.
 
-    root = BoxFeature(
-        id="f1",  # deterministic: every blank document starts from the same tree
-        name="Base Box",
-        size=KVector3(0.1, 0.1, 0.1),
-        center=Point3(),
-    )
-    tree = FeatureTree(root).to_dict()
-    # Mark the base as a placeholder so the first real feature replaces it rather
-    # than being swallowed by / unioned into a stray 100 mm block.
-    tree["root"]["placeholder"] = True
-    return tree
+    It used to be a 100 mm box flagged ``placeholder``, so the first real
+    feature could quietly replace it. That was wrong twice: the viewport opened
+    on a part nobody asked for, and predicting what `add_primitive` would do
+    required knowing about a flag. Three reference planes is what every CAD
+    package opens on, and — unlike the box — they are ordinary features you can
+    delete, move and add back.
+
+    Ids are `f1`/`f2`/`f3` and the shape is fixed, because every blank document
+    must start from the same tree: `feature_ops.IdAllocator` is what makes a
+    replayed operation sequence reproduce a document byte for byte.
+    """
+    from app.cad_kernel.ops.datum_plane import default_planes
+
+    planes = default_planes()
+    for index, node in enumerate(planes, start=1):
+        node["id"] = f"f{index}"
+    return {
+        "version": "brep-v1",
+        # A union with no solid children evaluates to nothing, which is exactly
+        # right: `resolve_sketches` prunes the planes and the tree falls through
+        # to the same empty stand-in a document holding only sketches gets.
+        "root": {"type": "BooleanFeature", "id": f"f{len(planes) + 1}",
+                 "name": "Part", "params": {"operation": "union",
+                                            "children": planes}},
+    }
 
 
 #: Documents that exist only for the length of one operation and must never
@@ -271,9 +283,26 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
     derived number a material *does* move, so it is recomputed from the cached
     volume rather than from a new solid.
     """
+    from app.services import feature_ops
+
     _ensure_feature_ids(doc.feature_tree)
     tree_hash = _hash_tree(doc.feature_tree)
     key = _evaluation_key(doc, resolution)
+
+    # A document with no body has nothing to mesh, and saying so is the point.
+    # `resolve_for_evaluation` hands the evaluator a 1 mm stand-in when the tree
+    # prunes to nothing — necessary, because the pipeline needs *a* solid — but
+    # reporting it as the document's geometry puts a confident little cube in the
+    # viewport, scaled to fit, which is exactly the starting block the datum-plane
+    # template replaced. No mesh, no bbox, no error: there is no body yet.
+    if not feature_ops.has_solid(doc.feature_tree):
+        doc.derived = DerivedCache(solid_hash=tree_hash, eval_key=key, mass=0.0,
+                                   volume=0.0, resolution=resolution)
+        _SOLID_CACHE.pop(doc.id, None)
+        doc.updated_at = _now()
+        if persist:
+            _persist(doc)
+        return doc
     if (doc.derived.eval_key == key and doc.derived.mesh_url and not doc.derived.error
             and doc.id in _SOLID_CACHE):
         _refresh_mass(doc)
@@ -1049,6 +1078,11 @@ def _optimize_feature_scope(tree: dict):
             walk(c)
         if kids:
             return  # only leaves carry a meaningful extent
+        if node.get("type") in feature_ops.BODYLESS_TYPES:
+            # A datum plane or a sketch is a leaf with no material, so "how much
+            # of it survived the solve" has no answer — and asking rasterizes a
+            # feature whose `evaluate` deliberately raises.
+            return
         try:
             feature = Feature.from_dict(node)
         except Exception:
@@ -1077,7 +1111,11 @@ def run_document_optimize(doc_id: str, setup, resolution: int = 128, progress=No
     if doc is None:
         raise KeyError(doc_id)
 
-    tree = FeatureTree.from_dict(doc.feature_tree)
+    # Through `resolved_tree`, like every other evaluation. The solve builds an
+    # SDF from this, and a raw tree still carries the document's datum planes —
+    # which have no field, deliberately. This was the sixth copy of the
+    # resolution sequence and it is now the same one everything else uses.
+    tree = FeatureTree.from_dict(resolved_tree(doc))
     root = tree.root
     # Re-optimize from the original body, not a prior generative result.
     body = root.children[0] if isinstance(root, OptimizeFeature) and root.children else root

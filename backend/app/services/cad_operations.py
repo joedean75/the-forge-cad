@@ -225,7 +225,13 @@ def _bounding_box(doc_id, args):
     doc = _get(doc_id)
     b = doc.derived.bbox
     if not b:
-        return {"bbox": None}
+        # A new document is three datum planes and no material, so its extent
+        # really is zero. Reported in the shape every caller already reads —
+        # `size_mm` going missing would be a second thing to handle — with
+        # `body` saying which kind of zero this is.
+        return {"size_mm": {"x": 0.0, "y": 0.0, "z": 0.0}, "mass_kg": 0.0,
+                "body": False,
+                "note": "this document has no body yet — add a solid first"}
     return {
         "size_mm": {"x": round((b.max.x - b.min.x) * 1000, 3),
                     "y": round((b.max.y - b.min.y) * 1000, 3),
@@ -675,6 +681,65 @@ _ON_FACE_ARG = {
                    "second follows a re-topologising edit and reports the face as gone "
                    "rather than sliding onto a neighbour. Overrides plane/offset.",
 }
+
+
+@operation("add_plane", "mutate",
+           "Add a datum plane — a reference to sketch on or measure from, not "
+           "material. A new document starts with three (Top/Front/Right) and they "
+           "are ordinary features: delete_feature removes one, and this puts one "
+           "back at any orientation and offset. An offset plane is how you sketch "
+           "at a height nothing has a face at yet.",
+           {"plane": {"enum": ["xy", "xz", "yz"], "default": "xy",
+                      "description": "orientation: xy (top), xz (front), yz (right)"},
+            "offset": {"type": "number", "default": 0.0,
+                       "description": "distance along the plane normal"},
+            "size": {"type": "number",
+                     "description": "how big to draw it — a display extent, not a "
+                                    "boundary; the plane itself is unbounded"},
+            "name": {"type": "string", "description": "a name for the plane"}})
+def _add_plane(doc_id, args):
+    from app.cad_kernel.ops.datum_plane import DEFAULT_SIZE, NORMAL_AXIS
+
+    doc = _get(doc_id)
+    plane = args.get("plane", "xy")
+    offset = float(args.get("offset", 0.0) or 0.0)
+    node = {
+        "type": feature_ops.DATUM_PLANE_TYPE,
+        "name": args.get("name") or f"Plane {plane.upper()}",
+        "params": {"plane": plane, "offset": offset,
+                   "size": float(args.get("size") or DEFAULT_SIZE)},
+    }
+    # Joined as an ordinary union child, exactly like a sketch: it takes its id
+    # from the one allocator, and the prune stage lifts it back out before
+    # anything evaluates, so the body is unchanged.
+    tree = feature_ops.add_primitive(doc.feature_tree, node, "union")
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": f"added {node['name']}", "feature_id": node["id"],
+            "plane": plane, "offset_mm": round(offset * 1000, 4),
+            "normal_axis": NORMAL_AXIS[plane]}
+
+
+@operation("list_planes", "query",
+           "The datum planes in this document: orientation, offset and whether "
+           "anything can still be sketched on them.",
+           {})
+def _list_planes(doc_id, args):
+    from app.cad_kernel.core.feature_tree import walk_nodes
+    from app.cad_kernel.ops.datum_plane import NORMAL_AXIS
+
+    doc = _get(doc_id)
+    planes = []
+    for node in walk_nodes(doc.feature_tree):
+        if node.get("type") != feature_ops.DATUM_PLANE_TYPE:
+            continue
+        params = node.get("params") or {}
+        plane = params.get("plane", "xy")
+        planes.append({
+            "feature_id": node.get("id"), "name": node.get("name"),
+            "plane": plane, "offset_mm": round(float(params.get("offset", 0.0)) * 1000, 4),
+            "normal_axis": NORMAL_AXIS.get(plane, "z"),
+        })
+    return {"planes": planes, "count": len(planes)}
 
 
 @operation("create_sketch", "mutate", "Create a constrained 2D sketch as its own feature, to be consumed by "

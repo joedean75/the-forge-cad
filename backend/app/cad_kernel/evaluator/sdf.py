@@ -890,6 +890,10 @@ def _sdf_sketch(f):
     return f.evaluate()          # raises SketchNotConsumed, naming the sketch
 
 
+def _sdf_datum_plane(f):
+    return f.evaluate()          # raises DatumHasNoBody, naming the plane
+
+
 def _sdf_import(f):
     if f.cache and f.cache.get("density_packed"):
         return _cached_import_grid_sdf(f.cache)
@@ -933,6 +937,11 @@ _SDF_BUILDERS = {
     # Registered so reaching here says that, rather than producing a plausible
     # empty solid that would quietly delete the body it was meant to describe.
     "SketchFeature": _sdf_sketch,
+    # A datum plane is a reference, not material — pruned by the same stage that
+    # removes sketches. Registered for the same reason: reaching here means the
+    # pruning was missed, and saying so beats returning an empty solid that
+    # would delete whatever the plane sits beside.
+    "DatumPlaneFeature": _sdf_datum_plane,
 }
 
 

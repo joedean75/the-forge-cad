@@ -10,6 +10,7 @@ import copy
 from typing import Any, Dict, List, Optional
 
 from app.cad_kernel.core.feature_tree import node_children, walk_nodes
+from app.services.op_errors import PreconditionFailed
 
 _BOOLEAN_TYPES = {"BooleanFeature", "FilletFeature", "ChamferFeature"}
 
@@ -127,8 +128,23 @@ def add_primitive(tree: Dict[str, Any], primitive: Dict[str, Any], operation: st
         _combine_with(t["root"], primitive, operation, target_id, ids)
         return t
 
-    # First real feature on a blank doc replaces the placeholder base (a subtract
-    # still needs stock, so it falls through and cuts the placeholder instead).
+    # Cutting nothing is not a cut. A blank document is three datum planes and
+    # no material, and the boolean would collapse to its single surviving child
+    # once the planes are pruned — so a subtract into an empty document would
+    # return the *tool* as a solid and report success. That is the failure this
+    # action space exists to make impossible, so it is refused here, where every
+    # caller passes, rather than at each handler.
+    if operation == "subtract" and not has_solid(t) and primitive.get("type") not in BODYLESS_TYPES:
+        raise PreconditionFailed(
+            "there is no material to cut — this document has no body yet. Add a "
+            "solid first (add_primitive, add_extrude, add_revolve), then subtract "
+            "from it.")
+
+    # Legacy blank documents were a 100 mm box flagged `placeholder`, replaced by
+    # the first real feature. Nothing creates one any more, but documents holding
+    # one are persisted, and without this branch their first edit unions with a
+    # stray block. A subtract deliberately falls through and cuts it, which is
+    # what that placeholder was stock for.
     if root.get("placeholder") and operation != "subtract":
         t["root"] = primitive
         return t
@@ -361,6 +377,30 @@ _SKETCH_CONSUMERS: Dict[str, Dict[str, Dict[str, str]]] = {
 }
 
 SKETCH_TYPE = "SketchFeature"
+DATUM_PLANE_TYPE = "DatumPlaneFeature"
+
+#: Features that live in the tree and contribute no material. Both are pruned
+#: before evaluation, because nothing downstream — booleans, the mesher, the
+#: bounding box, DFM — has a sensible answer for a node that is not a solid.
+#: They differ only in that a sketch is *substituted* into its consumers first;
+#: a plane is read by the caller (a sketch's `plane`, a view) and needs nothing
+#: baked in.
+BODYLESS_TYPES = frozenset({SKETCH_TYPE, DATUM_PLANE_TYPE})
+
+
+def has_solid(tree: Optional[Dict[str, Any]]) -> bool:
+    """Whether this tree contains anything that makes material.
+
+    A blank document is three datum planes, so "is there a body yet?" stopped
+    being answerable by "is the tree non-empty?". Two callers need it and they
+    need it for opposite reasons: subtracting from nothing must be refused
+    rather than quietly returning the tool as a solid, and a library thumbnail
+    of nothing must fall back to the icon rather than render the 1 mm stand-in
+    as a cube — which is the very starting block this replaced.
+    """
+    return any(node.get("type") not in BODYLESS_TYPES
+               and not is_boolean(node)
+               for node in walk_nodes(tree or {}))
 
 # Feature types that can carry an ``on_face`` datum. A SketchFeature is here
 # because that is where the placement belongs once the sketch is its own thing —
@@ -381,7 +421,8 @@ def sketch_consumers(tree: Dict[str, Any], sketch_id: str) -> List[Dict[str, Any
 
 
 def resolve_sketches(tree: Dict[str, Any]) -> Dict[str, Any]:
-    """Substitute each sketch into the features that read it, then remove it.
+    """Substitute each sketch into the features that read it, then remove every
+    bodyless feature — sketches and datum planes alike.
 
     A `SketchFeature` is geometry other features consume and has no body of its
     own, so it must not reach an evaluator: nothing downstream — booleans, the
@@ -395,6 +436,12 @@ def resolve_sketches(tree: Dict[str, Any]) -> Dict[str, Any]:
     what "it contributes nothing" has to mean. A reference to a sketch that is
     gone (deleted, or suppressed before this runs) leaves the consumer's last
     substituted profile in place — the same fallback `resolve_datums` uses.
+
+    Datum planes take only the pruning half: nothing consumes a plane the way an
+    extrude consumes a sketch — a sketch names its plane by orientation, and a
+    drawing view by name — so there is nothing to substitute. They are pruned
+    here rather than in a fourth stage because the reason is identical and a
+    stage that deep-copies the tree to delete three nodes is not worth its cost.
     """
     return _sketches(copy.deepcopy(tree))
 
@@ -404,7 +451,11 @@ def _sketches(t: Dict[str, Any]) -> Dict[str, Any]:
     sketches = {node["id"]: (node.get("params") or {})
                 for node in walk_nodes(t)
                 if node.get("type") == SKETCH_TYPE and node.get("id")}
-    if not sketches:
+    # The early return is an optimisation over the common case, so it has to
+    # test for *anything* this function removes, not just sketches — a document
+    # of three datum planes has no sketches and very much needs pruning.
+    if not sketches and not any(node.get("type") in BODYLESS_TYPES
+                                for node in walk_nodes(t)):
         return t
 
     for node in walk_nodes(t):
@@ -421,7 +472,7 @@ def _sketches(t: Dict[str, Any]) -> Dict[str, Any]:
                     params[to_key] = copy.deepcopy(source[from_key])
 
     def prune(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if node.get("type") == SKETCH_TYPE:
+        if node.get("type") in BODYLESS_TYPES:
             return None
         kids = children_of(node)
         if kids:
@@ -437,8 +488,9 @@ def _sketches(t: Dict[str, Any]) -> Dict[str, Any]:
     root = prune(t["root"]) if t.get("root") else None
     if root is None:
         # Same stand-in `resolve_suppressed` uses for "nothing is left": a
-        # document holding only sketches has no body yet, which is a legitimate
-        # state to be in halfway through drawing one.
+        # document holding only sketches and datum planes has no body yet, which
+        # is what every new document now starts as and a legitimate state to be
+        # in halfway through drawing one.
         root = {"type": "BoxFeature", "id": "f_empty", "name": "Empty",
                 "params": {"size": {"x": 0.001, "y": 0.001, "z": 0.001},
                            "center": {"x": 0, "y": 0, "z": 0}}}

@@ -237,7 +237,10 @@ def _unmet_requirements(doc_id: str) -> List[str]:
         return []
     env = cad_operations.execute("verify_against_spec", doc_id, {}, include_state=False)
     if not env["ok"]:
-        return []
+        # A spec that *cannot* be scored is not a spec that passed. The usual
+        # cause is the one that matters: the run declared itself done without
+        # building a body, and a new document has none.
+        return [f"the spec could not be checked: {(env.get('error') or {}).get('message')}"]
     return [f"{row.get('label') or row.get('id')}: {row.get('detail')}"
             for row in (env["result"] or {}).get("checks") or []
             if row.get("status") != "pass"]

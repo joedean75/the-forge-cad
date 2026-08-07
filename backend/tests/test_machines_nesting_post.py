@@ -2,6 +2,7 @@
 
 from fastapi.testclient import TestClient
 
+from conftest import base_box
 from main import app
 from app.services import machines
 from app.services.cam import post
@@ -11,11 +12,7 @@ client = TestClient(app)
 
 def _plate() -> str:
     doc_id = client.post("/api/documents", json={"resolution": 48}).json()["id"]
-    root = client.get(f"/api/documents/{doc_id}").json()["feature_tree"]["root"]["id"]
-    client.post(f"/api/documents/{doc_id}/op", json={
-        "op": "set_feature_params",
-        "args": {"feature_id": root, "params": {"size": {"x": 0.1, "y": 0.06, "z": 0.003},
-                                                "center": {"x": 0, "y": 0, "z": 0}}}})
+    base_box(client, doc_id, size=(0.1, 0.06, 0.003))
     return doc_id
 
 

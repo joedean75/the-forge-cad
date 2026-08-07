@@ -3,7 +3,7 @@ import {
   Box, Circle, Cylinder, Cone, Combine, Trash2,
   Blend, Triangle, Shell, CircleDot, Grid3x3, Move3d,
   Eye, EyeOff, ChevronUp, ChevronDown, PencilRuler, Upload, Lock, LockOpen,
-  Rotate3d, FlipHorizontal2, Spline, Layers,
+  Rotate3d, FlipHorizontal2, Spline, Layers, Frame,
 } from 'lucide-react'
 import { useDocumentStore } from '../../store/useDocumentStore'
 import { flatten, isSuppressed, isBoolean } from '../../util/featureTree'
@@ -27,9 +27,17 @@ const TYPE_ICON: Record<string, typeof Box> = {
   MirrorFeature: FlipHorizontal2,
   SweepFeature: Spline,
   LoftFeature: Layers,
+  SketchFeature: PencilRuler,
+  DatumPlaneFeature: Frame,
 }
 
 function nodeLabel(node: FeatureNode): string {
+  // A plane's orientation and offset are the whole of what it is, and three
+  // rows all reading "Plane" would be worse than the icon alone.
+  if (node.type === 'DatumPlaneFeature') {
+    const off = Number(node.params.offset ?? 0)
+    return off ? `${node.name} · ${(off * 1000).toFixed(1)}mm` : node.name
+  }
   if (isBoolean(node)) {
     const op = String(node.params.operation ?? 'union')
     return `${node.name} · ${op}`

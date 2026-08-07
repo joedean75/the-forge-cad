@@ -40,10 +40,15 @@ def _plate_with_bosses(count: int = 8) -> str:
 
 
 def _leaves(doc_id):
+    """The leaf *bodies*, in tree order. Datum planes are leaves too and carry
+    no geometry, so an edit to one is not an edit the cache can be measured by."""
     from app.cad_kernel.core.feature_tree import walk_nodes
+    from app.services.feature_ops import BODYLESS_TYPES
 
     tree = docs.get_document(doc_id).feature_tree
-    return [n for n in walk_nodes(tree) if not (n.get("params") or {}).get("children")]
+    return [n for n in walk_nodes(tree)
+            if not (n.get("params") or {}).get("children")
+            and n.get("type") not in BODYLESS_TYPES]
 
 
 def _mesh_hash(doc_id) -> str:

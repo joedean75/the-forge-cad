@@ -2,6 +2,7 @@
 
 from fastapi.testclient import TestClient
 
+from conftest import base_box
 from main import app
 
 client = TestClient(app)
@@ -10,11 +11,7 @@ client = TestClient(app)
 def _part(size, center) -> str:
     r = client.post("/api/documents", json={"resolution": 48})
     doc_id = r.json()["id"]
-    root = client.get(f"/api/documents/{doc_id}").json()["feature_tree"]["root"]["id"]
-    client.post(f"/api/documents/{doc_id}/op", json={
-        "op": "set_feature_params",
-        "args": {"feature_id": root, "params": {"size": {"x": size[0], "y": size[1], "z": size[2]},
-                                                "center": {"x": center[0], "y": center[1], "z": center[2]}}}})
+    base_box(client, doc_id, size=size, center=center)
     return doc_id
 
 

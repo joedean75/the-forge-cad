@@ -83,9 +83,9 @@ def test_two_separate_boxes_are_reported_as_disconnected():
 
 def test_an_unevaluatable_document_reports_a_failed_check_rather_than_raising():
     doc = _doc()
-    root = doc.feature_tree["root"]["id"]
+    box = ops.dispatch("add_primitive", doc.id, {"shape": "box"})["feature_id"]
     ops.dispatch("set_feature_params", doc.id,
-                 {"feature_id": root, "params": {"size": {"x": "=undefined_param", "y": .02, "z": .02}}})
+                 {"feature_id": box, "params": {"size": {"x": "=undefined_param", "y": .02, "z": .02}}})
     report = geometry_check.check_document(doc.id, resolution=32)
     assert report["valid"] is False
     assert _status(report, "evaluates") == "fail"

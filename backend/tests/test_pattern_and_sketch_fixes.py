@@ -2,6 +2,7 @@
 
 from fastapi.testclient import TestClient
 
+from conftest import base_box
 from main import app
 from app.services import feature_ops
 from app.services.datum import resolve_face_frame
@@ -11,10 +12,7 @@ client = TestClient(app)
 
 def _plate_with_hole():
     doc_id = client.post("/api/documents", json={"resolution": 48}).json()["id"]
-    root = client.get(f"/api/documents/{doc_id}").json()["feature_tree"]["root"]["id"]
-    client.post(f"/api/documents/{doc_id}/op", json={
-        "op": "set_feature_params",
-        "args": {"feature_id": root, "params": {"size": {"x": 0.1, "y": 0.06, "z": 0.02}, "center": {"x": 0, "y": 0, "z": 0}}}})
+    root = base_box(client, doc_id, size=(0.1, 0.06, 0.02))
     r = client.post(f"/api/documents/{doc_id}/op", json={
         "op": "add_primitive", "args": {"shape": "cylinder", "operation": "subtract",
                                         "params": {"radius": 0.005, "height": 0.05, "center": {"x": -0.04, "y": 0, "z": 0}}}})
@@ -57,10 +55,7 @@ def test_pattern_unknown_target_is_404():
 def test_sketch_on_face_zeroes_on_the_face_center():
     # Off-center base box, centered at x = 50 mm.
     doc_id = client.post("/api/documents", json={"resolution": 48}).json()["id"]
-    root = client.get(f"/api/documents/{doc_id}").json()["feature_tree"]["root"]["id"]
-    client.post(f"/api/documents/{doc_id}/op", json={
-        "op": "set_feature_params",
-        "args": {"feature_id": root, "params": {"size": {"x": 0.04, "y": 0.04, "z": 0.02}, "center": {"x": 0.05, "y": 0, "z": 0}}}})
+    root = base_box(client, doc_id, size=(0.04, 0.04, 0.02), center=(0.05, 0, 0))
     tree = client.get(f"/api/documents/{doc_id}").json()["feature_tree"]
 
     plane, offset, origin = resolve_face_frame(tree, root, "top")

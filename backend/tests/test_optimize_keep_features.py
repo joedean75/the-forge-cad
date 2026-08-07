@@ -40,7 +40,9 @@ def _solve(doc_id):
     # the quality of the topology, and the full-resolution solve is far too slow
     # to sit in the unit suite.
     tree = ds.get_document(doc_id).feature_tree
-    body = FeatureTree.from_dict(tree).root
+    # The resolved tree, like `run_document_optimize`: the raw one still carries
+    # the document's datum planes, which have no distance field.
+    body = FeatureTree.from_dict(ds.resolved_tree(ds.get_document(doc_id))).root
     keep, audit = ds._optimize_feature_scope(tree)
     return simp.run_simp_from_solid(
         body, _setup(), keep_features=keep, audit_features=audit,

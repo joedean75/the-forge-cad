@@ -14,6 +14,7 @@ import math
 import pytest
 
 from app.cad_kernel.evaluator import brep
+from conftest import body_id
 from app.services import cad_operations as ops
 from app.services import document_service as docs
 
@@ -117,7 +118,7 @@ def test_a_fillet_is_a_feature_that_can_be_edited_afterwards():
 def test_a_fillet_reference_survives_the_upstream_change_that_moves_its_edge():
     """The whole point of naming by descriptor rather than by index."""
     doc_id = _plate()
-    root = docs.get_document(doc_id).feature_tree["root"]["id"]
+    root = body_id(docs.get_document(doc_id).feature_tree)
     ops.execute("fillet_edges", doc_id, {"edges": _vertical_edges(doc_id), "radius": .004})
 
     # Make the plate longer: every vertical edge moves, none is destroyed.

@@ -28,9 +28,17 @@ def _square_sketch(half=0.01):
     }
 
 
+def _boxed(name="t", size=0.1):
+    """A document with one 100 mm box. A blank one is three datum planes and no
+    body, so anything that wants a face to resolve has to make one first."""
+    doc = ds.create_document(name=name)
+    box_id = cad_operations.dispatch("add_primitive", doc.id, {
+        "shape": "box", "params": {"size": {"x": size, "y": size, "z": size}}})["feature_id"]
+    return ds.get_document(doc.id), box_id
+
+
 def test_resolve_face_reads_live_bbox():
-    doc = ds.create_document(name="t")  # default 0.1 Base Box centered at origin
-    box_id = doc.feature_tree["root"]["id"]
+    doc, box_id = _boxed()
     plane, offset = datum.resolve_face(doc.feature_tree, box_id, "top")
     assert plane == "xy"
     assert offset == pytest.approx(0.05, abs=1e-3)
@@ -39,19 +47,14 @@ def test_resolve_face_reads_live_bbox():
 
 
 def test_resolve_face_unknown_face_raises():
-    doc = ds.create_document(name="t")
+    doc, box_id = _boxed()
     with pytest.raises(ValueError):
-        datum.resolve_face(doc.feature_tree, doc.feature_tree["root"]["id"], "sideways")
+        datum.resolve_face(doc.feature_tree, box_id, "sideways")
 
 
 def test_sketch_on_face_follows_upstream_resize():
-    doc = ds.create_document(name="onface")
+    doc, box_id = _boxed("onface")
     did = doc.id
-    # Add a real base box (replaces the blank-doc placeholder); reference it.
-    box_r = cad_operations.dispatch("add_primitive", did, {
-        "shape": "box", "params": {"size": {"x": 0.1, "y": 0.1, "z": 0.1}}, "operation": "union",
-    })
-    box_id = box_r["feature_id"]
 
     r = cad_operations.dispatch("add_sketch", did, {
         "sketch": _square_sketch(), "depth": 0.02,
@@ -76,9 +79,8 @@ def test_sketch_on_face_follows_upstream_resize():
 
 
 def test_dangling_face_ref_keeps_fallback_offset():
-    doc = ds.create_document(name="t")
+    doc, box_id = _boxed()
     did = doc.id
-    box_id = doc.feature_tree["root"]["id"]
     cad_operations.dispatch("add_sketch", did, {
         "sketch": _square_sketch(), "depth": 0.02, "offset": 0.05,
         "on_face": {"feature_id": box_id, "face": "top"}, "operation": "union",

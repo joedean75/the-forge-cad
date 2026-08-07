@@ -224,6 +224,7 @@ def test_bulk_decompile_reports_what_it_recovered():
 
 def test_decompiling_over_http_returns_the_verified_sequence():
     from fastapi.testclient import TestClient
+
     from main import app
 
     client = TestClient(app)

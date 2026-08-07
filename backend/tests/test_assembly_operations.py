@@ -11,6 +11,7 @@ kind of id, does a failure say which, and does the caller learn what changed.
 
 from fastapi.testclient import TestClient
 
+from conftest import base_box
 from main import app
 from app.services import cad_operations
 
@@ -19,12 +20,7 @@ client = TestClient(app)
 
 def _part(size=(0.1, 0.06, 0.02), center=(0.0, 0.0, 0.0), name=None) -> str:
     doc_id = client.post("/api/documents", json={"resolution": 48}).json()["id"]
-    root = client.get(f"/api/documents/{doc_id}").json()["feature_tree"]["root"]["id"]
-    client.post(f"/api/documents/{doc_id}/op", json={
-        "op": "set_feature_params",
-        "args": {"feature_id": root,
-                 "params": {"size": {"x": size[0], "y": size[1], "z": size[2]},
-                            "center": {"x": center[0], "y": center[1], "z": center[2]}}}})
+    base_box(client, doc_id, size=size, center=center)
     if name:
         client.patch(f"/api/documents/{doc_id}", json={"name": name})
     return doc_id

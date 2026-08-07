@@ -16,6 +16,7 @@ import pytest
 
 from app.cad_kernel.io.mesh_binary import read_mesh_binary, write_mesh_binary
 from app.cad_kernel.kernel import Kernel
+from conftest import body_id
 from app.services import cad_operations as ops
 from app.services import document_analysis
 from app.services import document_service as docs
@@ -98,7 +99,7 @@ def test_different_geometry_gets_a_different_hash():
     doc_id = _part()
     before = docs.get_document(doc_id).derived.mesh_hash
     ops.execute("set_feature_params", doc_id, {
-        "feature_id": docs.get_document(doc_id).feature_tree["root"]["id"],
+        "feature_id": body_id(docs.get_document(doc_id).feature_tree),
         "params": {"size": {"x": 0.081, "y": 0.06, "z": 0.02}}})
     assert docs.get_document(doc_id).derived.mesh_hash != before
 
@@ -158,7 +159,7 @@ def test_a_geometric_edit_does_move_it():
     doc_id = _part()
     url = docs.get_document(doc_id).derived.mesh_url
     ops.execute("set_feature_params", doc_id, {
-        "feature_id": docs.get_document(doc_id).feature_tree["root"]["id"],
+        "feature_id": body_id(docs.get_document(doc_id).feature_tree),
         "params": {"size": {"x": 0.2, "y": 0.06, "z": 0.02}}})
     assert docs.get_document(doc_id).derived.mesh_url != url
 
@@ -167,7 +168,7 @@ def test_a_parameter_change_is_part_of_the_evaluation_key():
     """The trap the cache exists to avoid: a body that moved without a single
     feature node changing."""
     doc_id = _part()
-    root = docs.get_document(doc_id).feature_tree["root"]["id"]
+    root = body_id(docs.get_document(doc_id).feature_tree)
     ops.execute("set_parameters", doc_id, {"parameters": [{"name": "w", "expr": "0.08"}]})
     ops.execute("set_feature_params", doc_id, {
         "feature_id": root, "params": {"size": {"x": "=w", "y": 0.06, "z": 0.02}}})
