@@ -14,10 +14,16 @@ CI/CD pipeline (GitHub Actions) is already wired — see the end.
   in production — one origin, no separate web host or CORS needed.
 - **PostgreSQL** as the durable store (`DATABASE_URL`). Dev/tests use embedded
   SQLite automatically.
-- **Some coherent in-process state** — account/API-key indexes, optimize job
-  registry, evaluated-solid cache, rate-limit counters, in-flight OAuth
-  state/handoff codes. **Today this means run a single instance / single
-  worker.** (See "Scaling" below for the path off this.)
+- **Some coherent in-process state** — account/API-key indexes, optimize and
+  release-package job registries, evaluated-solid cache, rate-limit counters,
+  in-flight OAuth state/handoff codes. **Today this means run a single instance
+  / single worker.** (See "Scaling" below for the path off this.)
+- **Content-addressed byte caches** — mesh, thumbnail and export LRUs, each
+  keyed by a hash the client is handed as a URL and told to cache forever. These
+  are the sharpest edge of the single-worker rule: with two workers a client can
+  be given `/artifact/{digest}` by one and 404 by the other, which looks like
+  data loss rather than a routing problem. They are pure caches, so the fix is a
+  shared blob store, not stickiness.
 
 ## Options considered
 
@@ -109,13 +115,19 @@ lives in process. To scale horizontally later:
 
 1. **Account/API-key lookups** → query the DB per request instead of the
    in-memory indexes (or put them in Redis), so any worker sees new signups.
-2. **Optimize jobs** → move the `_jobs`/`_results` registry to Redis or a task
-   queue (Celery/RQ) with a worker pool; this also decouples long solves from web
-   workers.
+2. **Optimize and release-package jobs** → move the `_jobs`/`_results` and
+   `_PACKAGE_JOBS` registries to Redis or a task queue (Celery/RQ) with a worker
+   pool; this also decouples long solves and package fan-outs from web workers.
 3. **Rate-limit counters** → Redis (the `app/rate_limit.py` seam is drop-in).
 4. **Solid cache** (`_SOLID_CACHE`) is a pure derived cache — safe to keep
    per-worker or move to Redis/object storage.
-5. **OAuth login state** (`_PENDING`/`_HANDOFFS` in `services/oauth.py`) → Redis.
+5. **Hash-keyed bytes** — the mesh, thumbnail and export/artifact LRUs — to
+   object storage (S3/R2), keyed by the same digest. This one is not optional
+   before a second worker: the digest is handed to the browser as an immutable
+   URL, so a worker that never built that file answers 404 for something the
+   client was told would exist forever. Everything in them is re-derivable, so
+   the store needs no durability guarantee, only reachability.
+6. **OAuth login state** (`_PENDING`/`_HANDOFFS` in `services/oauth.py`) → Redis.
    Both are short-lived (10 min / 60 s) and already bounded, but a sign-in that
    starts on one worker and returns on another would fail state validation, so
    they must be shared before running more than one worker.
