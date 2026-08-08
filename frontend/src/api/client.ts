@@ -77,21 +77,49 @@ export function authHeaders(base: Record<string, string> = {}): Record<string, s
   return authToken ? { ...base, Authorization: `Bearer ${authToken}` } : base
 }
 
+/**
+ * A failure with the fields the backend actually sent.
+ *
+ * `services/op_errors` gives every failure a `code` and a `remedy` — what to do
+ * about it, generated per code so no handler has to remember. All of that used
+ * to be thrown away *and mangled*: `detail` is an object for exactly the raise
+ * sites with the most to say, and interpolating one into a template literal
+ * produced `API error: 422 [object Object]`, which is what a user saw when they
+ * subtracted from an empty document.
+ */
+export class ApiError extends Error {
+  status: number
+  code?: string
+  /** What to do about it. The useful half, and the half that was being dropped. */
+  remedy?: string
+  /** Which argument, when the failure names one. */
+  arg?: string | null
+
+  constructor(status: number, detail: unknown, fallback: string) {
+    const structured = detail && typeof detail === 'object' ? detail as Record<string, unknown> : null
+    const message = String(structured?.message ?? (typeof detail === 'string' ? detail : fallback))
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = structured?.code as string | undefined
+    this.remedy = structured?.remedy as string | undefined
+    this.arg = (structured?.arg as string | null | undefined) ?? null
+  }
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, {
     ...init,
     headers: authHeaders({ 'Content-Type': 'application/json', ...(init?.headers as Record<string, string>) }),
   })
   if (!res.ok) {
-    let detail = res.statusText
+    let detail: unknown = null
     try {
-      detail = (await res.json())?.detail ?? detail
+      detail = (await res.json())?.detail
     } catch {
       /* non-JSON error body */
     }
-    const err = new Error(`API error: ${res.status} ${detail}`) as Error & { status?: number }
-    err.status = res.status
-    throw err
+    throw new ApiError(res.status, detail, res.statusText || `request failed (${res.status})`)
   }
   return res.json() as Promise<T>
 }

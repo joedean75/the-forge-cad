@@ -21,7 +21,7 @@ import type {
   DocumentParameter,
   DerivedCache,
 } from '../../../shared/types'
-import { api } from '../api/client'
+import { ApiError, api } from '../api/client'
 import { ensureIds } from '../util/featureTree'
 
 const DEFAULT_RESOLUTION = 96
@@ -112,6 +112,9 @@ interface DocumentState {
   setMode: (mode: EditorMode) => void
   select: (id: string | null) => void
   clearError: () => void
+  /** The last operation failure, with its code and remedy. Null once dismissed. */
+  failure: OperationFailure | null
+  dismissFailure: () => void
   runOptimize: (opts: {
     volume_fraction?: number
     objective?: Objective
@@ -152,6 +155,32 @@ interface DocumentState {
   setParameters: (parameters: DocumentParameter[]) => Promise<void>
   /** Forge Copilot: run an agentic multi-step plan toward a goal. Returns the transcript. */
   runCopilot: (goal: string, onProgress?: (state: CopilotResult) => void) => Promise<CopilotResult | undefined>
+}
+
+/**
+ * The last operation failure, with what to do about it.
+ *
+ * Separate from `error` — which is the status bar's "is something wrong" light
+ * and is also set by `derived.error`, a *warning* about a tree that does not
+ * currently evaluate. Conflating the two would paint a supported workflow
+ * (binding a feature to a parameter before defining it) as a failure, which is
+ * the distinction the operation envelope was built to make.
+ */
+export interface OperationFailure {
+  op: string
+  message: string
+  /** MISSING_ARG | BAD_ARG | PRECONDITION | … */
+  code?: string
+  /** What to do about it. Generated per code in `services/op_errors`. */
+  remedy?: string
+  arg?: string | null
+}
+
+function asFailure(e: unknown, op: string): OperationFailure {
+  if (e instanceof ApiError) {
+    return { op, message: e.message, code: e.code, remedy: e.remedy, arg: e.arg }
+  }
+  return { op, message: e instanceof Error ? e.message : `Operation ${op} failed` }
 }
 
 /** Normalize a freshly-received document so every feature node has a stable id. */
@@ -347,6 +376,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   setMode: (mode) => set({ mode }),
   select: (selectedFeatureId) => set({ selectedFeatureId }),
   clearError: () => set({ error: null }),
+  failure: null,
+  dismissFailure: () => set({ failure: null }),
 
   runOptimize: async (opts) => {
     const { doc } = get()
@@ -395,7 +426,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     await historySyncSettled()
     const { doc, past } = get()
     if (!doc) return undefined
-    set({ past: pushHistory(past, doc), future: [], busy: true, error: null })
+    set({ past: pushHistory(past, doc), future: [], busy: true, error: null, failure: null })
     try {
       const res = await api.runOperation(doc.id, op, args)
       if (res.document) {
@@ -404,7 +435,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       }
       return res.result
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : `Operation ${op} failed` })
+      set({ failure: asFailure(e, op), error: e instanceof Error ? e.message : `Operation ${op} failed` })
       return undefined
     } finally {
       set({ busy: false })

@@ -6,6 +6,8 @@ import { CommandPalette } from '../components/CommandPalette'
 import { AccountDrawer } from '../components/AccountDrawer'
 import { HistoryShareDrawer } from '../components/HistoryShareDrawer'
 import { CopilotPanel } from '../components/CopilotPanel'
+import { FailureNotice } from '../components/FailureNotice'
+import { ShortcutSheet } from '../components/ShortcutSheet'
 import { ModeSpine } from '../components/ModeSpine'
 import { DocumentViewport } from '../components/DocumentViewport'
 import { FeatureTreePanel } from '../features/tree/FeatureTreePanel'
@@ -14,6 +16,7 @@ import { useDocumentStore } from '../store/useDocumentStore'
 import { useNavStore } from '../store/useNavStore'
 import { useCollab } from '../hooks/useCollab'
 import { useNarrow } from '../hooks/useNarrow'
+import { useShortcuts } from '../hooks/useShortcuts'
 import type { EditorMode } from '../../../shared/types'
 
 // Model is the mode the editor opens in and the one most sessions never leave;
@@ -171,6 +174,15 @@ export function EditorScreen() {
   const peers = useCollab(docId)
   const narrow = useNarrow()
   const [pane, setPane] = useState<Pane>('model')
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const runOp = useDocumentStore((s) => s.runOp)
+  const startSketchPick = useDocumentStore((s) => s.startSketchPick)
+  useShortcuts({
+    onHelp: () => setShortcutsOpen((v) => !v),
+    onCreate: (shape) => { void runOp('add_primitive', { shape }) },
+    onSketch: startSketchPick,
+    onPlane: () => { void runOp('add_plane', { plane: 'xy' }) },
+  })
 
   return (
     <div className="flex flex-col h-full">
@@ -184,17 +196,21 @@ export function EditorScreen() {
       />
       <ToolRibbon />
       {narrow && <PaneSwitcher pane={pane} onPick={setPane} />}
-      <div className="flex flex-1 min-h-0">
+      <div className="relative flex flex-1 min-h-0">
         <ModeSpine />
         <Column show={pane === 'tree'} fill={narrow}><FeatureTreePanel /></Column>
         <Column show={pane === 'model'} fill={narrow}><DocumentViewport /></Column>
         <Column show={pane === 'inspector'} fill={narrow}><RightPanel /></Column>
+        {/* Over the whole editor row rather than inside a panel: a failure from
+            the ribbon and one from the inspector are the same kind of news. */}
+        <FailureNotice />
       </div>
       <StatusBar />
       <CommandPalette onOpenCopilot={() => setCopilotOpen(true)} />
       <AccountDrawer open={accountOpen} onClose={() => setAccountOpen(false)} />
       <HistoryShareDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} />
       <CopilotPanel open={copilotOpen} onClose={() => setCopilotOpen(false)} />
+      <ShortcutSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       {/* No fallback: the canvas renders nothing until it is opened, so a
           spinner here would be a spinner over the viewport for no reason. */}
       <Suspense fallback={null}><SketchCanvas /></Suspense>
