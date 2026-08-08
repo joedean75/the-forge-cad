@@ -1337,20 +1337,77 @@ def tessellate(shape, resolution: int = 128):
 
 
 def tessellate_owned(shape, entities, resolution: int = 128):
-    """``(vertices, faces, owners)`` — the same mesh, plus who made each triangle.
+    """``(vertices, faces, owners, face_ids)`` — the mesh, and what each triangle is.
 
-    ``owners`` holds one feature id (or ``None``) per triangle, read from the
-    tag on the OCC face the triangle was meshed from. This is the exact answer
-    to "what did I click on": the triangle either came from that feature's
-    solid or it did not, with no nearest-thing guess anywhere in it. Contrast
-    the *face* picker, which stays a list precisely because there is no such
-    mapping for a marching-cubes body.
+    Two labels per triangle, both read from the OCC face it was meshed from and
+    both exact — the triangle either came from that face or it did not, with no
+    nearest-thing guess anywhere in it:
+
+    * ``owners`` is the **feature** that made it, from the tag `core/history`
+      minted at build time. It answers "what did I click on" in the tree.
+    * ``face_ids`` is the **face**, the same descriptor id `list_faces` hands
+      out and `fillet_edges` / `shell_faces` / `on_face` take. It is what turns
+      the sidebar list of coordinates into a click on the part.
+
+    The second one is nearly free: the faces are already being walked to read
+    the first, so this is one more label per face carried through the same
+    mesh pass rather than a second tessellation.
+
+    Contrast the marching-cubes path, which gets neither: `Kernel.from_mesh`
+    produces one `Face` with `surface=None`, so no triangle there can name a
+    face and the list stays the only way.
     """
     owners = _face_owners(shape, entities)
-    vertices, faces, face_index = _tessellate(shape, resolution, owners)
-    if face_index is None:
-        return vertices, faces, None
-    return vertices, faces, face_index
+    ids = _face_ids(shape)
+    per_triangle = _tessellate(shape, resolution, _columns(owners, ids))
+    vertices, faces, labels = per_triangle
+    if labels is None:
+        return vertices, faces, None, None
+    return vertices, faces, labels[0], labels[1]
+
+
+def _columns(*label_lists):
+    """Zip several per-face label lists into one list of tuples, or None.
+
+    `_tessellate` maps *one* per-face array onto triangles; carrying two means
+    carrying a pair. Returns None only when every column is absent, so a body
+    with tags but no nameable faces still gets its feature owners.
+    """
+    present = [l for l in label_lists if l is not None]
+    if not present:
+        return None
+    length = len(present[0])
+    columns = [l if l is not None else [None] * length for l in label_lists]
+    return [tuple(values) for values in zip(*columns)]
+
+
+def _face_ids(shape) -> Optional[List[Optional[str]]]:
+    """The naming descriptor id of each face, in the same order as `_face_owners`.
+
+    Deliberately the **id from the descriptor**, not an index into what
+    `list_faces` returns: that listing is sorted for stability, so an index into
+    it would silently point at a different face the first time two faces swapped
+    places. The id is a hash of what the face *is*, which is the thing
+    `fillet_edges` resolves and the thing that survives a rebuild.
+    """
+    from app.cad_kernel.core import naming
+
+    try:
+        bounds = naming.body_bounds(shape)
+    except Exception as exc:  # noqa: BLE001 — a nameless body is not a failure
+        _LOGGER.debug("face ids unavailable for picking: %s", exc)
+        return None
+
+    out: List[Optional[str]] = []
+    # `naming.faces` rather than `history._explore`: same traversal and so the
+    # same order as `_face_owners`, but downcast to `TopoDS_Face`, which is what
+    # the surface adaptor takes. The explorer yields the base `TopoDS_Shape`.
+    for face in naming.faces(shape):
+        try:
+            out.append(naming.face_descriptor(face, bounds)["id"])
+        except Exception:  # noqa: BLE001 — one unnameable face, not the body
+            out.append(None)
+    return out
 
 
 def _face_owners(shape, entities) -> Optional[List[Optional[str]]]:
@@ -1372,8 +1429,13 @@ def _face_owners(shape, entities) -> Optional[List[Optional[str]]]:
 
 
 def _tessellate(shape, resolution: int = 128,
-                owners: Optional[List[Optional[str]]] = None):
-    """``(vertices, faces, per_triangle_owner)``. See `tessellate`."""
+                labels: Optional[List[tuple]] = None):
+    """``(vertices, faces, per_triangle_labels)``. See `tessellate`.
+
+    ``labels`` is one tuple per OCC face — whatever the caller wants to know
+    about the triangles that face produces. The return transposes it: a tuple of
+    lists, one list per column, each as long as the triangle array.
+    """
     from OCP.Bnd import Bnd_Box
     from OCP.BRep import BRep_Tool
     from OCP.BRepBndLib import BRepBndLib
@@ -1402,12 +1464,12 @@ def _tessellate(shape, resolution: int = 128,
     # different objects. `ModifiedShape` is the copier's own answer to which is
     # which — matching by exploration order would be a guess that happens to
     # hold, which is the kind of assumption this file exists to avoid.
-    owner_by_face: Optional[List[Optional[str]]] = None
-    if owners is not None:
+    owner_by_face: Optional[List[Optional[tuple]]] = None
+    if labels is not None:
         lookup = TopTools_IndexedMapOfShape()
         TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_FACE, lookup)
         owner_by_face = [None] * lookup.Extent()
-        for source, owner in zip(history._explore(original, "face"), owners):
+        for source, owner in zip(history._explore(original, "face"), labels):
             try:
                 twin = copier.ModifiedShape(source)
             except Exception:  # noqa: BLE001 — a face the copier does not know
@@ -1443,7 +1505,7 @@ def _tessellate(shape, resolution: int = 128,
     # objects per node where iteration builds one.
     vertex_blocks: List[np.ndarray] = []
     face_blocks: List[np.ndarray] = []
-    owner_blocks: List[Optional[str]] = []
+    owner_blocks: List[Optional[tuple]] = []
     offset = 0
     for i in range(1, mapping.Extent() + 1):
         face = TopoDS.Face_s(mapping.FindKey(i))
@@ -1484,13 +1546,18 @@ def _tessellate(shape, resolution: int = 128,
         offset += node_count
 
     if not face_blocks:
+        empty = ([[] for _ in range(len(labels[0]))] if labels else [])
         return (np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=int),
-                [] if owner_by_face is not None else None)
+                empty if owner_by_face is not None else None)
     merged, welded, keep = _weld(np.vstack(vertex_blocks), np.vstack(face_blocks))
     if owner_by_face is None:
         return merged, welded, None
-    # `_weld` drops triangles that collapsed to a line; their owners go with them.
-    return merged, welded, [o for o, alive in zip(owner_blocks, keep) if alive]
+    # `_weld` drops triangles that collapsed to a line; their labels go with
+    # them, or the arrays stop lining up with the triangles they describe.
+    kept = [o for o, alive in zip(owner_blocks, keep) if alive]
+    width = len(labels[0]) if labels else 0
+    return merged, welded, [[(row or (None,) * width)[i] for row in kept]
+                            for i in range(width)]
 
 
 def _weld(vertices: np.ndarray, faces: np.ndarray, decimals: int = 9):

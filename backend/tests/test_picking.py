@@ -224,3 +224,135 @@ def test_provenance_never_breaks_an_evaluation():
         vertices = None
 
     assert picking.owners_for(None, Exploding(), {"root": {}}) is None
+
+
+# --- faces, not just features ------------------------------------------------
+#
+# The other half of "what did I click on". A feature id says which node in the
+# tree; a face id says which face, which is what `fillet_edges`, `shell_faces`
+# and `on_face` actually take — and until this shipped the only way to produce
+# one was to read a list of coordinates.
+
+def _plate_with_holes(client, count: int = 2):
+    doc_id = client.post("/api/documents", json={"resolution": 48}).json()["id"]
+
+    def op(name, **args):
+        return client.post(f"/api/documents/{doc_id}/op?envelope=1",
+                           json={"op": name, "args": args}).json()
+
+    op("add_primitive", shape="box", params={"size": {"x": .1, "y": .06, "z": .012}})
+    for i in range(count):
+        op("add_primitive", shape="cylinder", operation="subtract",
+           params={"radius": 0.0025, "height": 0.05,
+                   "center": {"x": -0.04 + 0.08 * i, "y": 0.02, "z": 0}})
+    return doc_id, op
+
+
+def test_every_face_of_an_exact_body_is_pickable():
+    """Not "most of them": a face the list offers and the mesh cannot name is a
+    row you can click in the sidebar and not on the part."""
+    from fastapi.testclient import TestClient
+
+    from main import app
+    from app.cad_kernel.io.mesh_binary import read_mesh_binary_labelled
+
+    client = TestClient(app)
+    doc_id, op = _plate_with_holes(client)
+    payload = client.get(client.get(f"/api/documents/{doc_id}").json()["derived"]["mesh_url"]).content
+    _, _, _, face_ids = read_mesh_binary_labelled(payload)
+
+    listed = {row["id"] for row in op("list_faces")["result"]["faces"]}
+    picked = {i for i in (face_ids or []) if i}
+    assert picked == listed, "the pickable faces and the listed faces must be the same set"
+    assert not any(i is None for i in face_ids), "every triangle came from some face"
+
+
+def test_a_face_id_from_the_mesh_is_one_fillet_edges_would_accept():
+    """The id has to be the *same* id, not a parallel numbering that happens to
+    look similar — `face_table` sorts its output, so an index would drift."""
+    from fastapi.testclient import TestClient
+
+    from main import app
+    from app.cad_kernel.io.mesh_binary import read_mesh_binary_labelled
+
+    client = TestClient(app)
+    doc_id, op = _plate_with_holes(client)
+    payload = client.get(client.get(f"/api/documents/{doc_id}").json()["derived"]["mesh_url"]).content
+    _, _, _, face_ids = read_mesh_binary_labelled(payload)
+
+    picked = next(i for i in face_ids if i)
+    env = op("shell_faces", faces=[picked], thickness=0.002)
+    assert env["ok"], env["error"]
+
+
+def test_a_body_with_no_nameable_faces_ships_no_face_labels():
+    """An imported mesh has one face with `surface=None`. No labels is the
+    correct answer and the viewer falls back to the list."""
+    import numpy as np
+
+    from app.cad_kernel.io.mesh_binary import read_mesh_binary_labelled, write_mesh_binary
+    from app.cad_kernel.kernel import Kernel
+    from app.services import picking
+
+    vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=float)
+    faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]], dtype=int)
+    solid = Kernel.from_mesh(vertices, faces)
+    mesh = Kernel.tessellate(solid)
+    assert picking.face_ids_for(solid, mesh) is None
+    _, _, _, labels = read_mesh_binary_labelled(write_mesh_binary(mesh))
+    assert labels is None
+
+
+def test_a_misaligned_label_array_is_dropped_rather_than_shipped():
+    """A wrong face id does not merely highlight the wrong patch — it feeds
+    fillet_edges, so it cuts the wrong geometry."""
+    import numpy as np
+
+    from app.cad_kernel.io.mesh_binary import read_mesh_binary_labelled, write_mesh_binary
+
+    class Mesh:
+        vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], dtype=float)
+        faces = np.array([[0, 1, 2], [1, 3, 2]])
+
+    _, _, owners, face_ids = read_mesh_binary_labelled(
+        write_mesh_binary(Mesh(), owners=["f1"], face_ids=["Fa", "Fb"]))
+    assert owners is None          # one label for two triangles: dropped
+    assert face_ids == ["Fa", "Fb"]   # and the correct block is unaffected
+
+
+def test_older_payloads_still_read():
+    """A hash the client already holds may predate a field."""
+    import numpy as np
+
+    from app.cad_kernel.io import mesh_binary as mb
+
+    class Mesh:
+        vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], dtype=float)
+        faces = np.array([[0, 1, 2], [1, 3, 2]])
+
+    payload = bytearray(mb.write_mesh_binary(Mesh(), owners=["f1", "f2"], face_ids=["Fa", "Fa"]))
+    payload[4:8] = (2).to_bytes(4, "little")          # claim to be a v2 payload
+    _, _, owners, face_ids = mb.read_mesh_binary_labelled(bytes(payload))
+    assert owners == ["f1", "f2"]
+    assert face_ids is None, "a v2 reader must stop before the face block"
+
+
+def test_the_face_block_is_four_bytes_a_triangle_plus_a_table():
+    """It doubles the label cost, so the cost is a number rather than a shrug."""
+    from fastapi.testclient import TestClient
+
+    from main import app
+    from app.cad_kernel.io import mesh_binary as mb
+
+    client = TestClient(app)
+    doc_id, _ = _plate_with_holes(client)
+    payload = client.get(client.get(f"/api/documents/{doc_id}").json()["derived"]["mesh_url"]).content
+    _, faces, owners, face_ids = mb.read_mesh_binary_labelled(payload)
+
+    class Mesh:
+        pass
+
+    mesh = Mesh()
+    mesh.vertices, mesh.faces = mb.read_mesh_binary(payload)
+    without = len(mb.write_mesh_binary(mesh, owners))
+    assert len(payload) - without <= len(faces) * 4 + 1024

@@ -86,6 +86,8 @@ UNITLESS = frozenset({
     "base_face", "moved_face",
     # export + release package: a file format and a revision letter
     "format", "revision",
+    # viewport-only: whether to return points along each edge
+    "polyline",
 })
 
 

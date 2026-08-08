@@ -164,6 +164,32 @@ def face_descriptor(face, bounds=None) -> Dict[str, Any]:
 
 # ------------------------------------------------------------------ edges --
 
+def edge_polyline(edge, samples: int = 2) -> List[List[float]]:
+    """Points along the edge, in millimetres — the curve, sampled.
+
+    Only the viewport wants this: it is what lets a click near an edge resolve to
+    *that* edge by exact point-to-segment distance rather than by comparing
+    midpoints, which puts a long edge and a short one at the same remove from a
+    click that is plainly on one of them. Kept off the default listing because
+    `list_edges` is also what an agent reads, and 16 points per hole rim is
+    noise in a prompt.
+    """
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.GeomAbs import GeomAbs_CurveType
+
+    adaptor = BRepAdaptor_Curve(edge)
+    if adaptor.GetType() != GeomAbs_CurveType.GeomAbs_Line:
+        samples = max(samples, 17)
+    first, last = adaptor.FirstParameter(), adaptor.LastParameter()
+    steps = max(int(samples), 2)
+    out = []
+    for i in range(steps):
+        point = adaptor.Value(first + (last - first) * i / (steps - 1))
+        out.append([round(point.X() * MM, 4), round(point.Y() * MM, 4),
+                    round(point.Z() * MM, 4)])
+    return out
+
+
 def edge_descriptor(edge, bounds=None) -> Dict[str, Any]:
     """What an edge is. Length and midpoint locate it; the curve kind types it."""
     from OCP.BRepAdaptor import BRepAdaptor_Curve

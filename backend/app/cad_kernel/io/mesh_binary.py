@@ -16,23 +16,32 @@ So this is the mesh as the mesher already has it: positions once, then indices.
     faces   uint32  x 3F     vertex indices
     owned   uint32           F when provenance is known, else 0
     tablen  uint32           length in bytes of the id table
-    owners  uint32  x F      index into the id table, or NO_OWNER
+    owners  uint32  x F      index into the id table, or NO_LABEL
     table   utf-8            JSON array of feature ids
+    faced   uint32           F when the faces are nameable, else 0   (v3)
+    tablen  uint32           length in bytes of the id table         (v3)
+    faceids uint32  x F      index into the id table, or NO_LABEL    (v3)
+    table   utf-8            JSON array of face ids                  (v3)
 
 Little-endian throughout, which is every platform this runs on and what
 `DataView`/typed arrays assume on the other side. There is no normal and no
 colour: the viewer computes normals from the geometry, and a normal that
 disagrees with the triangles it belongs to is a bug waiting to be shipped.
 
-**Owners are an index, not a second mesh.** Clicking the body has to name a
+**A label is an index, not a second mesh.** Clicking the body has to name a
 feature, and the alternative — tessellating each feature separately — is N
 meshes where the viewport draws one, both more bytes and a different picture.
 Four bytes a triangle answers the same question against the mesh that is
-already being sent. The block is optional: a body the exact kernel cannot
-address ships without it and the viewer falls back to selecting in the tree.
+already being sent, and the id table means a body with 14 faces stores 14
+strings rather than one per triangle.
 
-Version 1 (no owner block) is still read, because a payload for a hash the
-client already holds may predate the field.
+The **face** block is the same trick asked of a different question: which face
+did I click, so it can be filleted or shelled or sketched on. Both blocks are
+optional and independent — a body the exact kernel cannot address ships with
+neither, and the viewer falls back to the tree and to the face list.
+
+Versions 1 (no labels) and 2 (owners only) are still read, because a payload
+for a hash the client already holds may predate a field.
 
 STL is still what `export` writes — it is an interchange format and other tools
 read it. This one is a transport, and is not written to disk anywhere.
@@ -50,65 +59,106 @@ from app.cad_kernel.core.topology import Solid
 from app.cad_kernel.geom.meshing import solid_to_mesh
 
 MAGIC = b"FMSH"
-VERSION = 2
+VERSION = 3
 HEADER = struct.Struct("<4sIII")
 OWNER_HEADER = struct.Struct("<II")
+LABEL_HEADER = OWNER_HEADER
 
-# uint32 max: "this triangle belongs to no feature we can name". Distinct from
-# an absent owner block, which means the whole body could not be attributed.
-NO_OWNER = 0xFFFFFFFF
+# uint32 max: "this triangle belongs to nothing we can name". Distinct from an
+# absent block, which means the whole body could not be attributed.
+NO_LABEL = 0xFFFFFFFF
+NO_OWNER = NO_LABEL   # the name this had when owners were the only labels
 
 MIME = "application/vnd.forge.mesh"
 
 
+def _pack_labels(labels, n_faces: int) -> bytes:
+    """One label block: count, table length, the indices, then the table.
+
+    An empty block (count 0) is what "we could not attribute this" looks like on
+    the wire, and it is also what a **length mismatch** produces. That is
+    deliberate: a misaligned array names the *wrong* face, which is worse than
+    naming none, so it is dropped rather than shipped.
+    """
+    if labels is None or len(labels) != n_faces:
+        return LABEL_HEADER.pack(0, 0)
+    table: List[str] = []
+    index: dict = {}
+    packed = np.empty(n_faces, dtype="<u4")
+    for i, label in enumerate(labels):
+        if label is None:
+            packed[i] = NO_LABEL
+            continue
+        slot = index.get(label)
+        if slot is None:
+            slot = index[label] = len(table)
+            table.append(label)
+        packed[i] = slot
+    encoded = json.dumps(table, separators=(",", ":")).encode("utf-8")
+    # Padded to a 4-byte boundary, because the *next* block starts here and its
+    # indices are read as a `Uint32Array` view over the same buffer — which the
+    # browser refuses at an unaligned offset ("start offset should be a multiple
+    # of 4"). Trailing spaces are legal JSON whitespace, so the padding is
+    # counted in the declared length and every reader, old or new, still parses
+    # the table.
+    encoded += b" " * (-len(encoded) % 4)
+    return LABEL_HEADER.pack(n_faces, len(encoded)) + packed.tobytes() + encoded
+
+
 def write_mesh_binary(mesh: Union[Solid, object],
-                      owners: Optional[Sequence[Optional[str]]] = None) -> bytes:
+                      owners: Optional[Sequence[Optional[str]]] = None,
+                      face_ids: Optional[Sequence[Optional[str]]] = None) -> bytes:
     """Serialize a mesh (or a solid) to the transport form above."""
     if isinstance(mesh, Solid):
         mesh = solid_to_mesh(mesh)
     vertices = np.ascontiguousarray(np.asarray(mesh.vertices, dtype=np.float32))
     faces = np.ascontiguousarray(np.asarray(mesh.faces, dtype=np.uint32))
+    absent = LABEL_HEADER.pack(0, 0) * 2
     if vertices.size == 0 or faces.size == 0:
-        return HEADER.pack(MAGIC, VERSION, 0, 0) + OWNER_HEADER.pack(0, 0)
+        return HEADER.pack(MAGIC, VERSION, 0, 0) + absent
 
-    head = (HEADER.pack(MAGIC, VERSION, len(vertices), len(faces))
-            + vertices.tobytes() + faces.tobytes())
-    if owners is None or len(owners) != len(faces):
-        # A length mismatch is a bug upstream, and shipping a misaligned owner
-        # array would select the wrong feature rather than none.
-        return head + OWNER_HEADER.pack(0, 0)
-
-    table: List[str] = []
-    index = {}
-    packed = np.empty(len(owners), dtype="<u4")
-    for i, owner in enumerate(owners):
-        if owner is None:
-            packed[i] = NO_OWNER
-            continue
-        slot = index.get(owner)
-        if slot is None:
-            slot = index[owner] = len(table)
-            table.append(owner)
-        packed[i] = slot
-    encoded = json.dumps(table, separators=(",", ":")).encode("utf-8")
-    return (head + OWNER_HEADER.pack(len(owners), len(encoded))
-            + packed.tobytes() + encoded)
-
+    return (HEADER.pack(MAGIC, VERSION, len(vertices), len(faces))
+            + vertices.tobytes() + faces.tobytes()
+            + _pack_labels(owners, len(faces))
+            + _pack_labels(face_ids, len(faces)))
 
 def read_mesh_binary(data: bytes) -> Tuple[np.ndarray, np.ndarray]:
     """``(vertices, faces)`` — the inverse, for tests and for round-tripping."""
-    vertices, faces, _ = read_mesh_binary_owned(data)
+    vertices, faces, _, _ = read_mesh_binary_labelled(data)
     return vertices, faces
 
 
 def read_mesh_binary_owned(data: bytes):
-    """``(vertices, faces, owners)``, where owners is a list of ids or ``None``."""
+    """``(vertices, faces, owners)`` — the feature label only."""
+    vertices, faces, owners, _ = read_mesh_binary_labelled(data)
+    return vertices, faces, owners
+
+
+def _read_labels(data: bytes, offset: int):
+    """``(labels, next_offset)`` for one block, or ``(None, offset)`` if absent."""
+    if len(data) < offset + LABEL_HEADER.size:
+        return None, offset
+    count, table_bytes = LABEL_HEADER.unpack_from(data, offset)
+    body = offset + LABEL_HEADER.size
+    if not count:
+        return None, body
+    end = body + count * 4
+    if len(data) < end + table_bytes:
+        raise ValueError("mesh payload is shorter than its header claims")
+    packed = np.frombuffer(data, dtype="<u4", count=count, offset=body)
+    table = json.loads(data[end:end + table_bytes].decode("utf-8"))
+    labels = [None if slot == NO_LABEL else table[slot] for slot in packed.tolist()]
+    return labels, end + table_bytes
+
+
+def read_mesh_binary_labelled(data: bytes):
+    """``(vertices, faces, owners, face_ids)``; either label list may be ``None``."""
     if len(data) < HEADER.size:
         raise ValueError("mesh payload is shorter than its header")
     magic, version, n_vertices, n_faces = HEADER.unpack_from(data, 0)
     if magic != MAGIC:
         raise ValueError(f"not a Forge mesh: magic {magic!r}")
-    if version not in (1, VERSION):
+    if version not in (1, 2, VERSION):
         raise ValueError(f"unsupported Forge mesh version {version}")
 
     coords_end = HEADER.size + n_vertices * 3 * 4
@@ -119,17 +169,12 @@ def read_mesh_binary_owned(data: bytes):
                              offset=HEADER.size).reshape(-1, 3)
     faces = np.frombuffer(data, dtype="<u4", count=n_faces * 3,
                           offset=coords_end).reshape(-1, 3)
-    if version == 1 or len(data) < faces_end + OWNER_HEADER.size:
-        return vertices, faces, None
-
-    n_owners, table_bytes = OWNER_HEADER.unpack_from(data, faces_end)
-    if not n_owners:
-        return vertices, faces, None
-    owners_end = faces_end + OWNER_HEADER.size + n_owners * 4
-    if len(data) < owners_end + table_bytes:
-        raise ValueError("mesh payload is shorter than its header claims")
-    packed = np.frombuffer(data, dtype="<u4", count=n_owners,
-                           offset=faces_end + OWNER_HEADER.size)
-    table = json.loads(data[owners_end:owners_end + table_bytes].decode("utf-8"))
-    return vertices, faces, [None if slot == NO_OWNER else table[slot]
-                             for slot in packed.tolist()]
+    if version == 1:
+        return vertices, faces, None, None
+    owners, offset = _read_labels(data, faces_end)
+    if version == 2:
+        # v2 has no face block. Stopping here rather than reading past the end
+        # is why the version is in the header at all.
+        return vertices, faces, owners, None
+    face_ids, _ = _read_labels(data, offset)
+    return vertices, faces, owners, face_ids

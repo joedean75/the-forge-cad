@@ -41,6 +41,21 @@ _LOGGER = logging.getLogger(__name__)
 _MAX_LEAVES = 64
 
 
+def face_ids_for(solid: Any, mesh: Any) -> Optional[List[Optional[str]]]:
+    """One face id (or None) per triangle, or None where faces are not nameable.
+
+    There is no field fallback and there must not be one. A face id is the thing
+    `fillet_edges` and `shell_faces` resolve, so a guessed one does not merely
+    highlight the wrong patch — it cuts the wrong geometry. Where the exact
+    kernel did not label the triangles, the answer is that the body has no
+    addressable faces, which is exactly what `list_faces` already says.
+    """
+    recorded = (getattr(solid, "attrs", None) or {}).get("triangle_faces")
+    if recorded is not None and len(recorded) == len(mesh.faces):
+        return list(recorded)
+    return None
+
+
 def owners_for(solid: Any, mesh: Any, tree: dict, resolution: int = 128
                ) -> Optional[List[Optional[str]]]:
     """One feature id (or None) per triangle of ``mesh``, or None if unknowable."""

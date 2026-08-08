@@ -468,9 +468,14 @@ def mesh_payload(doc_id: str, mesh_hash: str) -> Optional[bytes]:
 
     mesh = Kernel.tessellate(solid)
     digest = hash_of(mesh)
+    # Both label blocks, or a re-derivation after a restart silently serves a
+    # payload that hashes the same and picks differently from the one the
+    # evaluate path wrote — and the hash is supposed to name the bytes.
     payload = mesh_binary.write_mesh_binary(
-        mesh, picking.owners_for(solid, mesh, docs.resolved_tree(doc),
-                                 doc.derived.resolution or 128))
+        mesh,
+        picking.owners_for(solid, mesh, docs.resolved_tree(doc),
+                           doc.derived.resolution or 128),
+        picking.face_ids_for(solid, mesh))
     docs.cache_mesh(doc_id, digest, payload)
     return payload if digest == mesh_hash else None
 

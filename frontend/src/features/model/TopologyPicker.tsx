@@ -53,7 +53,14 @@ export function TopologyPicker() {
   return (
     <div className="pt-3 border-t border-cad-border">
       <div className="flex items-center justify-between mb-2">
-        <h3 className="sec-head">Faces &amp; edges</h3>
+        <h3 className="sec-head">
+          Faces &amp; edges
+          {topo.kind === 'face' && entities.length > 0 && (
+            <span className="ml-1.5 normal-case tracking-normal text-[9px] text-cad-accent-hot">
+              · click the part
+            </span>
+          )}
+        </h3>
         <div className="flex gap-px rounded-sm overflow-hidden border border-cad-border">
           {(['edge', 'face'] as const).map((k) => (
             <button

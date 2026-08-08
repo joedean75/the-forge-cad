@@ -353,8 +353,9 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
         # demand: on the exact path it is a by-product of the tessellation that
         # just ran, and re-deriving it would mean meshing the body twice.
         cache_mesh(doc.id, digest,
-                   write_mesh_binary(mesh, picking.owners_for(solid, mesh, active,
-                                                              resolution)))
+                   write_mesh_binary(mesh,
+                                     picking.owners_for(solid, mesh, active, resolution),
+                                     picking.face_ids_for(solid, mesh)))
         doc.derived = DerivedCache(
             solid_hash=tree_hash,
             eval_key=key,

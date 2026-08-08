@@ -1130,21 +1130,40 @@ def _feature_exact_shape(doc_id, feature_id):
            {"kind": {"enum": ["all", "line", "circle"], "default": "all",
            "description": "filter to straight edges or circular ones"},
            "min_length_mm": {"type": "number",
-           "description": "ignore edges shorter than this — useful for skipping slivers"}})
+           "description": "ignore edges shorter than this — useful for skipping slivers"},
+           "polyline": {"type": "boolean", "default": False,
+           "description": "also return points along each edge (mm) — for drawing and "
+                          "hit-testing in a viewport. Off by default: it is a lot of "
+                          "numbers and it tells a planner nothing."}})
 def _list_edges(doc_id, args):
     from app.cad_kernel.core import naming
 
-    table = naming.edge_table(_exact_shape(doc_id))
+    shape = _exact_shape(doc_id)
+    table = naming.edge_table(shape)
     wanted = str(args.get("kind", "all"))
     floor = float(args.get("min_length_mm") or 0.0)
     if wanted != "all":
         table = [e for e in table if e["kind"] == wanted]
     table = [e for e in table if e["length_mm"] >= floor]
-    return {"edges": [{"id": e["id"], "kind": e["kind"], "length_mm": e["length_mm"],
-                       "midpoint_mm": e["midpoint_mm"],
-                       **({"radius_mm": e["radius_mm"]} if e.get("radius_mm") else {})}
-                      for e in table],
-            "count": len(table)}
+
+    shapes = {}
+    if args.get("polyline"):
+        # Re-explored rather than carried on the descriptor: `edge_table` is on
+        # the hot path of every topology operation and a polyline is the one
+        # thing in this listing nothing else wants.
+        shapes = {naming.edge_descriptor(edge, naming.body_bounds(shape))["id"]: edge
+                  for edge in naming.edges(shape)}
+
+    rows = []
+    for e in table:
+        row = {"id": e["id"], "kind": e["kind"], "length_mm": e["length_mm"],
+               "midpoint_mm": e["midpoint_mm"],
+               **({"radius_mm": e["radius_mm"]} if e.get("radius_mm") else {})}
+        edge = shapes.get(e["id"])
+        if edge is not None:
+            row["polyline_mm"] = naming.edge_polyline(edge)
+        rows.append(row)
+    return {"edges": rows, "count": len(rows)}
 
 
 def _selected(doc_id, ids, kind: str) -> List[Dict[str, Any]]:

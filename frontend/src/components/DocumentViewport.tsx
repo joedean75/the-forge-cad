@@ -252,7 +252,8 @@ const EXAMPLE_PROMPTS = [
 
 export function DocumentViewport() {
   const { doc, busy, selectedFeatureId, select, addDimension, removeDimension, createFromPrompt, newBlank,
-    sketchPick, pickSketchOnFace, pickSketchPlane, cancelSketchPick, runOp } = useDocumentStore()
+    sketchPick, pickSketchOnFace, pickSketchPlane, cancelSketchPick, runOp,
+    topo, setTopoSelection, toggleTopoSelection } = useDocumentStore()
   const [isolate, setIsolate] = useState(false)
   const [showDims, setShowDims] = useState(false)
   const [measuring, setMeasuring] = useState(false)
@@ -262,6 +263,10 @@ export function DocumentViewport() {
   // prop rather than by poking `.enabled` on the instance: the ref is a
   // `<primitive>` and React owns what is on it.
   const [orbit, setOrbit] = useState(true)
+  // The face under the cursor while the topology picker is open. Local, not in
+  // the store: it changes on every pointer move and nothing outside this
+  // component reads it.
+  const [hoveredFace, setHoveredFace] = useState<string | null>(null)
   const meshUrl = doc?.derived.mesh_url
   const evalError = doc?.derived.error
   const bbox = doc?.derived.bbox
@@ -323,6 +328,21 @@ export function DocumentViewport() {
     const node = doc ? findNode(doc.feature_tree, id) : null
     const plane = String(node?.params?.plane ?? 'xy')
     if (plane === 'xy' || plane === 'xz' || plane === 'yz') pickSketchPlane(plane)
+  }
+
+  // Topology picking is on whenever the picker is showing faces. Edges keep the
+  // list: a triangle belongs to a face, and clicking one to mean an edge would
+  // be the nearest-thing guess the whole naming scheme exists to avoid.
+  const pickingTopology = topo.kind === 'face' && topo.faces.length > 0
+    && !measuring && !sketchPick
+
+  const handleTopologyPick = (faceId: string | null, additive: boolean) => {
+    // No id means this body has no nameable faces (a marching-cubes or imported
+    // one). The list is the way in; clicking must not invent an answer.
+    if (faceId === null) return
+    if (additive) toggleTopoSelection(faceId)
+    else setTopoSelection(topo.selected.length === 1 && topo.selected[0] === faceId
+      ? [] : [faceId])
   }
 
   const handlePick = (hit: Vec3) => {
@@ -429,7 +449,12 @@ export function DocumentViewport() {
               fit={fit ? { c: fit.c, s: fit.s } : undefined}
               onPick={measuring && !sketchPick ? handlePick : undefined}
               onPickFace={sketchPick && rootId ? (face) => pickSketchOnFace(rootId, face) : undefined}
-              onSelect={!measuring && !sketchPick ? handleSelect : undefined}
+              onSelect={!measuring && !sketchPick && !pickingTopology ? handleSelect : undefined}
+              onPickTopology={pickingTopology ? handleTopologyPick : undefined}
+              onHoverTopology={pickingTopology ? setHoveredFace : undefined}
+              highlight={pickingTopology
+                ? { selected: topo.selected, hovered: hoveredFace }
+                : undefined}
               dim={isolate && !!selectedNode}
             />
           )}
