@@ -18,6 +18,8 @@ interface AssemblyState {
   close: () => void
   rename: (name: string) => Promise<void>
   insertPart: (partId: string) => Promise<void>
+  /** Place a standard purchased part by catalog key — no part document needed. */
+  insertStandardPart: (key: string, quantity?: number) => Promise<void>
   removeComponent: (componentId: string) => Promise<void>
   setTransform: (componentId: string, transform: ComponentTransform) => Promise<void>
   select: (componentId: string | null) => void
@@ -128,6 +130,28 @@ export const useAssemblyStore = create<AssemblyState>((set, get) => ({
       set({ assembly: updated, selectedComponentId: last?.id ?? null, ...STALE })
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Failed to insert part' })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  insertStandardPart: async (key, quantity = 1) => {
+    const { assembly } = get()
+    if (!assembly) return
+    set({ busy: true, error: null })
+    try {
+      const env = await api.runAssemblyOperation(assembly.id, 'insert_standard_part',
+                                                 { key, quantity })
+      if (!env.ok) throw new Error(env.error?.message ?? 'Insert failed')
+      // Refetch unconditionally rather than through `refresh()`, which is gated
+      // on `stale` — that flag means "a component's *part* was edited elsewhere",
+      // and this is the assembly changing under our own hand.
+      const updated = await api.getAssemblyDoc(assembly.id)
+      const last = updated.components[updated.components.length - 1]
+      set({ assembly: updated, selectedComponentId: last?.id ?? null,
+            stale: false, ...STALE })
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Failed to insert the part' })
     } finally {
       set({ busy: false })
     }

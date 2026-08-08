@@ -235,3 +235,59 @@ def test_decompiling_over_http_returns_the_verified_sequence():
     assert body["ok"] is True
     assert body["n_steps"] >= 1
     assert trajectories.get(body["trajectory_id"])["kind"] == "decompiled"
+
+
+# -------------------------------------------------------------- parameters --
+
+def test_a_parameterised_document_decompiles_and_keeps_its_parameters():
+    """Design intent used to make a document unrecoverable.
+
+    The stored tree holds the *expression* — that is what a parameter is — so
+    the emitted `add_primitive` carried `"=length"` into `params.size.x`, which
+    the schema refuses because a size is a number. Every document with a
+    parameter in it was therefore recorded as `replay_failed`. The recovery is
+    the sequence a person performs: declare, build with literals, then bind.
+    """
+    doc_id = _built(
+        ("set_parameters", {"parameters": [
+            {"name": "length", "expr": "80", "unit": "mm"},
+            {"name": "thickness", "expr": "length/10", "unit": "mm"}]}),
+        ("add_primitive", {"shape": "box",
+                           "params": {"size": {"x": .08, "y": .04, "z": .008}}}),
+    )
+    from app.cad_kernel.core.feature_tree import walk_nodes
+
+    box = next(n for n in walk_nodes(docs.get_document(doc_id).feature_tree)
+               if n.get("type") == "BoxFeature")
+    ops.execute("set_feature_params", doc_id, {
+        "feature_id": box["id"],
+        "params": {"size": {"x": "=length", "y": .04, "z": "=thickness"}}})
+
+    outcome = decompiler.decompile_document(doc_id, resolution=32, record=False)
+    assert outcome["ok"], outcome.get("reason")
+    emitted = [s["op"] for s in outcome["steps"]]
+    assert emitted[0] == "set_parameters", emitted
+    assert emitted[-1] == "set_feature_params", emitted
+    # Nothing numeric may carry an expression string: the schema is what a
+    # constrained decoder reads.
+    build = next(s for s in outcome["steps"] if s["op"] == "add_primitive")
+    assert isinstance(build["args"]["params"]["size"]["x"], float)
+
+
+def test_prepending_the_parameter_table_moves_every_reference_with_it():
+    """A `{"$step": i}` counts from position zero, and the prologue lands in
+    front of every geometry step. An unshifted reference targets the step before
+    the one it means — which is a *valid* op on the wrong feature, so replay
+    would succeed and the verification would have to catch it."""
+    doc_id = _built(
+        ("set_parameters", {"parameters": [{"name": "r", "expr": "6", "unit": "mm"}]}),
+        ("add_primitive", {"shape": "box",
+                           "params": {"size": {"x": .05, "y": .05, "z": .02}}}),
+        ("add_primitive", {"shape": "cylinder", "operation": "subtract",
+                           "params": {"radius": .006, "height": .06}}),
+    )
+    outcome = decompiler.decompile_document(doc_id, resolution=32, record=False)
+    assert outcome["ok"], outcome.get("reason")
+    targets = [s["args"]["target"] for s in outcome["steps"] if "target" in s["args"]]
+    # Step 0 is now `set_parameters`, so the first body is step 1.
+    assert all(t != {"$step": 0} for t in targets), outcome["steps"]

@@ -50,6 +50,8 @@ import type {
   NestResult,
   ExportArtifact,
   ReleasePackageJob,
+  StandardPart,
+  PartTemplate,
 } from '../../../shared/types'
 
 const API_BASE = '/api'
@@ -294,6 +296,34 @@ export const api = {
   },
   downloadArtifact: (url: string, filename: string) =>
     downloadAuthed(url.replace(API_BASE, ''), filename),
+
+  /**
+   * Browse the standard purchased parts.
+   *
+   * A resource, not an operation. `list_standard_parts` exists in the catalog
+   * too — an agent always holds a document or assembly id — but a person
+   * opening a *new* assembly holds neither, and that is exactly when they reach
+   * for a screw. Both doors read the same catalog.
+   */
+  listStandardParts: (opts?: { category?: string; search?: string; limit?: number }) => {
+    const query = new URLSearchParams()
+    if (opts?.category) query.set('category', opts.category)
+    if (opts?.search) query.set('search', opts.search)
+    query.set('limit', String(opts?.limit ?? 60))
+    return fetchJson<{
+      parts: StandardPart[]; count: number; returned: number
+      categories: Record<string, number>; source: string
+    }>(`/documents/meta/standard-parts?${query}`)
+  },
+  /** The starter parts, and building one. Both are ordinary operations — a
+   *  template is applied *into* a document, so there is always an id to
+   *  address, which is why neither needed a REST route of its own. */
+  listTemplates: (id: string) =>
+    api.runOperation<{ templates: PartTemplate[] }>(id, 'list_templates'),
+  applyTemplate: (id: string, template: string) =>
+    api.runOperation<{ name: string; feature_ids: string[]; parameters: string[] }>(
+      id, 'apply_template', { template }),
+
   /**
    * Forge Copilot: an agentic loop that plans + executes a sequence of operations.
    * Runs as a background job on the server (a run can span many LLM turns);
@@ -605,6 +635,12 @@ export const api = {
     fetchJson<InterferenceReport>(
       `/assemblies/${id}/interference?clearance_mm=${clearanceMm}`),
   assemblyBom: (id: string) => fetchJson<BomReport>(`/assemblies/${id}/bom`),
+  /** The assembly half of the operation catalog — the same call an agent makes. */
+  runAssemblyOperation: <T = Record<string, unknown>>(
+    id: string, op: string, args?: Record<string, unknown>,
+  ) => fetchJson<OperationEnvelope<T>>(`/assemblies/${id}/op?envelope=1`, {
+    method: 'POST', body: JSON.stringify({ op, args: args ?? {} }),
+  }),
   downloadAssemblyBomCsv: (id: string, name: string) =>
     downloadAuthed(`/assemblies/${id}/bom.csv`, `${name || 'assembly'}-bom.csv`),
 

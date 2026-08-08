@@ -202,6 +202,12 @@ export interface DerivedCache {
   dfm?: DfmReport
   cam?: CamResult
   error?: string
+  /** The feature tree with parameter *expressions* substituted — same nodes,
+   *  same ids, `"=length/2"` replaced by the number it resolved to. Present
+   *  only when the document has parameters. `feature_tree` keeps the
+   *  expression, because that is the design intent and the inspector shows it;
+   *  anything reading the tree as geometry wants this. See `geometryTree`. */
+  numeric_tree?: FeatureTreeDict | null
 }
 
 export interface OptimizationSetup {
@@ -855,6 +861,38 @@ export interface BomReport {
   total_mass_g: number
   total_material_cost_usd: number
   lines: BomLine[]
+}
+
+/** A part this system can generate from a published dimensional standard —
+ *  a screw, nut, washer, dowel pin, bearing, stepper motor or extrusion.
+ *  `fidelity` says how faithful the body is: "as-standard" means every
+ *  dimension the standard gives, "envelope" means the outside only. */
+export interface StandardPart {
+  key: string
+  category: 'fastener' | 'bearing' | 'motor' | 'extrusion'
+  designation: string
+  standard: string
+  material_id: string
+  fidelity: 'as-standard' | 'envelope'
+  notes: string
+  size_mm: Vector3
+  /** Published mass, where the solid envelope is known to over-state it. */
+  typical_mass_g?: number
+  /** A search on the designation — deliberately not a claimed part number. */
+  supplier_search: string
+}
+
+/** A starter part: an ordinary feature tree whose driving dimensions are
+ *  already named parameters, so the first edit is changing a number. Built by
+ *  the `apply_template` operation, which runs a sequence of ordinary
+ *  operations — never an imported body. */
+export interface PartTemplate {
+  key: string
+  name: string
+  summary: string
+  tags: string[]
+  steps: number
+  parameters: { name: string; value: number; unit: string }[]
 }
 
 export interface AssemblySummary {

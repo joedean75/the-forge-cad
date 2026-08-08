@@ -180,6 +180,16 @@ class _Emit:
         return index
 
 
+def _decompile_with_context(tree: Dict[str, Any]) -> Tuple[List[dict], _Emit]:
+    root = (tree or {}).get("root")
+    if not root:
+        raise Unsupported("tree has no root")
+
+    ctx = _Emit()
+    _emit_body(root, ctx)
+    return ctx.steps, ctx
+
+
 def decompile(tree: Dict[str, Any]) -> List[dict]:
     """The operation sequence that builds `tree`.
 
@@ -187,13 +197,7 @@ def decompile(tree: Dict[str, Any]) -> List[dict]:
     earlier carries ``args["target"] = {"$step": i}``; :func:`replay` substitutes
     the real id, because the id a feature gets is only known once it is created.
     """
-    root = (tree or {}).get("root")
-    if not root:
-        raise Unsupported("tree has no root")
-
-    ctx = _Emit()
-    _emit_body(root, ctx)
-    return ctx.steps
+    return _decompile_with_context(tree)[0]
 
 
 def _emit_sketch(node: dict, ctx: _Emit) -> int:
@@ -539,16 +543,110 @@ def replay(steps: List[dict], doc_id: str) -> List[dict]:
     return envelopes
 
 
+# -------------------------------------------------------------- parameters --
+
+def _shift_refs(value, by: int):
+    """Offset every ``{"$step": i}`` / ``{"$group": i}`` in `value` by `by`.
+
+    Needed because the parameter table has to be *prepended*: an expression is
+    only meaningful once the name it uses exists, and every reference in the
+    geometry steps counts from position zero.
+    """
+    if isinstance(value, dict):
+        for tag in ("$step", "$group"):
+            if tag in value:
+                return {tag: value[tag] + by}
+        return {k: _shift_refs(v, by) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_shift_refs(v, by) for v in value]
+    return value
+
+
+def _expression_params(node: dict) -> dict:
+    """The node's parameters that are expressions rather than numbers.
+
+    Returned whole-key: a ``center`` with one bound component is re-set as a
+    whole ``center``, because ``set_feature_params`` merges at the top level and
+    a partial dict would drop the other two axes.
+    """
+    from app.services.parameters import _looks_expr
+
+    def bound(value) -> bool:
+        if isinstance(value, str):
+            return value.startswith("=") or _looks_expr(value)
+        if isinstance(value, dict):
+            return any(bound(v) for v in value.values())
+        if isinstance(value, list):
+            return any(bound(v) for v in value)
+        return False
+
+    params = node.get("params") or {}
+    return {k: v for k, v in params.items() if k != "children" and bound(v)}
+
+
+def _parameter_steps(source_tree: dict, parameters: List[dict],
+                     ctx: _Emit) -> Tuple[List[dict], List[dict]]:
+    """The ``set_parameters`` prologue and the ``set_feature_params`` epilogue.
+
+    A parameterised document could not be decompiled at all before this: the
+    stored tree holds the *expression* (``"=length"``) — that is the whole point
+    of a parameter — and the emitted ``add_primitive`` carried the string
+    straight into ``params.size.x``, which the schema correctly refuses because
+    a size is a number. So every document with design intent in it was recorded
+    as ``replay_failed``, and templates make that the common case rather than a
+    curiosity.
+
+    The recovery is the sequence a person performs: declare the parameters,
+    build with literals, then bind. Splitting it that way is not a workaround —
+    ``add_primitive``'s schema is what a constrained decoder reads, and an
+    expression string has no business in a numeric field there.
+    """
+    from app.cad_kernel.core.feature_tree import walk_nodes
+
+    if not parameters:
+        return [], []
+    prologue = [{"op": "set_parameters", "args": {"parameters": [
+        {"name": p["name"], "expr": str(p.get("expr", "0")),
+         "unit": p.get("unit", "mm")} for p in parameters]}}]
+
+    epilogue: List[dict] = []
+    for node in walk_nodes(source_tree):
+        step = ctx.made.get(node.get("id"))
+        if step is None:
+            continue
+        bound = _expression_params(node)
+        if bound:
+            # +1 for the prologue, which lands in front of every geometry step.
+            epilogue.append({"op": "set_feature_params",
+                             "args": {"feature_id": {"$step": step + 1},
+                                      "params": bound}})
+    return prologue, epilogue
+
+
 # ------------------------------------------------------------ verification --
 
-def _hash_tree_geometry(tree: dict, resolution: int) -> str:
+def _hash_tree_geometry(tree: dict, resolution: int,
+                        scope: Optional[Dict[str, float]] = None) -> str:
     from app.services import feature_ops
+    from app.services import parameters as params
 
-    # Sketches are substituted first: a SketchFeature has no body and never
-    # reaches an evaluator in the running system either.
+    # Parameters first, then sketches: an expression string is not a number any
+    # evaluator can take, and a SketchFeature has no body and never reaches one
+    # in the running system either.
+    if scope:
+        tree = params.resolve_tree(tree, scope)
     solid = Kernel.evaluate_tree(
         FeatureTree.from_dict(feature_ops.resolve_sketches(tree)), resolution=resolution)
     return mesh_hash(Kernel.tessellate(solid))
+
+
+def _scope_of(doc) -> Dict[str, float]:
+    from app.services import parameters as params
+
+    if not getattr(doc, "parameters", None):
+        return {}
+    scope, _ = params.resolve_values(doc.parameters)
+    return scope
 
 
 def decompile_document(
@@ -576,7 +674,20 @@ def decompile_document(
                 "cause": "no_such_document", "steps": []}
 
     try:
-        steps = decompile(source.feature_tree)
+        # The geometry is decompiled from the *resolved* tree, so every emitted
+        # argument is the number the schema wants; the expressions come back
+        # afterwards as bindings over the parameter table.
+        scope = _scope_of(source)
+        from app.services import parameters as _params
+
+        build_tree = _params.resolve_tree(source.feature_tree, scope) if scope \
+            else source.feature_tree
+        steps, ctx = _decompile_with_context(build_tree)
+        prologue, epilogue = _parameter_steps(
+            source.feature_tree, [p.model_dump() for p in source.parameters], ctx)
+        if prologue:
+            steps = prologue + [{"op": s["op"], "args": _shift_refs(s["args"], 1)}
+                                for s in steps] + epilogue
     except Unsupported as exc:
         return {"ok": False, "reason": str(exc), "unsupported": True,
                 "cause": "unsupported", "failed_at": exc.feature, "steps": []}
@@ -603,8 +714,12 @@ def decompile_document(
                            f"replay failed at {failed['op']}: {failed['error']['message']}",
                            cause="replay_failed", failed_at=failed["op"])
 
-        want = _hash_tree_geometry(source.feature_tree, resolution)
-        got = _hash_tree_geometry(docs.get_document(scratch.id).feature_tree, resolution)
+        rebuilt = docs.get_document(scratch.id)
+        # Each side is resolved against its *own* parameter table: the point of
+        # the comparison is that the replay produced the same body, and it only
+        # holds if the replayed document carries the parameters too.
+        want = _hash_tree_geometry(source.feature_tree, resolution, scope)
+        got = _hash_tree_geometry(rebuilt.feature_tree, resolution, _scope_of(rebuilt))
         if want != got:
             return _reject(trajectory_id, record, steps,
                            "replayed geometry differs from the original",

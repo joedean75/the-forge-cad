@@ -1,5 +1,30 @@
 # Ease-of-use roadmap — three sprints
 
+> **Status: all three landed** (2026-08-08).
+>
+> | Sprint | What shipped |
+> |---|---|
+> | E1 | A face id per triangle in a third FMSH block on the exact path; hover-highlight and click-select in the viewport feeding the same `topo.selected` the list writes; edges resolved against the picked face's boundary; the list kept as the mirror and the only path on an SDF body. |
+> | E2 | `ApiError` carrying `code`/`remedy`/`arg`; `FailureNotice` inline where the operation was run, dismissed by the user rather than on a timer; ⌘Z / ⇧⌘Z awaiting `historySyncSettled()`; a `?` sheet. `derived.error` stays a warning. |
+> | E3 | Four templates as operation sequences (`services/templates.py`); `EmptyDocumentGuide` in a document with no solid; 210 standard purchased parts generated from the published standards (`services/parts_catalog.py`); the prompt bar edits the open part instead of replacing it. |
+>
+> Three things came out of E3 that the sprint did not plan and that were
+> pre-existing rather than new — each is written up in `CLAUDE.md`:
+>
+> - **No parameterised document could be decompiled.** The stored tree holds
+>   `"=length"` and the emitted `add_primitive` carried it into a numeric field,
+>   so every document with design intent in it scored `replay_failed`. Templates
+>   would have made that the common case.
+> - **A parameter expression crashed the viewport.** `collectSnapPoints` did
+>   `q.z.toFixed(4)` on the stored tree. `derived.numeric_tree` is now the tree a
+>   client reads as geometry.
+> - **The header prompt bar replaced the open part.** It only ever called
+>   `createFromPrompt`; `ai_edit` had existed the whole time.
+>
+> The two deferred items remain deferred: drag a face to resize it, and the
+> Y-up/Z-up viewport frame. So does the oldest open finding — no request-body
+> size limit and no rate limit on the operation endpoint.
+
 The last five programmes built capability: an exact kernel, a sketch solver,
 speed, an action space a model can drive, and the product surface around them.
 What none of them went after is the minute-to-minute experience of *operating*

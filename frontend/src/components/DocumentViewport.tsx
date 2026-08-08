@@ -4,10 +4,11 @@ import { CameraControls, Grid, GizmoHelper, GizmoViewport, Html, Line } from '@r
 import * as THREE from 'three'
 import { Boxes, Ruler, Crosshair, X, ScanEye, PencilRuler, Maximize } from 'lucide-react'
 import { DatumPlanes } from './DatumPlanes'
+import { EmptyDocumentGuide } from './EmptyDocumentGuide'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { MeshLoader } from './MeshLoader'
 import { MoveHandles } from './MoveHandles'
-import { collectSnapPoints, collectProxies, findNode, pickFeatureAt, type FeatureProxy } from '../util/featureTree'
+import { collectSnapPoints, collectProxies, findNode, geometryTree, pickFeatureAt, type FeatureProxy } from '../util/featureTree'
 import type { BBox, Dimension, Vector3, FeatureNode } from '../../../shared/types'
 
 type Vec3 = [number, number, number]
@@ -305,13 +306,15 @@ export function DocumentViewport() {
   const rootId = doc?.feature_tree.root?.id
   const selectedNode = useMemo<FeatureNode | null>(() => {
     if (!doc || !selectedFeatureId || selectedFeatureId === rootId) return null
-    return findNode(doc.feature_tree, selectedFeatureId)
+    // The numeric tree, not the stored one: a selection outline is geometry,
+    // and `collectProxies` cannot do arithmetic on `"=thickness/2"`.
+    return findNode(geometryTree(doc), selectedFeatureId)
   }, [doc, selectedFeatureId, rootId])
 
   // Snap targets (part-space) with cached display positions.
   const snaps = useMemo(() => {
     if (!fit || !doc) return []
-    const pts = collectSnapPoints(doc.feature_tree)
+    const pts = collectSnapPoints(geometryTree(doc))
     if (bbox) {
       for (const x of [bbox.min.x, bbox.max.x])
         for (const y of [bbox.min.y, bbox.max.y])
@@ -381,7 +384,7 @@ export function DocumentViewport() {
       return
     }
     if (!fit) return
-    select(pickFeatureAt(doc.feature_tree, fit.toPart(hit)))
+    select(pickFeatureAt(geometryTree(doc), fit.toPart(hit)))
   }
 
   // Drag the selected feature: preview locally, then one `set_feature_params`.
@@ -633,6 +636,11 @@ export function DocumentViewport() {
           </button>
         </div>
       )}
+
+      {/* A document with no body yet: what to do next, on the planes rather than
+          instead of them. Keyed on having no solid, so the first feature is the
+          last frame it draws. */}
+      {!sketchPick && <EmptyDocumentGuide />}
 
       {/* evaluation error */}
       {doc && evalError && (

@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { api } from '../../api/client'
 import { useDocumentStore } from '../../store/useDocumentStore'
-import { findNode } from '../../util/featureTree'
+import { findNode, geometryTree } from '../../util/featureTree'
 import {
   PartBackdrop, useMeshTriangles, faceToPlaneOffset, partBounds, spanV,
   type BackdropMode, type View,
@@ -143,7 +143,9 @@ export function SketchCanvas() {
   // backend datum resolution from that feature's live geometry; else the free plane.
   const frame = useMemo<{ plane: 'xy' | 'xz' | 'yz'; sectionMm: number; originMm: [number, number] }>(() => {
     if (onFace && doc) {
-      const node = findNode(doc.feature_tree, onFace.featureId)
+      // Geometry, so the numeric tree: a face offset measured off `"=thickness"`
+      // is not a number.
+      const node = findNode(geometryTree(doc), onFace.featureId)
       const r = node ? faceToPlaneOffset(node, onFace.face) : null
       if (r) return { plane: r.plane, sectionMm: r.offsetMm, originMm: r.originMm }
     }

@@ -88,6 +88,14 @@ UNITLESS = frozenset({
     "format", "revision",
     # viewport-only: whether to return points along each edge
     "polyline",
+    # the standard-parts catalog: a catalog key, a count, the ISO 273 fit
+    # series, and `screw` — a thread designation ("M4"), which is why it is not
+    # called `size`: that name is a length everywhere else here and the unit is
+    # folded into the description from the name.
+    "key", "quantity", "category", "search", "limit", "fit", "counterbore",
+    "screw",
+    # the starter-part gallery: which template to build
+    "template",
 })
 
 

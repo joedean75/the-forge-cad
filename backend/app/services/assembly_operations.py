@@ -91,6 +91,43 @@ def _insert_part(asm_id, args):
             "component_count": len(updated.components)}
 
 
+@operation("insert_standard_part", "mutate",
+           "Place a standard purchased part — a screw, nut, washer, dowel pin, "
+           "ball bearing, stepper motor or T-slot extrusion — without modelling "
+           "it. Generated from the published dimensional standard (ISO 4762, "
+           "ISO 4032, ISO 7089, ISO 2338, ISO 15, the NEMA frames), so it is an "
+           "ordinary editable part, not an imported blob. Browse the keys with "
+           "list_standard_parts. Inserting the same key twice reuses one part "
+           "document, so the BOM says qty 2 rather than listing it twice.",
+           {"key": {"type": "string", "required": True,
+                    "description": "catalog key, e.g. iso4762-m4-16 or bearing-608"},
+            "quantity": {"type": "integer", "default": 1,
+                         "description": "how many to place"}},
+           subject="assembly")
+def _insert_standard_part(asm_id, args):
+    from app.services import parts_catalog, standard_parts
+
+    asm = _assembly(asm_id)
+    key = require(args, "key")
+    entry = parts_catalog.by_key(key)
+    if entry is None:
+        raise BadArgument(
+            f"no catalog part {key!r}; browse them with list_standard_parts", arg="key")
+    quantity = int(args.get("quantity", 1) or 1)
+    if not 1 <= quantity <= 64:
+        raise BadArgument("quantity must be between 1 and 64", arg="quantity")
+
+    part_id = standard_parts.document_for(entry, owner_id=asm.owner_id)
+    placed = []
+    for _ in range(quantity):
+        updated = assembly_service.add_component(asm_id, part_id)
+        placed.append(updated.components[-1].id)
+    return {"message": f"placed {quantity} × {entry.designation}",
+            "part_id": part_id, "component_ids": placed,
+            "designation": entry.designation,
+            "component_count": len(updated.components)}
+
+
 @operation("remove_component", "mutate", "Take a component out of the assembly.",
            {"component_id": _COMPONENT}, subject="assembly")
 def _remove_component(asm_id, args):

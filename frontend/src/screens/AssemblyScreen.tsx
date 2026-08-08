@@ -11,6 +11,7 @@ import { useNavStore } from '../store/useNavStore'
 import { AccountDrawer } from '../components/AccountDrawer'
 import { AssemblyViewport } from '../components/AssemblyViewport'
 import { BomPanel, ClashPanel, MatesPanel } from '../features/assembly/AssemblyInspector'
+import { StandardPartsPicker } from '../features/assembly/StandardPartsPicker'
 import type { AssemblyComponent, ComponentTransform, DocumentSummary } from '../../../shared/types'
 
 /** A labelled numeric field bound to one axis of a component transform. */
@@ -143,17 +144,19 @@ function PartPicker({ onPick, onCreate, creating, onClose }: {
   )
 }
 
-type InspectorTab = 'place' | 'mates' | 'fit' | 'bom'
+type InspectorTab = 'place' | 'parts' | 'mates' | 'fit' | 'bom'
 
 const TABS: { id: InspectorTab; label: string }[] = [
   { id: 'place', label: 'Place' },
+  { id: 'parts', label: 'Parts' },
   { id: 'mates', label: 'Mates' },
   { id: 'fit', label: 'Fit' },
   { id: 'bom', label: 'BOM' },
 ]
 
 const TAB_TITLE: Record<InspectorTab, string> = {
-  place: 'Placement', mates: 'Mates', fit: 'Interference', bom: 'Bill of materials',
+  place: 'Placement', parts: 'Standard parts', mates: 'Mates',
+  fit: 'Interference', bom: 'Bill of materials',
 }
 
 export function AssemblyScreen() {
@@ -375,6 +378,7 @@ export function AssemblyScreen() {
             ) : (
               <p className="text-[11px] text-cad-text/60">Select a component to position it, or insert a part to begin.</p>
             ))}
+            {tab === 'parts' && <StandardPartsPicker />}
             {tab === 'mates' && <MatesPanel components={assembly.components} />}
             {tab === 'fit' && <ClashPanel />}
             {tab === 'bom' && <BomPanel />}

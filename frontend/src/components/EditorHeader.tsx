@@ -145,7 +145,7 @@ function LlmSelector() {
 }
 
 export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOpenCopilot, copilotOpen, peers = [] }: { onOpenLibrary: () => void; onOpenAccount: () => void; onOpenHistory: () => void; onOpenCopilot: () => void; copilotOpen: boolean; peers?: { id: string; email: string }[] }) {
-  const { busy, createFromPrompt, createFromImage, newBlank, doc, undo, redo, past, future } = useDocumentStore()
+  const { busy, createFromPrompt, createFromImage, aiEdit, newBlank, doc, undo, redo, past, future } = useDocumentStore()
   const account = useAuthStore((s) => s.account)
   const returnTo = useNavStore((s) => s.returnTo)
   const goBack = useNavStore((s) => s.goBack)
@@ -169,7 +169,29 @@ export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOp
 
   useEffect(() => { if (!busy && generating) setGenerating(false) }, [busy, generating])
 
+  /**
+   * With a part on screen, the bar edits it; with nothing, it makes one.
+   *
+   * The bar used to only ever call `createFromPrompt`, so typing into it with a
+   * part open silently *replaced* that part with a new document — the one thing
+   * a user typing a change to what they are looking at does not want. `ai_edit`
+   * has existed the whole time and took a whole-part instruction. Creating is
+   * still one click away, and is spelled out rather than being the surprise.
+   */
+  const hasBody = !!doc?.derived?.mesh_url
+
   const submit = () => {
+    if (!prompt.trim() || busy) return
+    if (hasBody) {
+      aiEdit(prompt)
+    } else {
+      createFromPrompt(prompt)
+      setGenerating(true)
+    }
+    setPrompt('')
+  }
+
+  const submitAsNew = () => {
     if (!prompt.trim() || busy) return
     createFromPrompt(prompt)
     setPrompt('')
@@ -241,7 +263,9 @@ export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOp
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && submit()}
-              placeholder="Describe a part — e.g. a 100×50×30 mm bracket with two mounting holes"
+              placeholder={hasBody
+                ? 'Describe a change — e.g. round the top edges to 3 mm'
+                : 'Describe a part — e.g. a 100×50×30 mm bracket with two mounting holes'}
               className="flex-1 bg-transparent text-xs text-cad-text-heading placeholder:text-cad-text/50 outline-none"
             />
           )}
@@ -269,13 +293,24 @@ export function EditorHeader({ onOpenLibrary, onOpenAccount, onOpenHistory, onOp
               setGenerating(true)
             }}
           />
+          {hasBody && (
+            <button
+              onClick={submitAsNew}
+              disabled={!prompt.trim() || busy}
+              title="Generate a new part from this description instead of editing the open one"
+              className="shrink-0 px-1.5 h-6 rounded-sm text-[11px] text-cad-text hover:text-cad-accent-hot transition-colors disabled:opacity-40"
+            >
+              New part
+            </button>
+          )}
           <button
             onClick={submit}
             disabled={!prompt.trim() || busy}
+            title={hasBody ? 'Apply this as an edit to the open part' : 'Generate a part'}
             className="flex items-center gap-1.5 px-2.5 h-6 rounded-sm bg-cad-accent text-cad-bg text-[11px] font-semibold hover:bg-cad-accent-hot transition-colors disabled:opacity-40"
           >
             {busy ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-            Generate
+            {hasBody ? 'Edit' : 'Generate'}
           </button>
         </div>
         <button

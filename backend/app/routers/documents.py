@@ -599,6 +599,40 @@ def cam_document(body: CamRequest,
 # ── Materials, parameters, mass properties ──
 
 
+@router.get("/meta/standard-parts")
+def list_standard_parts(
+    category: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    limit: int = Query(60, ge=1, le=250),
+    acc: accounts.Account = Depends(current_account),
+):
+    """The standard purchased parts, as a resource rather than an operation.
+
+    `list_standard_parts` also exists in the operation catalog, because an agent
+    is always holding a document or an assembly id and the whole surface is
+    addressed by one. A person browsing the library is not: a *new* assembly has
+    no components and no open part, which is exactly when you want to reach for
+    a screw. Requiring an id there would be the same mistake as making "create
+    an assembly" an operation — an argument that means nothing.
+
+    Both doors read `services/parts_catalog`, so there is one catalog.
+    """
+    from app.services import parts_catalog
+
+    rows = parts_catalog.catalog()
+    if category:
+        rows = [r for r in rows if r.category == category]
+    needle = (search or "").strip().lower()
+    if needle:
+        rows = [r for r in rows
+                if needle in r.designation.lower() or needle in r.key.lower()]
+    return {"parts": [parts_catalog.describe(r) for r in rows[:limit]],
+            "count": len(rows), "returned": min(len(rows), limit),
+            "categories": parts_catalog.categories(),
+            "source": "generated from published dimensional standards "
+                      "(ISO 4762/4032/7089/2338/273, ISO 15, NEMA frames)"}
+
+
 @router.get("/meta/materials")
 def list_materials(acc: accounts.Account = Depends(current_account)):
     """The material catalog plus its category descriptors.

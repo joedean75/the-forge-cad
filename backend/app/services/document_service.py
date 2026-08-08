@@ -263,6 +263,34 @@ def _evaluation_key(doc: DesignDocument, resolution: int) -> str:
     return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
 
+def _numeric_tree(doc: DesignDocument) -> Optional[dict]:
+    """The stored tree with parameter expressions replaced by their values.
+
+    Not `resolved_tree`: that one also drops suppressed features and prunes the
+    bodyless ones, so its nodes no longer line up with what the client is
+    displaying. This substitutes numbers and changes nothing else, which is what
+    a reader of the tree *as geometry* needs — the alternative is every client
+    carrying its own expression evaluator, and two evaluators is one too many.
+    """
+    if not doc.parameters:
+        return None
+    from app.services import parameters
+
+    overrides = {}
+    if doc.active_configuration:
+        cfg = next((c for c in doc.configurations if c.name == doc.active_configuration), None)
+        if cfg:
+            overrides = cfg.overrides
+    try:
+        scope, _ = parameters.resolve_values(doc.parameters, overrides)
+        return parameters.resolve_tree(doc.feature_tree, scope)
+    except parameters.ParameterError:
+        # A parameter that does not resolve is a supported intermediate state
+        # (`derived.error` exists for it); the client falls back to the stored
+        # tree rather than the document failing to load.
+        return None
+
+
 def _refresh_mass(doc: DesignDocument) -> None:
     """Recompute mass from the cached volume — the only thing a material moves."""
     from app.services import materials
@@ -297,7 +325,8 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
     # template replaced. No mesh, no bbox, no error: there is no body yet.
     if not feature_ops.has_solid(doc.feature_tree):
         doc.derived = DerivedCache(solid_hash=tree_hash, eval_key=key, mass=0.0,
-                                   volume=0.0, resolution=resolution)
+                                   volume=0.0, resolution=resolution,
+                                   numeric_tree=_numeric_tree(doc))
         _SOLID_CACHE.pop(doc.id, None)
         doc.updated_at = _now()
         if persist:
@@ -371,11 +400,13 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
             resolution=resolution,
             sampler=sampler,
             mesh_hash=digest,
+            numeric_tree=_numeric_tree(doc),
         )
         _SOLID_CACHE[doc.id] = solid
     except Exception as exc:
         _LOGGER.warning("Document %s evaluation failed: %s", doc.id, exc)
-        doc.derived = DerivedCache(solid_hash=tree_hash, error=str(exc))
+        doc.derived = DerivedCache(solid_hash=tree_hash, error=str(exc),
+                                   numeric_tree=_numeric_tree(doc))
         _SOLID_CACHE.pop(doc.id, None)
 
     doc.updated_at = _now()

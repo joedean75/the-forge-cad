@@ -52,6 +52,11 @@ class Operation:
 
 _VEC = {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"}}}
 _REQ_VEC = {**_VEC, "required": True}
+_AXIS = {**_VEC, "description": "direction to cut along; +Z by default"}
+# Listed rather than derived from `parts_catalog` at import: the enum reaches
+# the JSON Schema a constrained decoder is pointed at, and a schema that
+# depends on an import cycle is a schema that is sometimes empty.
+_METRIC_SIZES = ("M2", "M2.5", "M3", "M4", "M5", "M6", "M8", "M10", "M12")
 
 # `add_primitive` and `add_modifier` used to declare `params: {"type": "object"}`
 # — an opaque blob whose real shape lived only in prose. That is the one thing a
@@ -1670,6 +1675,147 @@ def _verify_against_spec(doc_id, args):
         return design_spec.verify(doc)
     except design_spec.SpecError as exc:
         raise PreconditionFailed(str(exc))
+
+
+@operation("list_standard_parts", "query",
+           "Browse the standard purchased parts this system can generate — "
+           "screws, nuts, washers, dowel pins, ball bearings, NEMA stepper "
+           "motors and T-slot extrusion. Each row's `key` goes to "
+           "insert_standard_part (on an assembly). Geometry is generated from "
+           "the published dimensional standard, never downloaded from a "
+           "supplier, and every row states its `fidelity`: a screw is a plain "
+           "shank with no thread helix, a bearing is its boundary envelope.",
+           {"category": {"enum": ["fastener", "bearing", "motor", "extrusion"],
+                         "description": "narrow to one kind"},
+            "search": {"type": "string",
+                       "description": "match against the designation, e.g. 'M4' or 'NEMA'"},
+            "limit": {"type": "integer", "default": 40,
+                      "description": "how many rows to return"}})
+def _list_standard_parts(doc_id, args):
+    from app.services import parts_catalog
+
+    _get(doc_id)
+    rows = parts_catalog.catalog()
+    category = args.get("category")
+    if category:
+        rows = [r for r in rows if r.category == category]
+    needle = str(args.get("search") or "").strip().lower()
+    if needle:
+        rows = [r for r in rows
+                if needle in r.designation.lower() or needle in r.key.lower()]
+    limit = max(1, min(int(args.get("limit", 40) or 40), 250))
+    return {"parts": [parts_catalog.describe(r) for r in rows[:limit]],
+            "count": len(rows), "returned": min(len(rows), limit),
+            "categories": parts_catalog.categories(),
+            "source": "generated from published dimensional standards "
+                      "(ISO 4762/4032/7089/2338/273, ISO 15, NEMA frames)"}
+
+
+@operation("list_templates", "query",
+           "The starter parts: a plate, an L-bracket, an open-top enclosure and "
+           "a stepped shaft. Each is an ordinary feature tree with its driving "
+           "dimensions already named as parameters, so the first edit is "
+           "changing a number. Build one with apply_template.",
+           {})
+def _list_templates(doc_id, args):
+    from app.services import templates
+
+    _get(doc_id)
+    return {"templates": templates.describe()}
+
+
+@operation("apply_template", "mutate",
+           "Build a starter part into this document — a plate, an L-bracket, an "
+           "enclosure or a shaft, with named driving parameters. The template "
+           "is an operation sequence, so what it builds is an ordinary editable "
+           "tree and every dimension is a parameter you can change with "
+           "set_parameters. Only into a document with no body yet: browse them "
+           "with list_templates.",
+           {"template": {"type": "string", "required": True,
+                         "description": "template key, e.g. plate or bracket"}})
+def _apply_template(doc_id, args):
+    from app.services import templates
+
+    doc = _get(doc_id)
+    key = require(args, "template")
+    template = templates.by_key(key)
+    if template is None:
+        raise BadArgument(
+            f"no template {key!r}; browse them with list_templates "
+            f"({', '.join(sorted(templates.TEMPLATES))})", arg="template")
+    # A template names its own parameters and combines with the whole body. Run
+    # into a part that already has one and it unions a plate onto whatever was
+    # there and silently rebinds `length` — so this is a starting point or it is
+    # nothing. The remedy is a different earlier step: a new document.
+    if feature_ops.has_solid(doc.feature_tree):
+        raise PreconditionFailed(
+            f"'{template.key}' is a starting point and this document already has "
+            f"a body; apply it to a new part instead")
+
+    outcome = templates.apply(template.key, doc_id)
+    if not outcome.get("ok"):
+        raise PreconditionFailed(
+            f"the '{template.key}' template stopped at step {outcome['failed_step']} "
+            f"({outcome['failed_op']}): {outcome['error']}")
+    return {"message": f"built {outcome['name']} with "
+                       f"{len(outcome['parameters'])} driving parameters",
+            **outcome}
+
+
+@operation("clearance_hole", "mutate",
+           "Cut a properly sized through-hole for a metric screw — ISO 273 "
+           "clearance, so an M4 gets 4.5 mm and not 4. Optionally counterbored "
+           "for a socket head. Takes the screw size rather than a diameter, "
+           "which is the number you actually know.",
+           {"screw": {"enum": list(_METRIC_SIZES), "required": True,
+                      "description": "the screw the hole is for, e.g. M4"},
+            "center": _VEC,
+            "depth": {"type": "number",
+                      "description": "how deep to cut. Defaults to through the body."},
+            "fit": {"enum": ["fine", "medium", "coarse"], "default": "medium",
+                    "description": "ISO 273 series; medium is the general-assembly one"},
+            "counterbore": {"type": "boolean", "default": False,
+                            "description": "sink the head flush (socket head cap screw)"},
+            "axis": _AXIS})
+def _clearance_hole(doc_id, args):
+    from app.services import parts_catalog
+
+    doc = _get(doc_id)
+    # Named `screw`, not `size`: `size` is a *length* everywhere else in this
+    # catalog and `units` folds that into the description at build time, so a
+    # thread designation under that name would be published as "in metres".
+    screw = require(args, "screw")
+    try:
+        hole = parts_catalog.clearance_hole(screw, str(args.get("fit", "medium")))
+    except KeyError as exc:
+        raise BadArgument(f"unknown screw or fit: {exc}", arg="screw") from exc
+
+    if not feature_ops.has_solid(doc.feature_tree):
+        raise PreconditionFailed(
+            "there is no material to drill through — this document has no body yet")
+
+    bbox = doc.derived.bbox
+    reach = 4.0 * max((bbox.max.z - bbox.min.z) if bbox else 0.05, 0.01)
+    depth = float(args.get("depth") or reach)
+    centre = args.get("center") or {"x": 0.0, "y": 0.0, "z": 0.0}
+    axis = args.get("axis") or {"x": 0.0, "y": 0.0, "z": 1.0}
+
+    tools = [{"type": "CylinderFeature", "name": f"{screw} clearance",
+              "params": {"radius": hole["radius_m"], "height": depth,
+                         "center": dict(centre), "axis": dict(axis)}}]
+    if args.get("counterbore"):
+        tools.append({"type": "CylinderFeature", "name": f"{screw} counterbore",
+                      "params": {"radius": hole["counterbore_dia_mm"] / 2000.0,
+                                 "height": hole["counterbore_depth_mm"] / 500.0,
+                                 "center": dict(centre), "axis": dict(axis)}})
+
+    tree = doc.feature_tree
+    for tool in tools:
+        tree = feature_ops.add_primitive(tree, tool, "subtract")
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": f"cut a {hole['diameter_mm']} mm clearance hole for {screw}",
+            "feature_id": tools[0]["id"], **hole,
+            "counterbored": bool(args.get("counterbore"))}
 
 
 @operation("export", "query",

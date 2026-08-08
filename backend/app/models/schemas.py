@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from enum import Enum
 
 
@@ -196,6 +196,16 @@ class DerivedCache(BaseModel):
     # signed-distance-field samplers.
     sampler: Optional[Literal["brep", "native", "numpy"]] = None
     mesh_hash: Optional[str] = None
+    # The feature tree with its parameter *expressions* substituted — the same
+    # nodes and the same ids, but every `"=length/2"` replaced by the number it
+    # resolved to. Present only when the document has parameters at all.
+    #
+    # `feature_tree` deliberately keeps the expression: that is what a parameter
+    # is, and the inspector has to show it. But everything that reads the tree as
+    # *geometry* — snap points, selection outlines, drag handles — wants numbers,
+    # and a client that does its own arithmetic here would be a second, drifting
+    # copy of the evaluator. This is derived, so it never enters `eval_key`.
+    numeric_tree: Optional[Dict[str, Any]] = None
 
 
 class OptimizationSetup(BaseModel):
@@ -287,6 +297,11 @@ class DesignDocument(BaseModel):
     optimization: Optional[OptimizationSetup] = None
     derived: DerivedCache = Field(default_factory=DerivedCache)
     provenance: Literal["text_to_cad", "manual", "generative", "mixed", "imported"] = "manual"
+    # Which standard part this document *is*, when it came from the catalog
+    # (`services/parts_catalog`). One document per (key, owner), reused, so the
+    # BOM says qty 8 rather than printing eight lines — see
+    # `services/standard_parts`.
+    catalog_ref: Optional[str] = None
     # The natural-language request this document came from. Previously the prompt
     # was used to derive a name, logged at INFO, and then dropped — so the one
     # piece of text that says what the part is *for* was unrecoverable, and no

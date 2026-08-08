@@ -20,6 +20,27 @@ function genId(): string {
   return `f${Date.now().toString(36)}${_idCounter}`
 }
 
+/**
+ * The tree to read as *geometry*, which is not always the tree to display.
+ *
+ * A parameter is stored as its expression — `size.x` is the string `"=length"`,
+ * because that is the design intent and the inspector has to show it. Anything
+ * doing arithmetic on those fields needs the numbers instead, and the server
+ * publishes them as `derived.numeric_tree`: the same nodes and the same ids
+ * with the expressions substituted. Resolving them here would be a second copy
+ * of the evaluator, drifting from the one that produced the body on screen.
+ *
+ * Falls back to the stored tree, which is correct for the (overwhelmingly
+ * common) document with no parameters at all, and for one whose parameters do
+ * not currently resolve.
+ */
+export function geometryTree(doc: {
+  feature_tree: FeatureTreeDict
+  derived?: { numeric_tree?: FeatureTreeDict | null }
+}): FeatureTreeDict {
+  return doc.derived?.numeric_tree ?? doc.feature_tree
+}
+
 export function isBoolean(node: FeatureNode): boolean {
   return node.type === 'BooleanFeature' || node.type === 'FilletFeature' || node.type === 'ChamferFeature'
 }
