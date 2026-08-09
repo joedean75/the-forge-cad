@@ -3,254 +3,244 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Forge — Generative CAD/CAM in the browser</title>
-  <meta name="description" content="Forge — generative CAD/CAM in the browser. Model, optimize, validate, make, and machine a part in one tab." />
+  <title>Forge — browser CAD your agent can drive</title>
+  <meta name="description" content="Model parts in the browser on an exact B-rep kernel. All 76 operations are in one catalog, so an agent drives the same part you just drew." />
 </head>
 <body>
+
 <!-- ================= NAV ================= -->
 <header class="nav">
   <div class="wrap nav-in">
     <a class="brand" href="#top" aria-label="Forge home">
       <svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M4 19 L12 6 L20 19 M4 19 L20 19 M12 6 L12 19" stroke="var(--void)" stroke-width="1.3" stroke-linejoin="round"/>
-        <circle cx="4" cy="19" r="1.9" fill="var(--ink-2)"/><circle cx="20" cy="19" r="1.9" fill="var(--ink-2)"/>
+        <path d="M4 19 L12 6 L20 19 M4 19 L20 19 M12 6 L12 19" stroke="var(--rule)" stroke-width="1.3" stroke-linejoin="round"/>
+        <circle cx="4" cy="19" r="1.9" fill="var(--swarf)"/><circle cx="20" cy="19" r="1.9" fill="var(--swarf)"/>
         <circle cx="12" cy="6" r="2.5" fill="var(--ember)"/>
       </svg>
-      <span><b>Forge</b><small>Design Studio</small></span>
+      <span>
+        <span class="brand-name">Forge</span>
+        <span class="brand-sub">Design Studio</span>
+      </span>
     </a>
     <nav class="nav-links">
-      <a href="#pipeline">Pipeline</a>
-      <a href="#optimize">Generative</a>
-      <a href="#pricing">Pricing</a>
-      <a href="#instrument">Under the hood</a>
+      <a href="#kernels">Kernels</a>
+      <a href="#output">Output</a>
+      <a href="#agents">Agents</a>
     </nav>
     <div class="nav-cta">
       <a class="signin" href="/#signin">Sign in</a>
-      <a class="btn btn-primary" href="/#signin">Start free</a>
+      <a class="btn btn-primary" href="/#signin">Start a part</a>
     </div>
   </div>
 </header>
 
-<a id="top"></a>
+<main id="top">
 
-<!-- ================= HERO ================= -->
-<section class="hero">
-  <div class="wrap hero-grid">
-    <div class="hero-copy">
-      <span class="eyebrow">Generative CAD / CAM · in the browser</span>
-      <h1>Parts that follow the <span class="hot">load path.</span></h1>
-      <p class="lede">Describe a part or sketch it, let the solver grow structure only where the loads run, then validate and cut it — the whole pipeline in one browser tab.</p>
-      <div class="hero-cta">
-        <a class="btn btn-primary" href="/#signin">Start free</a>
-        <a class="btn btn-ghost" href="#pipeline">See how it works</a>
-      </div>
-      <div class="stats">
-        <div class="stat"><div class="n tab">5&#8202;→&#8202;1</div><div class="l">stages, one part</div></div>
-        <div class="stat"><div class="n tab">3D SIMP</div><div class="l">real topology solver</div></div>
-        <div class="stat"><div class="n tab">STEP&#8202;·&#8202;G-code</div><div class="l">production output</div></div>
-      </div>
-    </div>
+  <!-- ================= HERO ================= -->
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <p class="eyebrow">Browser CAD · exact B-rep kernel</p>
+        <h1 class="display">The ribbon and the agent call the <span class="same">same API</span>.</h1>
+        <p class="lede">
+          Model a part in the browser on a kernel that keeps exact geometry — sketches,
+          sheet metal, fillets on edges you pick. Every operation behind the UI is published
+          in one catalog, so there is no separate AI mode, because there is no second API.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="/#signin">Start a part</a>
+          <a class="btn btn-ghost" href="#agents">See the catalog</a>
+        </div>
 
-    <div class="hero-viz">
-      <span class="viz-legend"><span>void</span><i></i><span>loaded</span></span>
-      <canvas id="lattice" aria-label="A bracket lattice whose members heat from cool steel to ember along the load path, illustrating topology optimization."></canvas>
-      <span class="viz-tag"><span class="dot"></span>compliance&#8202;-&#8202;minimized · vol&#8202;0.32</span>
-    </div>
-  </div>
-</section>
-
-<!-- ================= PIPELINE ================= -->
-<section class="band" id="pipeline">
-  <div class="wrap">
-    <div class="band-head rise">
-      <span class="eyebrow">The pipeline</span>
-      <h2>Five stages. One part, start to finish.</h2>
-      <p>Every stage reads the same feature tree — a generative study is just another feature, so you can move between drawing, solving, and cutting without ever exporting to the next tool.</p>
-    </div>
-    <div class="spine rise">
-      <div class="station"><span class="node" aria-hidden="true">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 8l9-5 9 5v8l-9 5-9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>
-      </span><div class="idx tab">01</div><h3>Model</h3><p>Prompt it, or sketch and pull a parametric feature tree.</p></div>
-      <div class="station"><span class="node" aria-hidden="true">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 6h6a4 4 0 014 4v6"/></svg>
-      </span><div class="idx tab">02</div><h3>Optimize</h3><p>Hand the solver loads and keep-outs; it removes the rest.</p></div>
-      <div class="station on"><span class="node" aria-hidden="true">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l2 6 4-14 2 8h6"/></svg>
-      </span><div class="idx tab">03</div><h3>Validate</h3><p>Check stress and displacement against the case.</p></div>
-      <div class="station"><span class="node" aria-hidden="true">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 4l6 6-9 9-6 1 1-6 8-8z"/><path d="M12 6l6 6"/></svg>
-      </span><div class="idx tab">04</div><h3>Make</h3><p>Check for manufacturability, get a quote, post the G-code.</p></div>
-      <div class="station"><span class="node" aria-hidden="true">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="9" width="16" height="8" rx="1.5"/><path d="M8 9V5h8v4M8 17v2h8v-2"/></svg>
-      </span><div class="idx tab">05</div><h3>Machine</h3><p>Send it to a Klipper printer and watch the job live.</p></div>
-    </div>
-  </div>
-</section>
-
-<!-- ================= FEATURE: OPTIMIZE ================= -->
-<section class="band" id="optimize" style="padding-top:64px;">
-  <div class="wrap">
-    <div class="feature">
-      <div class="f-copy rise">
-        <span class="eyebrow">Generative optimization</span>
-        <h3>Give it the loads. Keep only what carries them.</h3>
-        <p>A real 3D SIMP compliance solve runs on the part you already modeled — not an abstract box. Pin the faces that must stay, mark the space that can't be touched, and set how much material you'll spend.</p>
-        <ul class="flist">
-          <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Preserve regions and obstacles are honored exactly.</li>
-          <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Runs async — watch the density field converge.</li>
-          <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>The result stays editable — fillet or bore it afterward.</li>
-        </ul>
+        <hr class="scribe-rule" style="margin-top:38px" />
+        <div class="proof">
+          <div>
+            <div class="proof-n mono">76</div>
+            <div class="proof-l">operations, one catalog</div>
+          </div>
+          <div>
+            <div class="proof-n mono">42 / 34</div>
+            <div class="proof-l">mutate / query</div>
+          </div>
+        </div>
       </div>
-      <div class="f-art rise" aria-hidden="true">
-        <canvas id="mini-lattice" style="width:100%;aspect-ratio:16/10;display:block;border-radius:8px;"></canvas>
-        <div class="art-cap"><span>iteration 48 / 60</span><span class="chip-ok"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>converged</span></div>
-      </div>
-    </div>
-  </div>
-</section>
 
-<!-- ================= FEATURE: MODEL ================= -->
-<section class="band" style="border-top:none;padding-top:24px;">
-  <div class="wrap">
-    <div class="feature flip">
-      <div class="f-copy rise">
-        <span class="eyebrow">Model &amp; sketch</span>
-        <h3>Describe it in plain words. Edit it like CAD.</h3>
-        <p>Type a part in one line and get a full parametric feature tree — primitives, booleans, holes, patterns, constrained sketches. Every node is editable; nothing is a dead mesh.</p>
-        <ul class="flist">
-          <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Runs credential-free on a built-in parser; add an LLM key for more.</li>
-          <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>2D sketch solver with real constraints, arcs, and splines.</li>
-          <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Drive it all from an agent — every action is one typed operation.</li>
-        </ul>
-      </div>
-      <div class="f-art rise" aria-hidden="true">
-        <div class="promptbar"><span class="spark">✦</span><span>100×60×20&#8239;mm bracket with four corner holes</span><span class="cur"></span></div>
-        <div class="tree" style="margin-top:16px;">
-          <div class="row"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 8l9-5 9 5v8l-9 5-9-5V8z"/></svg>Base plate<span class="m">100×60×20</span></div>
-          <div class="row sel"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>Corner holes<span class="m">×4 · ⌀6</span></div>
-          <div class="row d1"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>Linear pattern<span class="m">2×2</span></div>
-          <div class="row"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 12h16M12 4v16"/></svg>Fillet edges<span class="m">r 3</span></div>
+      <!-- SIGNATURE: the flat pattern, and the calls that made it -->
+      <div class="ledger" id="ledger">
+        <div class="ledger-head">
+          <span class="ledger-title">Bracket · flat pattern</span>
+          <span class="ledger-badge">1.5 mm · <b>5052-H32</b></span>
+        </div>
+
+        <svg class="pattern" viewBox="-16 -15 182 108" role="img"
+             aria-label="Flat pattern of a sheet metal bracket: a 149.178 by 84.178 millimetre blank with two bend lines.">
+          <!-- blank outline — the CUT layer -->
+          <path class="pat-cut" d="M0 0 H149.178 V84.178 H0 Z" />
+          <!-- bend lines — the BEND layer, marked not cut -->
+          <path class="pat-bend" d="M120 0 V84.178" />
+          <path class="pat-bend" d="M0 24.178 H149.178" />
+
+          <!-- witness + dimension, drawn the way a drawing does it -->
+          <path class="pat-dim" d="M0 -6 H149.178 M0 -8.5 V-3.5 M149.178 -8.5 V-3.5" />
+          <text class="pat-label" x="74.6" y="-8.5" text-anchor="middle">149.178</text>
+          <path class="pat-dim" d="M-6 0 V84.178 M-8.5 0 H-3.5 M-8.5 84.178 H-3.5" />
+          <text class="pat-label" x="-9" y="42" text-anchor="middle" transform="rotate(-90 -9 42)">84.178</text>
+
+          <text class="pat-layer" x="2.5" y="80.5" fill="var(--swarf-dim)">CUT</text>
+          <text class="pat-layer" x="122.5" y="80.5" fill="var(--ember)">BEND</text>
+        </svg>
+
+        <div class="ops">
+          <div class="op"><span class="op-i">1</span><span class="op-name">add_sheet_metal</span><span class="op-args">120 × 60 × 1.5</span></div>
+          <div class="op"><span class="op-i">2</span><span class="op-name">add_flange</span><span class="op-args">edge x+ · 90°</span></div>
+          <div class="op"><span class="op-i">3</span><span class="op-name">add_flange</span><span class="op-args">edge y− · −90°</span></div>
+          <div class="op is-result"><span class="op-i">4</span><span class="op-name">flat_pattern</span><span class="op-args">149.178 × 84.178</span></div>
+        </div>
+
+        <div class="ledger-foot">
+          <span>K-factor 0.44 · allowance 4.178 mm</span>
+          <span>Four calls. Yours or your agent's.</span>
         </div>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<!-- ================= FEATURE: MAKE + MACHINE ================= -->
-<section class="band" style="border-top:none;padding-top:24px;">
-  <div class="wrap">
-    <div class="feature">
-      <div class="f-copy rise">
-        <span class="eyebrow">Make &amp; machine</span>
-        <h3>From solid to toolpath to a running printer.</h3>
-        <p>Check the part against your process, get a quick cost, then generate 2.5-axis G-code and stream it straight to a Klipper machine — temperatures, position, and progress in view the whole time.</p>
-        <ul class="flist">
-          <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>DFM checks and a quote per process.</li>
-          <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Facing, pocketing, contour and drilling toolpaths.</li>
-          <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Moonraker control — upload, start, and monitor the run.</li>
-        </ul>
+  <!-- ================= KERNELS ================= -->
+  <section class="section" id="kernels">
+    <div class="wrap">
+      <div class="section-head rise">
+        <p class="eyebrow">Two kernels</p>
+        <h2 class="display">Exact first. The field when it has to be.</h2>
+        <p class="lede">
+          A dimension should be right because the geometry is right, not because you meshed
+          it finely enough. Forge never mixes the two in one body — half exact and half
+          approximated is worse than either.
+        </p>
       </div>
-      <div class="f-art rise" aria-hidden="true">
-        <svg viewBox="0 0 320 200" style="width:100%;display:block;border-radius:8px;background:var(--ground-2);">
-          <defs><pattern id="g" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0H0V20" fill="none" stroke="var(--hair)" stroke-width="0.6"/></pattern></defs>
-          <rect width="320" height="200" fill="url(#g)"/>
-          <rect x="60" y="46" width="200" height="108" rx="6" fill="none" stroke="var(--void)" stroke-width="1.4"/>
-          <path id="tp" d="M74 60 H246 V74 H74 V88 H246 V102 H74 V116 H246 V130 H74 V140" fill="none" stroke="var(--ember)" stroke-width="1.6" stroke-linejoin="round" stroke-dasharray="620" stroke-dashoffset="620"><animate attributeName="stroke-dashoffset" from="620" to="0" dur="3.2s" begin="0.4s" fill="freeze"/></path>
-          <circle r="3.5" fill="var(--filament)"><animateMotion dur="3.2s" begin="0.4s" fill="freeze"><mpath href="#tp"/></animateMotion></circle>
-        </svg>
-        <div class="art-cap"><span>pocket · ⌀3 flat · 600&#8239;mm/min</span><span class="chip-ok"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>post: klipper</span></div>
+      <div class="kernels">
+        <article class="kernel kernel-first rise">
+          <p class="card-tag">Tried first</p>
+          <h3>Exact B-rep</h3>
+          <p>Faces and edges you can click and measure. Resolution stops changing the answer and only controls how smoothly a curve is drawn.</p>
+          <ul>
+            <li>Fillets and chamfers on the edges you select</li>
+            <li>Shells that open a named face</li>
+            <li>STEP and IGES in and out, analytic</li>
+            <li>Sheet metal, sketches, revolve, sweep, loft</li>
+          </ul>
+        </article>
+        <article class="kernel rise">
+          <p class="card-tag">Where it wins</p>
+          <h3>Distance fields</h3>
+          <p>What implicit geometry does better, with a native Rust sampler on the hot path.</p>
+          <ul>
+            <li>Density fields from the topology optimizer</li>
+            <li>Mesh imports with nothing exact to recover</li>
+            <li>Smooth blends between separate bodies</li>
+            <li>Layer-by-layer slicing and section cuts</li>
+          </ul>
+        </article>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<!-- ================= INSTRUMENT / TRUST ================= -->
-<section class="band" id="instrument">
-  <div class="wrap">
-    <div class="band-head rise">
-      <span class="eyebrow">Under the hood</span>
-      <h2>Built like an instrument, not a demo.</h2>
-      <p>The parts of Forge that matter are real: a from-scratch geometry kernel and a genuine optimizer, wrapped in an API an agent can drive.</p>
+  <!-- ================= OUTPUT ================= -->
+  <section class="section" id="output">
+    <div class="wrap">
+      <div class="section-head rise">
+        <p class="eyebrow">Output</p>
+        <h2 class="display">It leaves as something a machine reads.</h2>
+        <p class="lede">
+          A part that can only be admired in a viewport is not finished. Every format below
+          comes off the same body, measured on the exact geometry.
+        </p>
+      </div>
+      <div class="out-list rise">
+        <div class="out">
+          <span class="out-fmt">STEP</span>
+          <p class="out-what">Analytic solids from the B-rep kernel — the file a supplier quotes from, not a faceted approximation of one.</p>
+        </div>
+        <div class="out">
+          <span class="out-fmt">DXF</span>
+          <p class="out-what">Flat patterns with the outline on <span class="mono">CUT</span> and bend lines on <span class="mono">BEND</span>, so the laser cuts the blank and marks the folds.</p>
+        </div>
+        <div class="out">
+          <span class="out-fmt">G-code</span>
+          <p class="out-what">FDM slicing, 2.5D milling, and kerf-compensated profile cutting, posted to the dialect your machine speaks.</p>
+        </div>
+        <div class="out">
+          <span class="out-fmt">Drawings</span>
+          <p class="out-what">Dimensioned views with GD&amp;T and ISO-286 fits, as SVG to read or DXF the next tool can measure.</p>
+        </div>
+      </div>
     </div>
-    <div class="instr rise">
-      <div class="cell"><div class="tagn">Kernel</div><div class="k" style="margin-top:8px;">SDF geometry engine</div><div class="v">Primitives and booleans evaluated as signed distance fields, meshed by marching cubes.</div></div>
-      <div class="cell"><div class="tagn">Solver</div><div class="k" style="margin-top:8px;">3D SIMP optimizer</div><div class="v">Compliance minimization on a voxel mesh, GPU-accelerated where available.</div></div>
-      <div class="cell"><div class="tagn">Interchange</div><div class="k" style="margin-top:8px;">STEP &amp; STL export</div><div class="v">Take the geometry out to any downstream tool, or cut it here.</div></div>
-      <div class="cell"><div class="tagn">Agent-native</div><div class="k" style="margin-top:8px;">One typed operation API</div><div class="v">Sixteen operations, one mutation path — the same surface the UI and an MCP agent use.</div></div>
-    </div>
-  </div>
-</section>
+  </section>
 
-<!-- ================= PRICING ================= -->
-<section class="band" id="pricing">
-  <div class="wrap">
-    <div class="band-head rise" style="max-width:none;text-align:center;">
-      <span class="eyebrow center" style="justify-content:center;">Pricing</span>
-      <h2 style="margin-top:14px;">Start free. Pay when you ship.</h2>
-      <p style="margin-left:auto;margin-right:auto;">Plans gate throughput and the production features — resolution, generative studies, CAM, and machine control.</p>
-    </div>
-    <div class="plans">
-      <div class="plan rise">
-        <div class="pname">Free</div>
-        <div class="price tab">$0</div>
-        <div class="who">For trying the whole pipeline on real parts.</div>
-        <ul>
-          <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg><span><b>3 documents</b>, resolution ≤ 64</span></li>
-          <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg><span>Model, sketch &amp; validate</span></li>
-          <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg><span><span class="tab">200</span> operations / month</span></li>
-        </ul>
-        <a class="btn btn-ghost" href="/#signin">Start free</a>
+  <!-- ================= AGENTS ================= -->
+  <section class="section" id="agents">
+    <div class="wrap agent">
+      <div class="rise">
+        <p class="eyebrow">For agents</p>
+        <h2 class="display">Parity, not a plugin.</h2>
+        <p class="lede">
+          Every tool in the ribbon runs an operation from the catalog. An agent reads that
+          same catalog — typed arguments, JSON Schema, what each one is for — and calls them
+          over REST or MCP. Same code path, so if a person can do it, an agent can.
+        </p>
+        <p class="lede" style="margin-top:16px">
+          Operations verify their own work, so an agent can check the body it just built
+          instead of assuming.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-ghost" href="/api/platform">Read the manifest</a>
+        </div>
       </div>
-      <div class="plan loaded rise">
-        <div class="pname">Pro</div>
-        <div class="price tab">$49<span> / mo</span></div>
-        <div class="who">For engineers taking parts to production.</div>
-        <ul>
-          <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg><span><b>200 documents</b>, resolution ≤ 192</span></li>
-          <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg><span>Generative studies, CAM &amp; STEP export</span></li>
-          <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg><span>Machine control &amp; API keys</span></li>
-          <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg><span><span class="tab">20,000</span> operations / month</span></li>
-        </ul>
-        <a class="btn btn-primary" href="/#signin">Start Pro</a>
-      </div>
-      <div class="plan rise">
-        <div class="pname">Enterprise</div>
-        <div class="price tab">$499<span> / mo</span></div>
-        <div class="who">For teams with shared parts and seats.</div>
-        <ul>
-          <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg><span><b>Unlimited</b> documents, resolution ≤ 256</span></li>
-          <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg><span>Everything in Pro, <span class="tab">25</span> seats</span></li>
-          <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg><span>Role-based sharing &amp; version history</span></li>
-        </ul>
-        <a class="btn btn-ghost" href="/">Talk to us</a>
+      <div class="call rise">
+        <div class="call-head">POST /api/documents/{id}/op</div>
+        <div class="call-body"><span class="c">// the same call the Flange tool makes</span>
+{
+  <span class="k">"op"</span>: <span class="s">"add_flange"</span>,
+  <span class="k">"args"</span>: {
+    <span class="k">"edge"</span>:   <span class="s">"x+"</span>,
+    <span class="k">"angle"</span>:  90,
+    <span class="k">"length"</span>: 0.025
+  }
+}</div>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<!-- ================= CLOSING ================= -->
-<section class="close">
-  <div class="wrap">
-    <div class="rise">
-      <h2>Start where the load starts.</h2>
-      <p>Model a part, let it grow toward the forces it carries, and cut it — no install, no export dance.</p>
-      <a class="btn btn-primary" href="#" style="padding:13px 26px;font-size:15px;">Start free</a>
+  <!-- ================= CLOSE ================= -->
+  <section class="close">
+    <div class="wrap">
+      <p class="eyebrow">No credentials required</p>
+      <h2 class="display">Start a part.</h2>
+      <p class="lede">
+        The rule-based modeller, the kernels, quoting and the whole operation catalog run
+        without an API key. Add one when you want an agent doing the typing.
+      </p>
+      <div class="close-actions">
+        <a class="btn btn-primary" href="/#signin">Start a part</a>
+        <a class="btn btn-ghost" href="#kernels">How it is built</a>
+      </div>
     </div>
-  </div>
-</section>
+  </section>
+
+</main>
 
 <footer class="foot">
   <div class="wrap foot-in">
-    <a class="brand" href="#top">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 19 L12 6 L20 19 M4 19 L20 19 M12 6 L12 19" stroke="var(--void)" stroke-width="1.3" stroke-linejoin="round"/><circle cx="12" cy="6" r="2.5" fill="var(--ember)"/></svg>
-      <span><b>Forge</b></span>
-    </a>
-    <span class="fnote">The Forge · generative CAD/CAM</span>
-    <div class="foot-links">
-      <a href="#pipeline">Pipeline</a><a href="#pricing">Pricing</a><a href="#instrument">Under the hood</a><a href="/">Docs</a>
-    </div>
+    <span class="brand-name">Forge</span>
+    <span class="foot-note">Browser CAD/CAM · exact B-rep + distance fields</span>
+    <nav class="foot-links">
+      <a href="#kernels">Kernels</a>
+      <a href="#output">Output</a>
+      <a href="#agents">Agents</a>
+      <a href="/#signin">Sign in</a>
+    </nav>
   </div>
 </footer>
-  <script type="module" src="/src/landing/main.ts"></script>
+
+<script type="module" src="/src/landing/main.ts"></script>
 </body>
 </html>
