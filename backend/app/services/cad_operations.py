@@ -57,6 +57,12 @@ _AXIS = {**_VEC, "description": "direction to cut along; +Z by default"}
 # the JSON Schema a constrained decoder is pointed at, and a schema that
 # depends on an import cycle is a schema that is sometimes empty.
 _METRIC_SIZES = ("M2", "M2.5", "M3", "M4", "M5", "M6", "M8", "M10", "M12")
+# Same reasoning. The generated catalog only fills the first four; the rest
+# exist because an imported supplier part has to be filed somewhere, and
+# "electronics" is where a connector goes.
+_PART_CATEGORIES = ("fastener", "bearing", "motor", "extrusion", "electronics",
+                    "pneumatic", "hardware", "other")
+_PART_SOURCES = ("3dfindit", "traceparts", "grabcad", "manufacturer", "other")
 
 # `add_primitive` and `add_modifier` used to declare `params: {"type": "object"}`
 # — an opaque blob whose real shape lived only in prose. That is the one thing a
@@ -1678,37 +1684,30 @@ def _verify_against_spec(doc_id, args):
 
 
 @operation("list_standard_parts", "query",
-           "Browse the standard purchased parts this system can generate — "
-           "screws, nuts, washers, dowel pins, ball bearings, NEMA stepper "
-           "motors and T-slot extrusion. Each row's `key` goes to "
-           "insert_standard_part (on an assembly). Geometry is generated from "
-           "the published dimensional standard, never downloaded from a "
-           "supplier, and every row states its `fidelity`: a screw is a plain "
-           "shank with no thread helix, a bearing is its boundary envelope.",
-           {"category": {"enum": ["fastener", "bearing", "motor", "extrusion"],
+           "Browse the purchased parts you can place. Two kinds in one list. "
+           "Generated: screws, nuts, washers, dowel pins, ball bearings, NEMA "
+           "steppers and T-slot extrusion, built from the published "
+           "dimensional standard rather than downloaded from anyone. Imported: "
+           "supplier CAD files this account brought in itself. Every row states "
+           "`fidelity` (`as-standard` / `envelope` / `supplier`) and `geometry` "
+           "(`exact` — faces and edges are addressable — or `mesh`). Each "
+           "row\'s `key` goes to insert_standard_part on an assembly.",
+           {"category": {"enum": list(_PART_CATEGORIES),
                          "description": "narrow to one kind"},
             "search": {"type": "string",
-                       "description": "match against the designation, e.g. 'M4' or 'NEMA'"},
+                       "description": "match against the designation, e.g. \'M4\' or \'NEMA\'"},
+            "source": {"enum": list(_PART_SOURCES),
+                       "description": "only the parts imported from this "
+                                      "portal; omit for the whole catalog"},
             "limit": {"type": "integer", "default": 40,
                       "description": "how many rows to return"}})
 def _list_standard_parts(doc_id, args):
-    from app.services import parts_catalog
+    from app.services import standard_parts
 
-    _get(doc_id)
-    rows = parts_catalog.catalog()
-    category = args.get("category")
-    if category:
-        rows = [r for r in rows if r.category == category]
-    needle = str(args.get("search") or "").strip().lower()
-    if needle:
-        rows = [r for r in rows
-                if needle in r.designation.lower() or needle in r.key.lower()]
-    limit = max(1, min(int(args.get("limit", 40) or 40), 250))
-    return {"parts": [parts_catalog.describe(r) for r in rows[:limit]],
-            "count": len(rows), "returned": min(len(rows), limit),
-            "categories": parts_catalog.categories(),
-            "source": "generated from published dimensional standards "
-                      "(ISO 4762/4032/7089/2338/273, ISO 15, NEMA frames)"}
+    doc = _get(doc_id)
+    return standard_parts.listing(
+        doc.owner_id, category=args.get("category"), search=args.get("search"),
+        source=args.get("source"), limit=int(args.get("limit", 40) or 40))
 
 
 @operation("list_templates", "query",

@@ -51,6 +51,7 @@ import type {
   ExportArtifact,
   ReleasePackageJob,
   StandardPart,
+  StandardPartPage,
   PartTemplate,
 } from '../../../shared/types'
 
@@ -305,16 +306,49 @@ export const api = {
    * opening a *new* assembly holds neither, and that is exactly when they reach
    * for a screw. Both doors read the same catalog.
    */
-  listStandardParts: (opts?: { category?: string; search?: string; limit?: number }) => {
+  listStandardParts: (opts?: { category?: string; search?: string; source?: string; limit?: number }) => {
     const query = new URLSearchParams()
     if (opts?.category) query.set('category', opts.category)
     if (opts?.search) query.set('search', opts.search)
+    if (opts?.source) query.set('source', opts.source)
     query.set('limit', String(opts?.limit ?? 60))
-    return fetchJson<{
-      parts: StandardPart[]; count: number; returned: number
-      categories: Record<string, number>; source: string
-    }>(`/documents/meta/standard-parts?${query}`)
+    return fetchJson<StandardPartPage>(`/documents/meta/standard-parts?${query}`)
   },
+  /**
+   * File a supplier's CAD file as a purchased part of this account's.
+   *
+   * Multipart, like every other import, because an operation's arguments are
+   * JSON and a STEP body is not. *Placing* the result is an operation, so
+   * nothing a person imports is out of an agent's reach.
+   *
+   * The file comes from the user. No portal is called from here — 3Dfindit
+   * disallows it and TraceParts' terms forbid copying its data into another
+   * catalog, so the links in `sources` are searches to go and fetch one by
+   * hand under your own account.
+   */
+  importSupplierPart: async (file: File, meta: {
+    designation?: string; source?: string; manufacturer?: string
+    part_number?: string; category?: string; source_url?: string
+    notes?: string; units?: string
+  }) => {
+    const form = new FormData()
+    form.append('file', file)
+    for (const [key, value] of Object.entries(meta)) {
+      if (value) form.append(key, value)
+    }
+    const res = await fetch('/api/documents/meta/supplier-parts',
+                            { method: 'POST', body: form, headers: authHeaders() })
+    if (!res.ok) {
+      let detail: unknown = null
+      try { detail = (await res.json())?.detail } catch { /* non-JSON */ }
+      throw new ApiError(res.status, detail, 'Could not import that file')
+    }
+    return res.json() as Promise<StandardPart>
+  },
+  /** Take an imported part out of the catalog. Its document is left alone. */
+  forgetSupplierPart: (key: string) =>
+    fetchJson<{ ok: boolean; key: string }>(
+      `/documents/meta/supplier-parts/${encodeURIComponent(key)}`, { method: 'DELETE' }),
   /** The starter parts, and building one. Both are ordinary operations — a
    *  template is applied *into* a document, so there is always an id to
    *  address, which is why neither needed a REST route of its own. */

@@ -603,10 +603,11 @@ def cam_document(body: CamRequest,
 def list_standard_parts(
     category: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
     limit: int = Query(60, ge=1, le=250),
     acc: accounts.Account = Depends(current_account),
 ):
-    """The standard purchased parts, as a resource rather than an operation.
+    """The purchased parts, as a resource rather than an operation.
 
     `list_standard_parts` also exists in the operation catalog, because an agent
     is always holding a document or an assembly id and the whole surface is
@@ -615,22 +616,73 @@ def list_standard_parts(
     a screw. Requiring an id there would be the same mistake as making "create
     an assembly" an operation — an argument that means nothing.
 
-    Both doors read `services/parts_catalog`, so there is one catalog.
+    Both doors go through `standard_parts.listing`, so there is one catalog and
+    it is scoped to the caller: the generated parts everyone has, plus the
+    supplier files this account imported.
     """
-    from app.services import parts_catalog
+    from app.services import standard_parts
 
-    rows = parts_catalog.catalog()
-    if category:
-        rows = [r for r in rows if r.category == category]
-    needle = (search or "").strip().lower()
-    if needle:
-        rows = [r for r in rows
-                if needle in r.designation.lower() or needle in r.key.lower()]
-    return {"parts": [parts_catalog.describe(r) for r in rows[:limit]],
-            "count": len(rows), "returned": min(len(rows), limit),
-            "categories": parts_catalog.categories(),
-            "source": "generated from published dimensional standards "
-                      "(ISO 4762/4032/7089/2338/273, ISO 15, NEMA frames)"}
+    return standard_parts.listing(acc.id, category=category, search=search,
+                                  source=source, limit=limit)
+
+
+@router.post("/meta/supplier-parts")
+async def import_supplier_part(
+    file: UploadFile = File(...),
+    designation: str = Form(""),
+    source: str = Form("other"),
+    manufacturer: str = Form(""),
+    part_number: str = Form(""),
+    category: str = Form("other"),
+    source_url: str = Form(""),
+    notes: str = Form(""),
+    units: str = Form("auto"),
+    acc: accounts.Account = Depends(current_account),
+):
+    """File a supplier's CAD file as a purchased part of this account's.
+
+    A multipart upload rather than an operation, for the reason every other
+    import is: an operation's arguments are JSON and a STEP body is not. The
+    *placing* of the part is an operation (`insert_standard_part`), so an agent
+    can still use everything a person imports.
+
+    This is the only lawful way this catalog grows beyond the generated
+    standards — see the module docstring of `services/supplier_parts`. The
+    person who accepted the portal's terms fetches the file; nothing here
+    reaches out to a portal, and nothing is shared beyond the importing account.
+    """
+    from app.services import import_service, supplier_parts
+
+    data = await file.read()
+    try:
+        row = supplier_parts.import_file(
+            filename=file.filename or "part.step", data=data, owner_id=acc.id,
+            designation=designation, source=source, manufacturer=manufacturer,
+            part_number=part_number, category=category, source_url=source_url,
+            notes=notes, units=units)
+    except (ValueError, import_service.ImportError_) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("supplier part import failed")
+        raise HTTPException(status_code=400, detail="Could not import this file")
+    return supplier_parts.describe(row)
+
+
+@router.delete("/meta/supplier-parts/{key:path}")
+def forget_supplier_part(key: str, acc: accounts.Account = Depends(current_account)):
+    """Take an imported part out of the catalog.
+
+    Its document is left alone on purpose: the part may be placed in three
+    assemblies, and a catalog row is a shortcut to placing it again rather than
+    the thing keeping it alive. Deleting the document is the library's job.
+    """
+    from app.services import supplier_parts
+
+    if not supplier_parts.forget(key, acc.id):
+        raise HTTPException(status_code=404, detail=f"no imported part {key!r}")
+    return {"ok": True, "key": key}
 
 
 @router.get("/meta/materials")

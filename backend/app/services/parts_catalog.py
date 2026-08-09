@@ -469,6 +469,11 @@ def describe(entry: Entry) -> Dict[str, Any]:
         "standard": entry.standard,
         "material_id": entry.material,
         "fidelity": entry.fidelity,
+        # Always present, on every row of the listing, alongside the supplier
+        # parts that share it. Everything here is a tree of primitives, so it
+        # builds exactly on the B-rep kernel — an imported STL does not, and a
+        # field that appears on only some rows is one a caller reads wrong.
+        "geometry": "exact",
         "notes": entry.notes,
         "size_mm": envelope_mm(entry),
         **({"typical_mass_g": entry.typical_mass_g}

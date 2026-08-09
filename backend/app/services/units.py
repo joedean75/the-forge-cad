@@ -96,6 +96,8 @@ UNITLESS = frozenset({
     "screw",
     # the starter-part gallery: which template to build
     "template",
+    # the purchased-parts listing: which portal an imported part came from
+    "source",
 })
 
 

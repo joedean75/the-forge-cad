@@ -155,7 +155,7 @@ const TABS: { id: InspectorTab; label: string }[] = [
 ]
 
 const TAB_TITLE: Record<InspectorTab, string> = {
-  place: 'Placement', parts: 'Standard parts', mates: 'Mates',
+  place: 'Placement', parts: 'Purchased parts', mates: 'Mates',
   fit: 'Interference', bom: 'Bill of materials',
 }
 

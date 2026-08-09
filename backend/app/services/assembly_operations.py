@@ -105,26 +105,43 @@ def _insert_part(asm_id, args):
                          "description": "how many to place"}},
            subject="assembly")
 def _insert_standard_part(asm_id, args):
-    from app.services import parts_catalog, standard_parts
+    from app.services import parts_catalog, standard_parts, supplier_parts
 
     asm = _assembly(asm_id)
     key = require(args, "key")
-    entry = parts_catalog.by_key(key)
-    if entry is None:
-        raise BadArgument(
-            f"no catalog part {key!r}; browse them with list_standard_parts", arg="key")
     quantity = int(args.get("quantity", 1) or 1)
     if not 1 <= quantity <= 64:
         raise BadArgument("quantity must be between 1 and 64", arg="quantity")
 
-    part_id = standard_parts.document_for(entry, owner_id=asm.owner_id)
+    # One `key` covers both halves of the catalog. A supplier part is resolved
+    # against the *assembly owner's* imports, not the caller's, for the same
+    # reason `document_for` creates under that account: `add_component` refuses
+    # a part the assembly's owner cannot open.
+    if str(key).startswith(supplier_parts.PREFIX):
+        row = supplier_parts.by_key(key, asm.owner_id)
+        if row is None:
+            raise BadArgument(
+                f"no imported part {key!r} on this account; list them with "
+                f"list_standard_parts", arg="key")
+        designation = row["designation"]
+    else:
+        entry = parts_catalog.by_key(key)
+        if entry is None:
+            raise BadArgument(
+                f"no catalog part {key!r}; browse them with list_standard_parts",
+                arg="key")
+        designation = entry.designation
+
+    part_id = standard_parts.document_for_key(key, owner_id=asm.owner_id)
+    if part_id is None:
+        raise BadArgument(f"catalog part {key!r} has no document", arg="key")
     placed = []
     for _ in range(quantity):
         updated = assembly_service.add_component(asm_id, part_id)
         placed.append(updated.components[-1].id)
-    return {"message": f"placed {quantity} × {entry.designation}",
+    return {"message": f"placed {quantity} × {designation}",
             "part_id": part_id, "component_ids": placed,
-            "designation": entry.designation,
+            "designation": designation,
             "component_count": len(updated.components)}
 
 

@@ -101,6 +101,21 @@ The verdicts are collected during the build — the only time the intermediate b
 
 `GET /api/documents/meta/standard-parts` is the browsing route as well as the `list_standard_parts` operation — a person opening a *new* assembly holds no id yet, and that is exactly when they reach for a screw.
 
+**The generated catalog is the floor, and a supplier file the user brings is how it grows.** It can build an ISO 4762 M4×16 and it cannot build *this* connector, so `services/supplier_parts.py` files a CAD file the user imported as a purchased part of their own — STEP and IGES exact through `import_service`, meshes voxelised. The portals that could supply those files at scale were checked and **none of them permits it**:
+
+- **3Dfindit / CADENAS.** `robots.txt` disallows this crawler by name, the site answers a non-browser client 403, there is no documented HTTP API that returns geometry (the published interfaces are CAD-host plugins and a C++ SDK), downloads sit behind a login with a 50-a-day fair-use cap, and the models belong to the manufacturers publishing them.
+- **TraceParts.** There *is* a real REST gateway (`cadRequest` → a temporary `cadFileUrl`) behind an API key granted after review — and its terms say users "may not i) distribute the Data as part of an external service, or ii) copy or post the Data on a website, or iii) distribute the Data on any storage medium whatsoever, or iv) use the Data with the aim of competing with any TraceParts service", nor "use such … files to create catalogs … competing with any TraceParts service". It also requires handing over each downloading user's name, email, company and country, and a "powered by TraceParts" credit. Integrable as a per-user pass-through; forbidden as a seed.
+- **The open parts libraries are a copyleft trap.** BOLTS is GPL-3 and the FreeCAD Fasteners workbench is GPL-2. Their dimension tables look like free data and copying them would put this codebase under those licences. The standards themselves are the source, which is what `parts_catalog` already does.
+
+So nothing here calls a portal. `SOURCES` deep-links a *search* on each one — a hyperlink is not a copy — and the user who accepted that portal's terms fetches the file. Four things follow:
+
+- **`geometry` is `exact` or `mesh`, on every row of the listing including the generated ones.** A supplier STEP is a `BrepBodyFeature` whose faces can be filleted and measured; an STL cannot. A field present on only some rows is one a caller eventually reads wrong — same reason `observation.summarize_assembly` states its `kind`.
+- **`fidelity` gains a third value, `supplier`**: the manufacturer's own body as published, rather than something measured off a table.
+- **Rows are owner-scoped and that is a boundary.** A row names a `document_id`, and `add_component` refuses a part its owner cannot open; `insert_standard_part` resolves a supplier key against the *assembly owner's* imports for the same reason `document_for` creates under that account.
+- **One `key` covers both halves** (`standard_parts.document_for_key`, `standard_parts.listing`), so the picker is one list and an agent does not have to know which kind it is holding. `catalog_ref` is set on the imported document too, so eight of them are still one BOM line.
+
+Forgetting a part deletes the catalog row and leaves the document — it may be placed in three assemblies, and the row is a shortcut to placing it again rather than the thing keeping it alive.
+
 **Two ways to run an operation.** `dispatch()` raises a typed `OperationError`; `execute()` never raises and returns the full envelope — `ok`, a typed `error`, a geometry `delta`, the compact `state`, and `warnings`. Anything that needs to *observe* a failure rather than propagate it (an agent loop, a training rollout, the HTTP layer) uses `execute`. `ok` is computed: it was a hardcoded `True` with a single construction site until the envelope landed.
 
 **Failures carry a code, not just prose.** `services/op_errors.py`: `MISSING_ARG`, `BAD_ARG`, `NO_SUCH_DOCUMENT`, `NO_SUCH_FEATURE`, `PRECONDITION`, `EVAL_FAILED`, `UNKNOWN_OP`, `INTERNAL`. They subclass `ValueError`, so the routers' existing `except ValueError` handlers keep working. Pick `PRECONDITION` when the fix is a *different previous step* (a flat pattern on a part with no sheet-metal feature), not different arguments.

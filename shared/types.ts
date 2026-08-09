@@ -863,23 +863,67 @@ export interface BomReport {
   lines: BomLine[]
 }
 
-/** A part this system can generate from a published dimensional standard —
- *  a screw, nut, washer, dowel pin, bearing, stepper motor or extrusion.
- *  `fidelity` says how faithful the body is: "as-standard" means every
- *  dimension the standard gives, "envelope" means the outside only. */
+/** A purchased part you can place, from either half of the catalog.
+ *
+ *  Two axes, and both are on every row so neither has to be inferred:
+ *
+ *  - `fidelity` — how the body relates to the real part. `as-standard`: every
+ *    dimension the published standard gives. `envelope`: the outside only.
+ *    `supplier`: the manufacturer's own geometry, imported from a file.
+ *  - `geometry` — `exact` means faces and edges are addressable (it can be
+ *    filleted, measured exactly, re-exported as a solid); `mesh` means it came
+ *    in as triangles and cannot.
+ */
 export interface StandardPart {
   key: string
-  category: 'fastener' | 'bearing' | 'motor' | 'extrusion'
+  category: PartCategory
   designation: string
+  /** The standard's number for a generated part; the maker and part number for
+   *  an imported one. */
   standard: string
   material_id: string
-  fidelity: 'as-standard' | 'envelope'
+  fidelity: 'as-standard' | 'envelope' | 'supplier'
+  geometry: 'exact' | 'mesh'
   notes: string
   size_mm: Vector3
   /** Published mass, where the solid envelope is known to over-state it. */
   typical_mass_g?: number
-  /** A search on the designation — deliberately not a claimed part number. */
+  /** A search — deliberately not a claimed part number. */
   supplier_search: string
+  // ── imported parts only ──
+  /** Which portal the file came from, as the importer stated it. */
+  source?: string
+  manufacturer?: string
+  part_number?: string
+  document_id?: string
+  created_at?: string
+}
+
+export type PartCategory =
+  | 'fastener' | 'bearing' | 'motor' | 'extrusion'
+  | 'electronics' | 'pneumatic' | 'hardware' | 'other'
+
+/** A portal an imported part can have come from. `search` is a query URL — a
+ *  hyperlink out, never a fetch: no path in this system reaches into a portal
+ *  on the user's behalf, because none of them permit it. Empty for the sources
+ *  that are not one site ("Manufacturer", "Other"). */
+export interface PartSource {
+  id: string
+  label: string
+  search: string
+  note: string
+}
+
+/** What the purchased-parts listing returns. */
+export interface StandardPartPage {
+  parts: StandardPart[]
+  count: number
+  returned: number
+  categories: Record<string, number>
+  /** How many of `parts` this account imported itself. */
+  imported: number
+  sources: PartSource[]
+  source: string
 }
 
 /** A starter part: an ordinary feature tree whose driving dimensions are
