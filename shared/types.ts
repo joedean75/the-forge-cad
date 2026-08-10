@@ -990,3 +990,32 @@ export interface MachineStatus {
   bed_target?: number
   position?: number[]
 }
+
+// ---------------------------------------------------------------------------
+// Operation catalog (GET /api/operations)
+//
+// The backend publishes every operation it can run, with typed arguments. The
+// UI reads the same catalog an agent does, so a newly shipped operation is
+// reachable from the console without anyone updating a list here.
+// ---------------------------------------------------------------------------
+
+export interface OperationParam {
+  type?: string
+  enum?: string[]
+  default?: unknown
+  /** Display unit, e.g. "mm" — the value itself is whatever `type` says. */
+  unit?: string
+  required?: boolean
+  description?: string
+  properties?: Record<string, unknown>
+}
+
+export interface OperationSpec {
+  name: string
+  /** `mutate` changes the body; `query` only answers. */
+  kind: 'mutate' | 'query'
+  description: string
+  params: Record<string, OperationParam>
+  /** Which endpoint runs it: a document or an assembly. */
+  subject?: 'document' | 'assembly'
+}

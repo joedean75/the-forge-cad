@@ -48,6 +48,7 @@ import type {
   SliceResponse,
   MachineSpec,
   NestResult,
+  OperationSpec,
   ExportArtifact,
   ReleasePackageJob,
   StandardPart,
@@ -189,6 +190,9 @@ export interface OperationEnvelope<T = Record<string, unknown>> {
 
 export const api = {
   health: () => fetchJson<{ status: string }>('/health'),
+  /** Every operation the backend can run, with typed arguments — the same
+   *  catalog agents read, so the console never needs a hand-kept list. */
+  listOperations: () => fetchJson<{ operations: OperationSpec[] }>('/operations'),
   getLlmConfig: () => fetchJson<LlmConfig>('/llm/config'),
   setLlmModel: (model: string) =>
     fetchJson<LlmConfig>('/llm/model', {
