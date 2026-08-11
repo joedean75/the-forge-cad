@@ -90,14 +90,17 @@ Assemblies compose part documents with placement transforms.
 
 - [docs/AGENT-PLATFORM.md](docs/AGENT-PLATFORM.md) — driving Forge from an agent:
   the operation API, face/edge selection, verification, MCP, rollouts.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the two processes and the layering.
 - [docs/PRINTING.md](docs/PRINTING.md) — the slicer and print pipeline.
+- [docs/PURCHASED-PARTS-SOURCING.md](docs/PURCHASED-PARTS-SOURCING.md) — where
+  purchased-part CAD may and may not come from, with the terms that decide it.
 - [DEPLOY.md](DEPLOY.md) — production deployment (single Docker image + Postgres).
 
-**Where it's going**
+**Where it's going, and where it has been**
 
 - [PRODUCT-ROADMAP.md](PRODUCT-ROADMAP.md) — market read and the three waves of work.
-- [docs/SPRINT-ROADMAP.md](docs/SPRINT-ROADMAP.md) — the two sprints still open,
-  with the trap in each.
+- [docs/roadmaps/](docs/roadmaps/) — six completed programmes, kept for the
+  reasoning and the measurements rather than as outstanding work.
 
 ## Development
 

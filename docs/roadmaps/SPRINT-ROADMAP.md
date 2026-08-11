@@ -3,7 +3,7 @@
 Sprints 1–10 and all four honourable mentions are on `main` (666 tests).
 **The programme is done.**
 
-[PRODUCT-ROADMAP.md](../PRODUCT-ROADMAP.md) is the product-level document. This
+[PRODUCT-ROADMAP.md](../../PRODUCT-ROADMAP.md) is the product-level document. This
 one is narrower and concrete: what is left in the work that turned the SDF
 editor into an exact-kernel CAD system with a machine-checkable action space,
 with the trap that will actually bite in each.

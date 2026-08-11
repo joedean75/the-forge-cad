@@ -2,6 +2,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import base64
+import hashlib
+import re
+from functools import lru_cache
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -97,27 +101,32 @@ async def _security_headers(request: Request, call_next):
     response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
     response.headers.setdefault(
         "Content-Security-Policy",
-        # The SPA bundles its own assets; allow same-origin + inline styles (Vite)
-        # and connect to self. Tightened from a permissive default.
+        # The SPA bundles its own assets; allow same-origin plus inline styles
+        # (Vite emits them). Tightened from a permissive default.
         #
-        # connect-src must allow data: — evaluated solids reach the viewport as
-        # `derived.mesh_url`, an STL data: URI (see document_service.solid_to_stl_data_uri),
-        # which three.js STLLoader fetches via XHR. Without it the loader throws
-        # "Could not load data:…" and the editor's ErrorBoundary swallows the app.
-        # This only bites when FastAPI serves the SPA (production / single-origin);
-        # the Vite dev server sends no CSP, which is why dev never caught it.
-        "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "
-        "script-src 'self'; connect-src 'self' data:; object-src 'none'; frame-ancestors 'none'; "
-        "base-uri 'self'",
+        # `connect-src` used to allow `data:` because an evaluated solid reached
+        # the viewport as `derived.mesh_url`, an STL data URI that three.js's
+        # STLLoader fetched over XHR. P1 made the mesh a hash-keyed same-origin
+        # URL and the loader went with it, so the allowance has been dead since —
+        # nothing in the client fetches a `data:` URL any more. `img-src` keeps
+        # `data:` and `blob:`: the library thumbnails are authed fetches turned
+        # into blob URLs, and the sketch backdrop draws a data-URI image.
+        #
+        # CSP only applies where FastAPI serves the SPA (production /
+        # single-origin); the Vite dev server sends none, which is why a mistake
+        # here is invisible in dev.
+        _csp(),
     )
     return response
 
 
-# Responses are dominated by geometry: a document carries its mesh as a base64
-# STL data URI, so `GET /api/documents/{id}` runs to ~11 MB at resolution 128 and
-# is re-sent on every edit. That text compresses ~5x. Level 1 rather than the
-# default 9 on purpose — this is a single-worker CPU-bound server, and level 1
-# gets 5.2x for 87 ms where level 9 spends 3x the CPU for another 20%.
+# Compression still earns its place, though the reason it was added is gone: a
+# document used to carry its mesh as a base64 STL data URI and ran to ~11 MB,
+# and P1 moved the triangles to a hash-keyed URL fetched once. What is left is
+# JSON — feature trees, observations, DFM reports, the drawing SVG — which is
+# what compresses well. Level 1 rather than the default 9 on purpose: this is a
+# single-worker CPU-bound server, and level 1 got 5.2x for 87 ms on the old
+# payloads where level 9 spent 3x the CPU for another 20%.
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=1)
 
 # Added last, so it runs *first*: Starlette applies middleware outermost-last,
@@ -197,6 +206,40 @@ def health():
 
 # Serve the built React/Vite frontend so the app works from a single URL.
 dist_dir = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+
+@lru_cache(maxsize=1)
+def _csp() -> str:
+    """The Content-Security-Policy header, with the SPA's inline scripts hashed.
+
+    `index.html` carries one inline script: the `window.onerror` handler that
+    paints a readable failure into `#root` when the bundle itself throws. Under
+    `script-src 'self'` a browser refuses it — so the single safety net for a
+    white-screen failure was itself dead, and only in production, because the
+    Vite dev server sends no CSP and dev can never see it.
+
+    The hash is computed from the file actually being served rather than pinned
+    as a constant, so editing that handler cannot silently re-break it. The
+    lazy alternative, `'unsafe-inline'`, would readmit every injected script the
+    policy exists to stop.
+    """
+    inline = ""
+    page = dist_dir / "index.html"
+    if page.exists():
+        try:
+            scripts = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>",
+                                 page.read_text(encoding="utf-8"), re.S)
+            inline = "".join(
+                " 'sha256-" + base64.b64encode(hashlib.sha256(s.encode()).digest()).decode() + "'"
+                for s in scripts)
+        except OSError:
+            pass
+    return (
+        "default-src 'self'; img-src 'self' data: blob:; "
+        "style-src 'self' 'unsafe-inline'; "
+        f"script-src 'self'{inline}; connect-src 'self'; object-src 'none'; "
+        "frame-ancestors 'none'; base-uri 'self'"
+    )
 
 
 @app.get("/landing", include_in_schema=False)

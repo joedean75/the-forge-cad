@@ -133,3 +133,47 @@ def test_a_refusal_says_how_to_allow_it(monkeypatch):
     monkeypatch.delenv("FORGE_ALLOW_PRIVATE_MACHINE_URLS", raising=False)
     with pytest.raises(UrlNotAllowed, match="FORGE_ALLOW_PRIVATE_MACHINE_URLS"):
         validate_url("http://localhost:7125")
+
+
+def test_the_csp_hashes_the_spa_inline_script():
+    """`index.html` carries one inline script — the `window.onerror` handler that
+    paints a readable failure into `#root` when the bundle itself throws. Under
+    a bare `script-src 'self'` the browser refuses it, so the only safety net for
+    a white screen was itself dead, and only in production: the Vite dev server
+    sends no CSP, so dev can never see it.
+
+    The hash is computed from the served file rather than pinned, so editing the
+    handler cannot silently re-break it — that is what this asserts.
+    """
+    import base64
+    import hashlib
+    import re
+
+    import main
+
+    main._csp.cache_clear()
+    csp = main._csp()
+    assert "script-src 'self'" in csp
+    assert "'unsafe-inline'" not in csp.split("script-src")[1].split(";")[0], \
+        "script-src must not fall back to unsafe-inline"
+
+    page = main.dist_dir / "index.html"
+    if not page.exists():
+        pytest.skip("frontend not built")
+    for script in re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>",
+                             page.read_text(), re.S):
+        digest = base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
+        assert f"'sha256-{digest}'" in csp, "an inline script is not hashed into the CSP"
+
+
+def test_the_csp_no_longer_allows_data_urls_to_be_fetched():
+    """The mesh stopped being a `data:` STL URI when P1 made it a hash-keyed URL,
+    and nothing in the client has fetched one since. `img-src` keeps `data:` and
+    `blob:` — thumbnails are authed fetches turned into blob URLs."""
+    import main
+
+    main._csp.cache_clear()
+    csp = main._csp()
+    connect = csp.split("connect-src")[1].split(";")[0]
+    assert "data:" not in connect
+    assert "blob:" in csp.split("img-src")[1].split(";")[0]

@@ -1,0 +1,23 @@
+# Completed programmes
+
+Six programmes, all shipped. They are kept because each one records *why* a
+thing is built the way it is and what the alternative cost when it was
+measured — the reasoning behind a decision outlives the plan that produced it,
+and several of these numbers are the only place a trade-off is written down.
+
+They are **not** planning documents. Nothing here is outstanding work. For what
+the system does today read [`../../CLAUDE.md`](../../CLAUDE.md); for the
+product-level view read [`../../PRODUCT-ROADMAP.md`](../../PRODUCT-ROADMAP.md).
+
+| Programme | What it did | Headline measurement |
+|---|---|---|
+| [SPRINT-ROADMAP](SPRINT-ROADMAP.md) | Closed out the exact-kernel work: OpenCascade beside the SDF, topological naming, exact import, real FEA | sprints 1–10 plus four honourable mentions |
+| [SKETCH-ROADMAP](SKETCH-ROADMAP.md) | Sketches reach the kernel as curves, and the solver says what is *wrong* rather than whether it converged | a circle-only sketch could not be extruded at all before |
+| [PERF-UX-ROADMAP](PERF-UX-ROADMAP.md) | The mesh became a content-addressed resource; caching by subtree; the bundle split | document JSON per edit 1164 KB → 1.5 KB |
+| [LLM-ACCURACY-ROADMAP](LLM-ACCURACY-ROADMAP.md) | One generator for the action space, schema enforced all the way down, units declared by parameter name | known bad calls caught 0/5 → 5/5 |
+| [MVP-FEATURE-ROADMAP](MVP-FEATURE-ROADMAP.md) | Assemblies as first-class subjects of the catalog, thumbnails, release packages | assembly operations in the catalog 0 of 58 → 9 of 69 |
+| [EASE-OF-USE-ROADMAP](EASE-OF-USE-ROADMAP.md) | Click the face you mean, failures that say what to do, templates and purchased parts | typed failures rendered as `[object Object]` before |
+
+Each carries a status block at the top saying what actually shipped and where
+it differed from the plan — including the findings that surfaced during the work
+and were not in it, which are usually the interesting part.

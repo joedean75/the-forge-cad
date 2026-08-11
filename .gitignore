@@ -6,9 +6,17 @@ frontend/.vite/
 # Backend
 backend/.venv/
 backend/.env
-backend/__pycache__/
-backend/app/__pycache__/
-backend/app/*/__pycache__/
+# Every __pycache__, at any depth. The old list named three specific
+# directories, so `app/services/machine/` and `tests/` were never covered.
+__pycache__/
+*.py[cod]
+
+# The dev datastore. SQLite in WAL mode is three files, and the two sidecars
+# are the ones that get committed by accident.
+backend/data/
+*.db
+*.db-wal
+*.db-shm
 
 # IDE
 .idea/
@@ -22,5 +30,12 @@ Thumbs.db
 
 # Rust build artifacts (native extension)
 backend/native/*/target/
-forge-dev.log
+
+# Logs and throwaway captures. Thirteen debugging screenshots and a server.log
+# were committed to the frontend and backend roots before this rule existed;
+# put working captures in a scratch directory outside the repo instead.
+*.log
+screenshot*.png
+/backend/*.png
+/frontend/*.png
 .gstack/

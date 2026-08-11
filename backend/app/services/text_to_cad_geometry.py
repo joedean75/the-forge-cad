@@ -14,7 +14,53 @@ from app.cad_kernel.core.feature_tree import FeatureTree
 from app.cad_kernel.core.types import Point3, Vector3
 from app.cad_kernel.ops.booleans import BooleanFeature
 from app.cad_kernel.ops.primitives import BoxFeature, CylinderFeature, SphereFeature
-from app.services.text_to_cad import _detect_default_unit, _parse_number_with_unit
+
+
+# ---------------------------------------------------------------------------
+# Units
+#
+# These lived in `services/text_to_cad`, which built the generative `DesignSpec`
+# for the candidate flow and went with it. This module was importing two private
+# helpers across the boundary — the only thing keeping ~280 lines of dead parser
+# alive — so they moved here, to their one caller.
+# ---------------------------------------------------------------------------
+
+
+def _parse_number_with_unit(text: str, default_unit: str = "m") -> Optional[float]:
+    """Return a length in meters, or None."""
+    text = text.strip().replace(" ", "")
+    m = re.match(r"^(\d+\.?\d*)\s*(mm|cm|m|in|inch)?$", text)
+    if not m:
+        return None
+    value = float(m.group(1))
+    unit = (m.group(2) or default_unit).lower()
+    if unit in ("mm",):
+        return value / 1000.0
+    if unit in ("cm",):
+        return value / 100.0
+    if unit in ("in", "inch"):
+        return value * 0.0254
+    return value
+
+
+def _detect_default_unit(prompt: str) -> str:
+    """Infer the default length unit from printer/build-plate context."""
+    lower = prompt.lower()
+    if any(
+        k in lower
+        for k in [
+            "mm",
+            "millimeter",
+            "millimeters",
+            "3d printer",
+            "build plate",
+            "build volume",
+            "printer",
+            "nozzle",
+        ]
+    ):
+        return "mm"
+    return "m"
 
 
 # ---------------------------------------------------------------------------

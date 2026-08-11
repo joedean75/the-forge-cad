@@ -117,11 +117,14 @@ def test_an_unknown_argument_is_named_alongside_what_is_accepted():
 
 
 def test_an_omitted_optional_argument_is_fine():
-    op_schema.validate({"label": {"type": "string"}}, {})
+    # `validate` signals by raising, so the assertion is that it returns.
+    assert op_schema.validate({"label": {"type": "string"}}, {}) is None
 
 
 def test_an_explicit_null_does_not_trip_type_checking():
-    op_schema.validate({"radius": {"type": "number"}}, {"radius": None})
+    """A caller that spells an unset optional as `null` means the same thing as
+    omitting it — type-checking `None` against `number` would refuse it."""
+    assert op_schema.validate({"radius": {"type": "number"}}, {"radius": None}) is None
 
 
 # --------------------------------------------------- enforced end to end --

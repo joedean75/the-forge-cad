@@ -2,14 +2,15 @@
 
 _Product strategy and market read, July 2026._
 
-Three waves of work, in the order they were done. **Everything in waves one and
-two has shipped**; the third is in progress.
+Three waves of work, in the order they were done. **All three have shipped**;
+the six programmes that delivered them are archived in
+[docs/roadmaps/](docs/roadmaps/) with what each one measured.
 
 | Wave | What | State |
 |---|---|---|
 | One — market wedge | Copilot, universal import, instant quotes, agent platform, real-time collaboration | shipped |
 | Two — production workflow | the ten standard-CAD features (materials, parameters, assemblies, drawings, GD&T, revisions …) | shipped |
-| Three — exact kernel | OpenCascade alongside the SDF, edge selection, exact import, design specs, topology DFM, real FEA | mostly shipped — see [docs/SPRINT-ROADMAP.md](docs/SPRINT-ROADMAP.md) |
+| Three — exact kernel | OpenCascade alongside the SDF, edge selection, exact import, design specs, topology DFM, real FEA | shipped — see [docs/roadmaps/SPRINT-ROADMAP.md](docs/roadmaps/SPRINT-ROADMAP.md) |
 
 For what the system *does today* rather than what was planned, read
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); `CLAUDE.md` is authoritative on
