@@ -1702,11 +1702,17 @@ def _verify_against_spec(doc_id, args):
             "limit": {"type": "integer", "default": 40,
                       "description": "how many rows to return"}})
 def _list_standard_parts(doc_id, args):
-    from app.services import standard_parts
+    from app.services import caller, standard_parts
 
     doc = _get(doc_id)
+    # The caller's own imported parts, not the document owner's. On a shared
+    # document those differ, and answering with the owner's would disclose the
+    # designations, manufacturers and part numbers of everything they imported
+    # to anyone they granted view access. Falls back to the owner only for a
+    # direct in-process call (tests, rollouts), where there is no other caller.
+    owner = caller.acting_account_id() or doc.owner_id
     return standard_parts.listing(
-        doc.owner_id, category=args.get("category"), search=args.get("search"),
+        owner, category=args.get("category"), search=args.get("search"),
         source=args.get("source"), limit=int(args.get("limit", 40) or 40))
 
 

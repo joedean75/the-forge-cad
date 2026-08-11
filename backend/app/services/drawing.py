@@ -433,7 +433,16 @@ def _arrow_polyline(tip: Tuple[float, float], direction: Tuple[float, float],
 # ----------------------------------------------------------------- render --
 
 def _esc(s: str) -> str:
-    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    """Escape a string for an SVG text node *or* a quoted attribute.
+
+    Quotes are escaped as well as the angle brackets. A text node does not need
+    them, but the difference between "this value is in a text node" and "this
+    value is in an attribute" is one refactor wide, and the frontend renders
+    this SVG through `dangerouslySetInnerHTML` — so the cost of being wrong is
+    script execution in the viewer's session, not a broken glyph.
+    """
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&#39;"))
 
 
 _STYLE = (
@@ -869,7 +878,14 @@ def generate_drawing(doc_id: str, section: bool = True,
             sheet.path(key, item["hidden"], "hidden")
         label = item.get("label") or VIEWS[key].label
         lx, ly = sheet.to_paper(key, item["bounds"][0], item["bounds"][1])
-        sheet.svg.append(f'<text class="lbl" x="{lx:.1f}" y="{ly + 5:.1f}">{label}</text>')
+        # Escaped: a section's label is caller-supplied (`DrawingSpec.sections[].label`)
+        # and this is the one text node that interpolated it raw. The SVG is
+        # rendered with `dangerouslySetInnerHTML`, and while a <script> inserted
+        # that way does not run, an <image onerror=…> does — so a label of
+        # `</text><image href=x onerror=…/><text>` executed in the viewer's
+        # session, with the session JWT sitting in localStorage.
+        sheet.svg.append(
+            f'<text class="lbl" x="{lx:.1f}" y="{ly + 5:.1f}">{_esc(label)}</text>')
 
     for marker in markers:
         _render_cut_marker(sheet, marker)

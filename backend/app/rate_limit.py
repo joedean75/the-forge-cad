@@ -91,6 +91,23 @@ def _client_ip(request: Request) -> str:
     return parts[idx]
 
 
+def _route_key(request: Request) -> str:
+    """The bucket's path component: the route *template*, not the concrete URL.
+
+    `/api/documents/{doc_id}/op` and not `/api/documents/<a-real-uuid>/op`. The
+    concrete path was the bug: a limit keyed on it is per-document, so a caller
+    hammering the operation endpoint only has to create a new document — or walk
+    the ones they already have — to get a fresh bucket every time. The auth
+    routes have no path parameters, so this changes nothing for them.
+    """
+    # `getattr`, not `request.scope`: this is also called with the minimal
+    # request stand-ins the identity tests build, which carry a client and a URL
+    # and nothing else. A missing scope is "no route matched yet", which the
+    # concrete path answers correctly.
+    route = (getattr(request, "scope", None) or {}).get("route")
+    return getattr(route, "path", None) or request.url.path
+
+
 def _sweep(now: float) -> None:
     """Drop buckets that can no longer affect a decision, bounding the key map."""
     global _last_sweep
@@ -112,7 +129,7 @@ def rate_limit(max_hits: int, window_seconds: float):
         if not _ENABLED:
             return
         now = time.time()
-        key = f"{request.url.path}:{_client_ip(request)}"
+        key = f"{_route_key(request)}:{_client_ip(request)}"
         bucket = _hits[key]
         cutoff = now - window_seconds
         while bucket and bucket[0] < cutoff:

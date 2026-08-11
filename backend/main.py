@@ -11,6 +11,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+
+from app.body_limit import BodySizeLimitMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.routers import llm, documents, machine, operations, sketch, auth, assemblies, collab, trajectories
@@ -50,11 +52,24 @@ def _check_production_posture() -> None:
             "enterprise dev account. Set FORGE_AUTH_REQUIRED=1 for any deployment."
         )
     if AUTH_REQUIRED and not os.environ.get("FORGE_JWT_SECRET"):
-        log.error(
-            "FORGE_AUTH_REQUIRED is on but FORGE_JWT_SECRET is unset — session tokens "
-            "use an ephemeral per-process secret and will be invalidated on restart. "
-            "Set a stable FORGE_JWT_SECRET."
+        # Fatal, not a warning. The signing key falls back to a per-*process*
+        # random value, so this is not merely "tokens die on restart": run more
+        # than one worker and each signs with a different key, so a session is
+        # valid or a 401 depending on which worker answers — an intermittent
+        # logout nobody will diagnose from a log line that scrolled past at
+        # boot. A misconfiguration that only shows up as flakiness has to stop
+        # the process.
+        message = (
+            "FORGE_AUTH_REQUIRED is on but FORGE_JWT_SECRET is unset. Session "
+            "tokens would be signed with an ephemeral per-process secret: they "
+            "break on restart and, with more than one worker, at random. Set a "
+            "stable FORGE_JWT_SECRET (e.g. `openssl rand -hex 32`), or set "
+            "FORGE_ALLOW_INSECURE=1 to start anyway."
         )
+        if os.environ.get("FORGE_ALLOW_INSECURE", "").lower() in ("1", "true", "yes"):
+            log.error("%s (continuing: FORGE_ALLOW_INSECURE is set)", message)
+        else:
+            raise RuntimeError(message)
 
 
 @asynccontextmanager
@@ -104,6 +119,12 @@ async def _security_headers(request: Request, call_next):
 # default 9 on purpose — this is a single-worker CPU-bound server, and level 1
 # gets 5.2x for 87 ms where level 9 spends 3x the CPU for another 20%.
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=1)
+
+# Added last, so it runs *first*: Starlette applies middleware outermost-last,
+# and a body-size check that runs after the body has been buffered is not a
+# check. See app/body_limit.py — every upload route reads the whole file before
+# testing its length, and the operation endpoint buffers whatever it is handed.
+app.add_middleware(BodySizeLimitMiddleware)
 
 
 # CORS origins are configurable; default to the local dev frontend. In production

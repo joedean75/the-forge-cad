@@ -13,6 +13,7 @@ Legacy `backend/data/*/*.json` files are imported once on startup (`migrate_json
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -241,13 +242,28 @@ def list_trajectories_for_document(document_id: str) -> List[dict]:
     return _rows_by_json_field(_TRAJECTORY, "doc_id", document_id)
 
 
+#: A bare JSON key. `field` names a path and so cannot be a bound parameter —
+#: it is interpolated into the statement — which makes it the one argument here
+#: that must never come from a request.
+_JSON_FIELD = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
 def _rows_by_json_field(kind: str, field: str, value: str) -> List[dict]:
     """Rows of one kind whose top-level JSON `field` equals `value`.
 
     Filtered in SQL rather than by loading every row and testing in Python — a
     document row carries its whole feature tree and version history.
+
+    `kind` and `value` are bound; `field` is interpolated, because a JSON path
+    is not a value any driver will bind. Every caller passes a literal today, so
+    this is a rule rather than a fix — but the failure mode if one ever forwards
+    a request field is SQL injection, and the check costs a regex. Verified: the
+    field ``catalog_ref') OR 1=1--`` reaches the statement without it.
     """
     from sqlalchemy import text
+
+    if not _JSON_FIELD.match(field):
+        raise ValueError(f"invalid JSON field name: {field!r}")
 
     if engine.dialect.name == "sqlite":
         sql = text(f"SELECT data FROM records WHERE kind = :kind"

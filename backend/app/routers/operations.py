@@ -13,11 +13,27 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.models.schemas import DesignDocument
+from app.rate_limit import rate_limit
 from app.security import current_account, meter_operation
-from app.services import accounts, cad_operations, copilot, document_service
+from app.services import accounts, cad_operations, caller, copilot, document_service
 from app.services import op_errors
 
 router = APIRouter(tags=["operations"])
+
+# Flood control on the operation surface.
+#
+# Quota metering already bounds *mutating* calls per account, and does nothing
+# about the rest: a query op is free, and an unauthenticated deployment attributes
+# every caller to one shared dev account. Both leave a CPU-bound endpoint — some
+# of these evaluate geometry — open to a flood from one client. The limits are
+# well above any real session (an editing burst is a handful of ops a second,
+# and a drag commits once on release, not per frame) and low enough to bound the
+# damage. Buckets key on the route *template*, so walking documents does not mint
+# a fresh one.
+_op_limit = rate_limit(max_hits=300, window_seconds=60.0)
+# A copilot run is many LLM turns and many evaluations; an optimize is a SIMP
+# solve. Neither is something a human starts hundreds of times a minute.
+_job_limit = rate_limit(max_hits=20, window_seconds=300.0)
 
 # Error code -> HTTP status. Kept next to the route rather than inside the error
 # classes' users so the whole HTTP contract is readable in one place.
@@ -148,6 +164,7 @@ def run_operation(
     doc_id: str,
     body: OperationRequest,
     acc: accounts.Account = Depends(current_account),
+    _rl: None = Depends(_op_limit),
     envelope: bool = Query(
         False,
         description="Return 200 with ok=false instead of raising on operation failure. "
@@ -194,7 +211,12 @@ def run_operation(
                 "code": "FORBIDDEN", "message": "this action requires editor access"})
         meter_operation(acc)
 
-    env = cad_operations.execute(body.op, doc_id, body.args)
+    # Attributed to the caller, not to the document's owner. One operation's
+    # answer depends on who asked — `list_standard_parts` includes the caller's
+    # own imported supplier parts — and on a shared document those are two
+    # different accounts. See services/caller.
+    with caller.acting_as(acc.id):
+        env = cad_operations.execute(body.op, doc_id, body.args)
 
     if not env["ok"] and not envelope:
         raise HTTPException(status_code=_http_status(env["error"]), detail=env["error"])
@@ -275,6 +297,7 @@ def run_copilot(
     body: CopilotRequest,
     background_tasks: BackgroundTasks,
     acc: accounts.Account = Depends(current_account),
+    _rl: None = Depends(_job_limit),
 ):
     """Forge Copilot: starts an agentic loop as a background job; poll the returned
     job id for live steps. (A run can span many LLM turns — minutes — so holding
@@ -314,6 +337,7 @@ def run_assembly_operation(
     assembly_id: str,
     body: OperationRequest,
     acc: accounts.Account = Depends(current_account),
+    _rl: None = Depends(_op_limit),
     envelope: bool = Query(
         False,
         description="Return 200 with ok=false instead of raising on operation failure.",
@@ -347,7 +371,8 @@ def run_assembly_operation(
         # Assemblies carry no separate editor role today; access is ownership.
         meter_operation(acc)
 
-    env = cad_operations.execute(body.op, assembly_id, body.args)
+    with caller.acting_as(acc.id):
+        env = cad_operations.execute(body.op, assembly_id, body.args)
     if not env["ok"] and not envelope:
         raise HTTPException(status_code=_http_status(env["error"]), detail=env["error"])
     return OperationResponse(

@@ -20,10 +20,14 @@ from app.models.schemas import (
     UpdateAssemblyRequest,
     UpdateComponentRequest,
 )
+from app.rate_limit import rate_limit
 from app.security import current_account
 from app.services import accounts, assembly_service as asm
 
 router = APIRouter(prefix="/api/assemblies", tags=["assemblies"])
+
+# Text-to-assembly is an LLM job that then evaluates every part it invents.
+_job_limit = rate_limit(max_hits=20, window_seconds=300.0)
 
 
 def owned_assembly(assembly_id: str, acc: accounts.Account = Depends(current_account)) -> AssemblyDoc:
@@ -88,6 +92,7 @@ def _run_prompt_job(job: Dict[str, Any], prompt: str, resolution: int, owner_id:
 def assembly_from_prompt(
     body: AssemblyFromPromptRequest,
     background_tasks: BackgroundTasks,
+    _rl: None = Depends(_job_limit),
     acc: accounts.Account = Depends(current_account),
 ):
     if not body.prompt.strip():

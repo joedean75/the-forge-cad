@@ -12,6 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
+from app.rate_limit import rate_limit
 from app.security import capped_resolution, current_account, require_entitlement
 from app.services import accounts
 from app.services.plans import ENT_CAM, ENT_OPTIMIZE, ENT_STEP_EXPORT
@@ -38,6 +39,14 @@ from app.services import document_analysis, document_service as docs, slicer
 from app.services.simp_optimizer import ProgressState
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
+
+# An upload is bounded in size by `app/body_limit.py`; this bounds the *rate*.
+# Each one is a parse plus (for a mesh) a voxelisation, so a stream of them is
+# CPU and memory pressure from a single client regardless of any one file's size.
+_upload_limit = rate_limit(max_hits=30, window_seconds=300.0)
+# A SIMP solve and a release package are the two slowest things in the system;
+# both fan out across every expensive stage.
+_job_limit = rate_limit(max_hits=20, window_seconds=300.0)
 
 _ROLE_ORDER = {"viewer": 0, "editor": 1, "owner": 2}
 
@@ -111,6 +120,7 @@ def list_documents(acc: accounts.Account = Depends(current_account)):
 
 @router.post("/import", response_model=DesignDocument)
 async def import_document(
+    _rl: None = Depends(_upload_limit),
     file: UploadFile = File(...),
     name: str | None = Form(None),
     units: str = Form("auto"),
@@ -146,6 +156,7 @@ async def import_document(
 @router.post("/from-image", response_model=DesignDocument)
 async def create_document_from_image(
     response: Response,
+    _rl: None = Depends(_upload_limit),
     file: UploadFile = File(...),
     name: str | None = Form(None),
     prompt: str | None = Form(None),
@@ -394,6 +405,7 @@ _PACKAGE_JOBS: Dict[str, ReleasePackageJob] = {}
 async def start_release_package(
     body: ReleasePackageRequest,
     background_tasks: BackgroundTasks,
+    _rl: None = Depends(_job_limit),
     doc: DesignDocument = Depends(readable_document),
 ):
     """Start building the handover package for a released revision.
@@ -492,6 +504,7 @@ def _progress_to_job(job_id: str, progress: dict) -> OptimizeJob:
 async def optimize_document(
     body: OptimizeDocumentRequest,
     background_tasks: BackgroundTasks,
+    _rl: None = Depends(_job_limit),
     acc: accounts.Account = Depends(require_entitlement(ENT_OPTIMIZE)),
     doc: DesignDocument = Depends(editable_document),
 ):
@@ -628,6 +641,7 @@ def list_standard_parts(
 
 @router.post("/meta/supplier-parts")
 async def import_supplier_part(
+    _rl: None = Depends(_upload_limit),
     file: UploadFile = File(...),
     designation: str = Form(""),
     source: str = Form("other"),

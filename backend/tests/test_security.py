@@ -91,3 +91,45 @@ def test_login_does_not_reveal_whether_email_exists():
     wrong = client.post("/api/auth/login", json={"email": "enum@example.com", "password": "wrongpassword"})
     assert unknown.status_code == wrong.status_code == 401
     assert unknown.json()["detail"] == wrong.json()["detail"]
+
+
+def test_metadata_is_refused_even_with_the_self_hosted_optin(monkeypatch):
+    """`FORGE_ALLOW_PRIVATE_MACHINE_URLS` now covers loopback as well as the LAN,
+    because the shipped default printer is `http://localhost:7125` and a policy
+    that could never allow it meant a 400 on every fresh install. Link-local must
+    not come along for the ride: no deployment's printer is the cloud metadata
+    service, so 169.254.169.254 stays shut whatever the flag says."""
+    monkeypatch.delenv("MOONRAKER_URLS", raising=False)
+    monkeypatch.delenv("FORGE_MACHINE_URL_ALLOWLIST", raising=False)
+    monkeypatch.setenv("FORGE_ALLOW_PRIVATE_MACHINE_URLS", "1")
+
+    # The self-hosted case now works…
+    assert validate_url("http://127.0.0.1:7125").startswith("http://127.0.0.1")
+    assert validate_url("http://192.168.1.50:7125").startswith("http://192.168")
+    # …and the dangerous one does not.
+    for never in ("http://169.254.169.254/latest/meta-data/",
+                  "http://169.254.170.2/v2/credentials",
+                  "http://224.0.0.1/", "http://0.0.0.0/"):
+        with pytest.raises(UrlNotAllowed):
+            validate_url(never)
+
+
+def test_the_default_printer_is_reachable_on_a_self_hosted_box(monkeypatch):
+    """The panel ships one printer out of the box; with the opt-in set it has to
+    actually resolve, or the default is decoration."""
+    from app.routers.machine import _configured_printers
+
+    monkeypatch.delenv("MOONRAKER_URLS", raising=False)
+    monkeypatch.setenv("FORGE_ALLOW_PRIVATE_MACHINE_URLS", "1")
+    for printer in _configured_printers():
+        assert validate_url(printer["url"]) == printer["url"]
+
+
+def test_a_refusal_says_how_to_allow_it(monkeypatch):
+    """The loopback branch used to say only 'disallowed (internal) address',
+    which tells an operator nothing about the flag that fixes it."""
+    monkeypatch.delenv("MOONRAKER_URLS", raising=False)
+    monkeypatch.delenv("FORGE_MACHINE_URL_ALLOWLIST", raising=False)
+    monkeypatch.delenv("FORGE_ALLOW_PRIVATE_MACHINE_URLS", raising=False)
+    with pytest.raises(UrlNotAllowed, match="FORGE_ALLOW_PRIVATE_MACHINE_URLS"):
+        validate_url("http://localhost:7125")

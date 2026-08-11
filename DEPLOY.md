@@ -98,9 +98,25 @@ docker compose up -d          # brings up postgres + backend (edit compose for p
   enforced on every route (404 for non-members, 403 for insufficient role).
 - **SSRF protection**: outbound machine-control requests are validated
   (`app/services/machine/url_guard.py`). On a hosted deployment set
-  `MOONRAKER_URLS` to an **allowlist** of printer hosts. On a self-hosted LAN box,
-  set `FORGE_ALLOW_PRIVATE_MACHINE_URLS=1` to reach local printers; loopback and
-  cloud-metadata addresses are always blocked.
+  `MOONRAKER_URLS` to an **allowlist** of printer hosts. On a self-hosted box set
+  `FORGE_ALLOW_PRIVATE_MACHINE_URLS=1` to reach printers on loopback or the LAN —
+  including the shipped default `http://localhost:7125`, which is refused without
+  it. **Link-local, multicast and reserved addresses are refused whatever the
+  flag says**, so cloud metadata (169.254.169.254) is never reachable.
+- **Request body size**: capped before the body is buffered
+  (`app/body_limit.py`) — 8 MB for JSON, 56 MB on the three upload routes.
+  Enforced on `Content-Length` *and* on the streamed byte count, so a chunked
+  upload cannot walk past it.
+- **Rate limits**: the auth routes, the operation endpoints
+  (`POST /api/{documents,assemblies}/{id}/op`), the uploads, and the background
+  jobs (copilot, optimize, package, text-to-assembly). Buckets key on the route
+  *template*, not the concrete path — keyed on the path, a caller only had to
+  walk their own documents for a fresh bucket. In-process, so a second worker
+  doubles every limit; front a scaled deployment with an edge/WAF limit.
+- **Startup refuses an unsafe posture**: `FORGE_AUTH_REQUIRED=1` without
+  `FORGE_JWT_SECRET` raises at boot rather than warning. The fallback key is
+  per-process, so multiple workers would sign with different keys and log users
+  out at random. `FORGE_ALLOW_INSECURE=1` overrides it for a single-worker demo.
 - **Headers**: CSP, `X-Content-Type-Options`, `X-Frame-Options: DENY`,
   `Referrer-Policy`, COOP on every response.
 - **Billing**: Stripe webhooks are signature-verified with a replay window;

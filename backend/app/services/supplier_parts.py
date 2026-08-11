@@ -59,7 +59,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 from app.services import persistence
 
@@ -111,6 +111,25 @@ def sources() -> List[dict]:
 def search_url(source: str, query: str) -> Optional[str]:
     template = (SOURCES.get(source) or {}).get("search")
     return template.replace("{q}", quote_plus(query)) if template else None
+
+
+def _safe_link(url: str) -> str:
+    """A stored URL that is safe to put in an ``href``, or nothing.
+
+    `source_url` is typed by the importer and comes back out as the row's link.
+    `javascript:` and `data:` in an `href` are script execution in whoever
+    clicks it — the importer today, and anyone they share the assembly with
+    tomorrow. Only http(s) survives; anything else is dropped rather than
+    rejected, because a bad link is not a reason to refuse a good part.
+    """
+    url = (url or "").strip()
+    if not url:
+        return ""
+    scheme = urlparse(url).scheme.lower()
+    if scheme in ("http", "https"):
+        return url[:2000]
+    _LOGGER.info("dropped a supplier link with scheme %r", scheme or "(relative)")
+    return ""
 
 
 def _slug(text: str) -> str:
@@ -182,6 +201,7 @@ def record(
         raise ValueError(f"unknown category {category!r}; one of {', '.join(CATEGORIES)}")
     if geometry not in ("exact", "mesh"):
         raise ValueError("geometry must be 'exact' or 'mesh'")
+    source_url = _safe_link(source_url)
 
     stem = part_number or designation
     key = f"{PREFIX}{_slug(manufacturer)}-{_slug(stem)}" if manufacturer \
@@ -296,7 +316,10 @@ def describe(row: dict) -> Dict[str, Any]:
                  + (f" — {row['source_url']}" if row.get("source_url") else ""),
         "size_mm": row.get("size_mm") or {"x": 0.0, "y": 0.0, "z": 0.0},
         **({"typical_mass_g": row["mass_g"]} if row.get("mass_g") else {}),
-        "supplier_search": row.get("source_url")
+        # Re-checked on the way out, not only on the way in: a row written
+        # before the scheme check existed is still a row, and this is the field
+        # that becomes an `href`.
+        "supplier_search": _safe_link(row.get("source_url", ""))
                            or search_url(row.get("source", "other"),
                                          supplier or row.get("designation", ""))
                            or "",

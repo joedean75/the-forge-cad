@@ -10,11 +10,23 @@ Policy (most restrictive that still works wins):
   1. If an allowlist is configured (`MOONRAKER_URLS` printers and/or
      `FORGE_MACHINE_URL_ALLOWLIST`), only hosts on it are permitted — the right
      posture for a hosted/multi-tenant deployment.
-  2. Otherwise, deny requests that resolve to loopback / link-local / cloud
-     metadata / other non-global addresses. Private LAN ranges (where hobby
-     printers live) are additionally blocked unless
-     `FORGE_ALLOW_PRIVATE_MACHINE_URLS=1` is set — the opt-in for a self-hosted,
-     single-tenant box on the same LAN as the printer.
+  2. Otherwise, deny requests that resolve to non-global addresses. Loopback and
+     private LAN ranges — where hobby printers actually live, including the very
+     common "Klipper on this same box" — are permitted only when
+     `FORGE_ALLOW_PRIVATE_MACHINE_URLS=1` is set, the opt-in for a self-hosted,
+     single-tenant deployment.
+
+     Link-local (169.254.0.0/16, and therefore cloud metadata at
+     169.254.169.254), multicast, reserved and unspecified addresses are refused
+     **always**, flag or no flag. There is no deployment in which the printer is
+     the instance metadata service, so nothing legitimate is lost and the worst
+     SSRF target stays shut.
+
+     Loopback is grouped with private rather than with metadata deliberately.
+     `_configured_printers()` defaults to `http://localhost:7125`, so a policy
+     that refused loopback unconditionally shipped a default printer the guard
+     could never allow — the Machine panel polled it and showed a bare 400 on
+     every fresh install.
 
 DNS is resolved and every resolved address is checked, so a hostname that
 resolves to an internal IP (DNS-rebinding) is still rejected.
@@ -87,13 +99,20 @@ def validate_url(url: str) -> str:
 
     allow_private = _allow_private()
     for ip in addresses:
-        if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
-            raise UrlNotAllowed("machine URL resolves to a disallowed (internal) address")
-        # 169.254.169.254 is link-local (caught above); private ranges gated by flag.
-        if ip.is_private and not allow_private:
+        # Never reachable, whatever the flag says: 169.254.169.254 is link-local,
+        # and no printer is the cloud metadata service.
+        if ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
             raise UrlNotAllowed(
-                "machine URL resolves to a private address; set "
-                "FORGE_ALLOW_PRIVATE_MACHINE_URLS=1 to allow LAN printers, or configure "
-                "MOONRAKER_URLS as an allowlist"
+                "machine URL resolves to a link-local, multicast or reserved "
+                "address; those are never permitted"
+            )
+        if (ip.is_loopback or ip.is_private) and not allow_private:
+            where = "this server itself" if ip.is_loopback else "a private address"
+            raise UrlNotAllowed(
+                f"machine URL resolves to {where}, which is refused by default so "
+                f"a hosted deployment cannot be used to reach its own internal "
+                f"network. On a self-hosted box set "
+                f"FORGE_ALLOW_PRIVATE_MACHINE_URLS=1, or list the printer in "
+                f"MOONRAKER_URLS to allow it explicitly."
             )
     return url

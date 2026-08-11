@@ -22,8 +22,11 @@
 >   `createFromPrompt`; `ai_edit` had existed the whole time.
 >
 > The two deferred items remain deferred: drag a face to resize it, and the
-> Y-up/Z-up viewport frame. So does the oldest open finding — no request-body
-> size limit and no rate limit on the operation endpoint.
+> Y-up/Z-up viewport frame. **The oldest open finding is now closed**: the
+> operation endpoint has a body-size cap and a rate limit (`app/body_limit.py`,
+> `app/rate_limit.py`), landed in the pre-production review along with a stored
+> XSS in the drawing sheet, a cross-tenant leak in the purchased-parts listing,
+> and a boot guard for an unsigned production posture. See `DEPLOY.md`.
 
 The last five programmes built capability: an exact kernel, a sketch solver,
 speed, an action space a model can drive, and the product surface around them.
