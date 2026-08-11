@@ -703,7 +703,17 @@ def decompile_document(
             trajectory_id = trajectories.start(
                 doc_id, goal=goal or source.source_prompt or source.name,
                 kind="decompiled", actor="system", owner_id=source.owner_id)
-        envelopes = replay(steps, scratch.id)
+        try:
+            envelopes = replay(steps, scratch.id)
+        except Unsupported as exc:
+            # `replay` raises this too, from `resolve_refs`, when a step targets
+            # a group an earlier step did not create. Only the `decompile` call
+            # above was guarded, so one document with an unresolvable reference
+            # took down the whole of `corpus_report` — the metric that is
+            # supposed to *count* those. A document that cannot be replayed is a
+            # result, not a crash.
+            return _reject(trajectory_id, record, steps, str(exc),
+                           cause="unsupported", failed_at=exc.feature)
         if record:
             trajectories.finish(trajectory_id, outcome="done",
                                 summary=f"rebuilt {source.name} in {len(steps)} operations")
@@ -718,8 +728,22 @@ def decompile_document(
         # Each side is resolved against its *own* parameter table: the point of
         # the comparison is that the replay produced the same body, and it only
         # holds if the replayed document carries the parameters too.
-        want = _hash_tree_geometry(source.feature_tree, resolution, scope)
-        got = _hash_tree_geometry(rebuilt.feature_tree, resolution, _scope_of(rebuilt))
+        #
+        # Broad catch, deliberately. A tree that does not evaluate is a
+        # *supported* state of a document — `evaluate_document` records it in
+        # `derived.error` and carries on, so the store legitimately contains
+        # some — and the evaluator's failure modes are open-ended (a childless
+        # `TransformFeature` raises `IndexError` from deep inside the SDF
+        # builder). This is the measurement path: a document that cannot be
+        # evaluated is a number in the report, not a traceback that takes the
+        # whole report down with it.
+        try:
+            want = _hash_tree_geometry(source.feature_tree, resolution, scope)
+            got = _hash_tree_geometry(rebuilt.feature_tree, resolution, _scope_of(rebuilt))
+        except Exception as exc:
+            return _reject(trajectory_id, record, steps,
+                           f"the tree does not evaluate: {type(exc).__name__}: {exc}",
+                           cause="eval_failed")
         if want != got:
             return _reject(trajectory_id, record, steps,
                            "replayed geometry differs from the original",

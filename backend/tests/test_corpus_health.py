@@ -274,3 +274,34 @@ def test_every_builder_can_be_targeted():
     for name in ("add_primitive", "add_extrude", "add_revolve", "add_sweep",
                  "add_loft", "add_ruled_loft", "add_sheet_metal"):
         assert "target" in catalog[name]["schema"]["properties"], name
+
+
+def test_an_unreplayable_document_is_counted_not_a_crash():
+    """`corpus_report` exists to count the documents that do not decompile, so
+    one of them must not take it down.
+
+    `Unsupported` is raised from two places: `decompile`, which was guarded, and
+    `replay` via `resolve_refs` when a step targets a group no earlier step
+    created — which was not. A single such document aborted the whole report
+    with a traceback, and it is exactly the kind of document the report is
+    measuring.
+    """
+    from app.services import cad_operations as ops
+    from app.services import decompiler
+    from app.services import document_service as docs
+
+    doc = docs.create_document(name="unreplayable", resolution=32, owner_id=None)
+    ops.execute("add_primitive", doc.id, {"shape": "box"})
+
+    # A step whose `$group` reference cannot resolve is what escaped before.
+    steps = [{"op": "add_primitive", "args": {"shape": "box"}},
+             {"op": "add_primitive", "args": {"shape": "sphere",
+                                              "target": {"$group": 7}}}]
+    with pytest.raises(decompiler.Unsupported):
+        decompiler.replay(steps, doc.id)
+
+    # The report survives whatever is in the store and still reports a number.
+    report = decompiler.corpus_report(resolution=32, record=False)
+    assert report["documents"] >= 1
+    assert report["recovered"] <= report["documents"]
+    assert sum(report["by_cause"].values()) == report["documents"]
