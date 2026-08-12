@@ -18,7 +18,7 @@ solve** (numpy/scipy, GPU density ops via PyTorch when CUDA is present).
 
 | Area | What you get |
 |---|---|
-| **Text-to-CAD** | A prompt bar that turns "a 100×50×30 mm bracket with two mounting holes" into an editable feature tree. LLM-first with validation + self-repair; a rule-based parser covers everything credential-free. |
+| **Text-to-CAD** | A prompt bar that turns "a 100×50×30 mm bracket with two mounting holes" into an editable feature tree, with validation + self-repair. Requires an LLM key — there is no rule-based fallback, because a parser that silently substitutes a plain box for the part you described is worse than one that says it can't help. The credential-free path to a part is the starter template gallery (operation sequences, not prompts). |
 | **Image-to-CAD** | Hand it a sketch, logo, drawing or photo. A vision model builds the tree when one is configured; otherwise the silhouette is **traced** into an extruded profile — holes included, exact and instant, no credentials. Either way you get an editable feature tree, not an opaque mesh. |
 | **Forge Copilot** | An agentic loop that plans and executes multi-step edits ("shell it to 2 mm and fillet the top edges") through the same operation API agents use — every step visible and undoable. |
 | **Parametric modeling** | Feature tree (box/cylinder/sphere/cone, booleans, fillet/chamfer/shell/hole/pattern/transform, constrained sketches, **revolve/mirror/sweep/loft**, plus real **edge fillets and chamfers on selected edges** and shells that open named faces) with a CAD-standard tool ribbon, driving parameters, configurations, dimensions, and version history. |
@@ -50,10 +50,11 @@ npm run dev        # http://localhost:5173 (proxies /api to :8000)
 ```
 
 Or both at once with `./start.sh`, or `docker-compose up`. No API keys are
-required — the rule-based text-to-CAD parser, local quote estimator, and local
-plan management all work credential-free. Optional integrations (LLM, Stripe,
-quote provider, printers) are enabled by env vars — see
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#configuration).
+required to run the app — parametric modeling, the starter templates, local
+quote estimator, and local plan management all work credential-free. Text-to-CAD
+and text-to-assembly need an LLM key (no rule-based fallback). Optional
+integrations (LLM, Stripe, quote provider, printers) are enabled by env vars —
+see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#configuration).
 
 ## The workflow
 

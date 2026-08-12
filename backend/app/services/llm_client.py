@@ -2,8 +2,9 @@
 
 The client is provider-agnostic and speaks the OpenAI-style chat-completion
 protocol used by Kimi/Moonshot and OpenRouter. Configuration is opt-in via
-environment variables; when no key is configured the app falls back to the
-rule-based parser.
+environment variables; text-to-CAD, text-to-assembly and the Copilot loop all
+require a key and raise `TextToCadUnavailable` / decline to run without one —
+there is no rule-based fallback.
 
 Supported environment variables (in order of precedence):
   LLM_API_KEY / KIMI_API_KEY

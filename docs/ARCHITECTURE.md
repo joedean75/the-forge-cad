@@ -81,11 +81,16 @@ configured LLM.
 
 ## Configuration
 
-Everything optional degrades gracefully with **no** credentials.
+Most optional integrations degrade gracefully with **no** credentials. The
+exception is the LLM: text-to-CAD, text-to-assembly and the Copilot loop all
+require a key and raise a typed `PRECONDITION` (`TextToCadUnavailable`) rather
+than substituting a rule-based approximation — there is no rule-based parser
+any more, on the principle that a generator silently returning a different
+part than the one described is worse than one that says it can't help.
 
 | Env | Purpose |
 |---|---|
-| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | LLM text-to-CAD + Copilot (OpenAI-style protocol; without it, the rule-based parser runs) |
+| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | LLM text-to-CAD + Copilot (OpenAI-style protocol; **required** — text-to-CAD and text-to-assembly have no fallback without it) |
 | `DATABASE_URL` | Postgres in production; embedded SQLite otherwise |
 | `FORGE_AUTH_REQUIRED=1` | enforce auth (otherwise a shared dev account) |
 | `FORGE_JWT_SECRET` | stable session signing in production |
