@@ -248,47 +248,15 @@ def _build_filter(nelx: int, nely: int, nelz: int, rmin: float) -> csr_matrix:
 
 
 def _pcg_solve(K_csr, F, device, tol: float = 1e-8, max_iter: int = None) -> np.ndarray:
-    """Jacobi-preconditioned conjugate gradient for KU=F on a torch device (GPU-capable).
+    """Jacobi-preconditioned CG for KU=F on a torch device.
 
-    K is SPD (stiffness with fixed DOFs removed). Runs entirely on `device`; used
-    in place of scipy's direct solve when a CUDA GPU is available.
+    Thin wrapper over `services.compute.pcg_solve`, which `fea.solve` also uses
+    — this is one system assembled in two places and it should not be two
+    solvers. Kept as a name here because the call sites below read better for it.
     """
-    n = K_csr.shape[0]
-    if max_iter is None:
-        max_iter = max(500, 2 * n)
-    coo = K_csr.tocoo()
-    idx = torch.tensor(np.vstack([coo.row, coo.col]), dtype=torch.long, device=device)
-    val = torch.tensor(coo.data, dtype=torch.float64, device=device)
-    A = torch.sparse_coo_tensor(idx, val, (n, n)).coalesce()
-    b = torch.tensor(np.asarray(F), dtype=torch.float64, device=device)
+    from app.services import compute
 
-    diag = torch.tensor(K_csr.diagonal().copy(), dtype=torch.float64, device=device)
-    diag = torch.where(diag.abs() < 1e-30, torch.ones_like(diag), diag)
-    m_inv = 1.0 / diag
-
-    x = torch.zeros(n, dtype=torch.float64, device=device)
-    r = b.clone()  # x0 = 0 -> r0 = b - A x0 = b
-    z = m_inv * r
-    p = z.clone()
-    rz = torch.dot(r, z)
-    b_norm = torch.linalg.norm(b) + 1e-30
-
-    for _ in range(max_iter):
-        ap = torch.sparse.mm(A, p.unsqueeze(1)).squeeze(1)
-        p_ap = torch.dot(p, ap)
-        if p_ap.abs() < 1e-30:
-            break
-        alpha = rz / p_ap
-        x = x + alpha * p
-        r = r - alpha * ap
-        if torch.linalg.norm(r) / b_norm < tol:
-            break
-        z = m_inv * r
-        rz_new = torch.dot(r, z)
-        p = z + (rz_new / rz) * p
-        rz = rz_new
-
-    return x.detach().cpu().numpy()
+    return compute.pcg_solve(K_csr, F, device, tol=tol, max_iter=max_iter)
 
 
 def _oc_update(

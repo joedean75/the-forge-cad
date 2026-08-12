@@ -28,8 +28,10 @@ backend/data/
 .DS_Store
 Thumbs.db
 
-# Rust build artifacts (native extension)
+# Rust build artifacts (native extension) and the wheels CI builds from it
 backend/native/*/target/
+dist-native/
+*.whl
 
 # Logs and throwaway captures. Thirteen debugging screenshots and a server.log
 # were committed to the frontend and backend roots before this rule existed;

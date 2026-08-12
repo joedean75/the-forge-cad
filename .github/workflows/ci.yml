@@ -26,6 +26,22 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      # Build the native SDF sampler so its parity tests actually run. They are
+      # the only thing that catches the two evaluators disagreeing, and they
+      # skip when the wheel is absent — so without this step the check that
+      # matters most is the one CI never performs. Rust ships on the runner.
+      - name: Build the native SDF sampler
+        working-directory: backend/native/forge_sdf
+        run: |
+          pip install maturin
+          maturin build --release --out ../../../dist-native
+          pip install ../../../dist-native/*.whl
+      - name: Confirm the fast path is present
+        working-directory: backend
+        run: |
+          python -c "from app.cad_kernel.evaluator import sdf_native; \
+            assert sdf_native.AVAILABLE, 'native SDF did not install'; \
+            print('native SDF sampler available')"
       - name: Run tests
         working-directory: backend
         # `python -m` puts backend/ on sys.path so the `app` package imports.

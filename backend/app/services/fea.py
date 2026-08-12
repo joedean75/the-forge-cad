@@ -175,6 +175,24 @@ def _solve_system(stiffness, load):
         return spsolve(stiffness.tocsc(), load), "direct"
 
     matrix = stiffness.tocsr()
+
+    # The same Jacobi-preconditioned CG the optimizer uses, on the same device
+    # decision — `services/compute`. SIMP has had a GPU path since it was
+    # written and this solve did not, which meant the analysis a user waits for
+    # was the half that stayed on the CPU. Falls back to scipy when torch is
+    # absent, because torch is not what makes this correct.
+    from app.services import compute
+
+    if compute.torch_available():
+        device = compute.device()
+        try:
+            solution = compute.pcg_solve(matrix, load, device,
+                                         tol=_CG_TOL,
+                                         max_iter=_CG_MAX_ITER_FACTOR * n)
+            return solution, f"conjugate-gradient ({compute.describe_device(device)})"
+        except RuntimeError as exc:
+            raise FeaError(str(exc)) from exc
+
     diagonal = matrix.diagonal().copy()
     diagonal[np.abs(diagonal) < 1e-30] = 1.0
     preconditioner = LinearOperator(
@@ -185,7 +203,7 @@ def _solve_system(stiffness, load):
         raise FeaError(
             f"conjugate gradients did not converge on {n} degrees of freedom "
             f"(info={info}); the model may be under-constrained")
-    return solution, "conjugate-gradient"
+    return solution, "conjugate-gradient (scipy)"
 
 
 class _BrepOccupancy:

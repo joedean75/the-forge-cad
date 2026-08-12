@@ -84,6 +84,18 @@ docker compose up -d          # brings up postgres + backend (edit compose for p
 | `FORGE_TRUSTED_PROXY_HOPS` | How many reverse proxies sit in front of the app. `0` (default) ignores `X-Forwarded-For` entirely; set `1` behind a single PaaS load balancer so the auth rate limiter sees real client IPs instead of the balancer's. |
 | `FORGE_STEP_MAX_TRIANGLES` | Cap on a single STEP export (default 100000, ~130 MB). Oversized requests get a 413 telling them to lower `resolution` rather than exhausting RAM. |
 
+## Performance knobs
+
+- **The native SDF sampler** is built by the image's `native` stage (Rust →
+  wheel → installed). It is optional: if the wheel fails to build or install the
+  build logs it and the numpy evaluator takes over. It matters only where the
+  SDF runs at all — with OpenCascade present the common case is exact B-rep and
+  never touches it.
+- **`FORGE_DEVICE`** pins where the sparse solves run: `cpu`, `cuda`, `cuda:1`.
+  Unset means CUDA when it is present and CPU otherwise. Both SIMP and the FEA
+  analysis honour it, and the analysis reports the device it used in `solver`.
+  There is no GPU requirement anywhere — it is a speed knob, not a dependency.
+
 ## Security posture (enforced in code)
 
 - **Auth**: JWT sessions + API keys; PBKDF2-hashed passwords; login is
