@@ -7,6 +7,7 @@ datastore and re-evaluate the solid lazily on first access.
 
 from fastapi.testclient import TestClient
 
+from conftest import http_part
 from main import app
 from app.services.persistence import list_assembly_docs, list_documents
 
@@ -15,9 +16,7 @@ client = TestClient(app)
 
 
 def test_document_persists_across_restarts():
-    resp = client.post("/api/documents", json={"prompt": "cube 40 mm", "resolution": 64})
-    assert resp.status_code == 200
-    doc_id = resp.json()["id"]
+    doc_id = http_part(client, (0.04, 0.04, 0.04))
     assert doc_id in list_documents()
 
     # A fresh app instance (new TestClient) must restore the document and

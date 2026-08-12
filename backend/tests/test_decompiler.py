@@ -15,6 +15,7 @@ from app.services import decompiler
 from app.services import document_service as docs
 from app.services import trajectories
 from app.services.decompiler import Unsupported
+from conftest import plate_tree, whole_tree_document
 
 
 def _doc(name="decomp"):
@@ -132,7 +133,7 @@ def test_decompiled_sequences_rebuild_the_same_geometry(calls):
 
 def test_a_text_to_cad_document_decompiles_even_though_it_was_never_built_by_ops():
     """The whole point: recovering data from the path that produces none."""
-    doc = docs.create_document(prompt="a 60x30x5 mm plate", resolution=32, owner_id=None)
+    doc = whole_tree_document(plate_tree(), prompt="a 60x30x5 mm plate")
     outcome = decompiler.decompile_document(doc.id, resolution=32, record=False)
     assert outcome["ok"], outcome.get("reason")
 
@@ -193,7 +194,8 @@ def test_a_trajectory_that_fails_to_reproduce_is_discarded(monkeypatch):
 # ------------------------------------------------------- trajectory output --
 
 def test_a_verified_decompile_is_recorded_as_a_trajectory():
-    doc = docs.create_document(prompt="a 40x20x4 mm bracket", resolution=32, owner_id=None)
+    doc = whole_tree_document(plate_tree((0.04, 0.02, 0.004)),
+                              prompt="a 40x20x4 mm bracket")
     outcome = decompiler.decompile_document(doc.id, resolution=32, record=True)
     assert outcome["ok"], outcome.get("reason")
 
@@ -228,7 +230,8 @@ def test_decompiling_over_http_returns_the_verified_sequence():
     from main import app
 
     client = TestClient(app)
-    doc = docs.create_document(prompt="a 50x25x3 mm plate", resolution=32, owner_id=None)
+    doc = whole_tree_document(plate_tree((0.05, 0.025, 0.003)),
+                              prompt="a 50x25x3 mm plate")
     r = client.post("/api/trajectories/decompile", params={"doc_id": doc.id, "resolution": 32})
     assert r.status_code == 200
     body = r.json()

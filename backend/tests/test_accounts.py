@@ -5,6 +5,7 @@ import importlib
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import http_part
 from main import app
 from app.services import accounts, plans
 
@@ -86,9 +87,7 @@ def test_step_export_gated_by_plan():
     r = _signup("stepgate@example.com")
     token = r.json()["token"]
     hdr = {"Authorization": f"Bearer {token}"}
-    doc_id = client.post(
-        "/api/documents", json={"prompt": "box 0.05x0.05x0.05 m", "resolution": 48}, headers=hdr
-    ).json()["id"]
+    doc_id = http_part(client, (0.05, 0.05, 0.05), resolution=48, headers=hdr)
 
     denied = client.get(f"/api/documents/{doc_id}/step?resolution=48", headers=hdr)
     assert denied.status_code == 402, denied.text
@@ -106,11 +105,8 @@ def test_api_key_authenticates_operation_endpoint():
     client.post("/api/auth/subscribe", json={"plan_id": "pro"}, headers=hdr)
     key = client.post("/api/auth/api-keys", json={"name": "mcp"}, headers=hdr).json()["api_key"]
 
-    doc_id = client.post(
-        "/api/documents",
-        json={"prompt": "box 0.05x0.05x0.05 m", "resolution": 48},
-        headers={"X-API-Key": key},
-    ).json()["id"]
+    doc_id = http_part(client, (0.05, 0.05, 0.05), resolution=48,
+                       headers={"X-API-Key": key})
     # Drive a mutating op purely with the API key (the agent path).
     op = client.post(
         f"/api/documents/{doc_id}/op",

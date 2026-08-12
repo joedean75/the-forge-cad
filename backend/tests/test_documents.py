@@ -2,20 +2,20 @@
 
 from fastapi.testclient import TestClient
 
+from conftest import http_part
+from app.cad_kernel.core.feature_tree import walk_nodes
 from main import app
 
 
 client = TestClient(app)
 
 
-def _create_doc(prompt: str = "") -> str:
-    resp = client.post("/api/documents", json={"prompt": prompt, "resolution": 64})
-    assert resp.status_code == 200, resp.text
-    return resp.json()["id"]
+def _create_doc(size=(0.1, 0.06, 0.02)) -> str:
+    return http_part(client, size)
 
 
 def test_create_document_from_prompt():
-    doc_id = _create_doc("box 0.1x0.05x0.03 m")
+    doc_id = _create_doc((0.1, 0.05, 0.03))
     resp = client.get(f"/api/documents/{doc_id}")
     assert resp.status_code == 200
     doc = resp.json()
@@ -25,7 +25,7 @@ def test_create_document_from_prompt():
 
 
 def test_list_documents():
-    doc_id = _create_doc("sphere radius 0.05 m")
+    doc_id = _create_doc((0.1, 0.1, 0.1))
     resp = client.get("/api/documents")
     assert resp.status_code == 200
     docs = resp.json()
@@ -33,21 +33,47 @@ def test_list_documents():
 
 
 def test_update_document_feature_tree():
-    doc_id = _create_doc("box 0.1x0.1x0.1 m")
+    doc_id = _create_doc((0.1, 0.1, 0.1))
     get_resp = client.get(f"/api/documents/{doc_id}")
     tree = get_resp.json()["feature_tree"]
-    tree["root"]["params"]["size"]["x"] = 0.2
+    # The root is the union the datum planes sit in, not the box — see
+    # `conftest.body_id`. It used to be the box only because a prompt produced
+    # a single-feature tree.
+    box = next(n for n in walk_nodes(tree) if n.get("type") == "BoxFeature")
+    box["params"]["size"]["x"] = 0.2
 
     resp = client.put(
         f"/api/documents/{doc_id}",
         json={"feature_tree": tree, "resolution": 64},
     )
     assert resp.status_code == 200, resp.text
+    # `mixed` means "generated, then edited by hand". This document was built
+    # by hand, so editing it leaves it `manual` — it used to read `mixed` only
+    # because a prompt made it `text_to_cad` first.
+    assert resp.json()["provenance"] == "manual"
+    updated = next(n for n in walk_nodes(resp.json()["feature_tree"])
+                   if n.get("type") == "BoxFeature")
+    assert updated["params"]["size"]["x"] == 0.2
+
+
+def test_editing_a_generated_document_marks_it_mixed():
+    """The transition the test above used to cover incidentally."""
+    from conftest import plate_tree, whole_tree_document
+
+    doc = whole_tree_document(plate_tree(), prompt="a 60x30x5 mm plate")
+    assert doc.provenance == "text_to_cad"
+
+    tree = client.get(f"/api/documents/{doc.id}").json()["feature_tree"]
+    box = next(n for n in walk_nodes(tree) if n.get("type") == "BoxFeature")
+    box["params"]["size"]["x"] = 0.09
+    resp = client.put(f"/api/documents/{doc.id}",
+                      json={"feature_tree": tree, "resolution": 48})
+    assert resp.status_code == 200, resp.text
     assert resp.json()["provenance"] == "mixed"
 
 
 def test_document_simulate_endpoint():
-    doc_id = _create_doc("box 0.1x0.05x0.03 m")
+    doc_id = _create_doc((0.1, 0.05, 0.03))
     resp = client.post(f"/api/documents/{doc_id}/simulate?resolution=64")
     assert resp.status_code == 200, resp.text
     result = resp.json()
@@ -56,7 +82,7 @@ def test_document_simulate_endpoint():
 
 
 def test_document_dfm_endpoint():
-    doc_id = _create_doc("box 0.1x0.05x0.03 m")
+    doc_id = _create_doc((0.1, 0.05, 0.03))
     resp = client.post(f"/api/documents/{doc_id}/dfm?build_axis=z&resolution=64")
     assert resp.status_code == 200, resp.text
     result = resp.json()
@@ -67,7 +93,7 @@ def test_document_dfm_endpoint():
 
 
 def test_document_step_export():
-    doc_id = _create_doc("box 0.1x0.05x0.03 m")
+    doc_id = _create_doc((0.1, 0.05, 0.03))
     resp = client.get(f"/api/documents/{doc_id}/step?resolution=64")
     assert resp.status_code == 200, resp.text
     assert "ISO-10303-21" in resp.text
@@ -75,7 +101,7 @@ def test_document_step_export():
 
 
 def test_delete_document():
-    doc_id = _create_doc("box 0.05x0.05x0.05 m")
+    doc_id = _create_doc((0.05, 0.05, 0.05))
     resp = client.delete(f"/api/documents/{doc_id}")
     assert resp.status_code == 200
     assert resp.json()["status"] == "deleted"

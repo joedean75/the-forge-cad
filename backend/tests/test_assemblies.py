@@ -3,16 +3,15 @@ import re
 
 from fastapi.testclient import TestClient
 
+from conftest import http_part
 from main import app
 
 
 client = TestClient(app)
 
 
-def _create_part(prompt: str = "box 0.1x0.05x0.03 m") -> str:
-    resp = client.post("/api/documents", json={"prompt": prompt, "resolution": 64})
-    assert resp.status_code == 200, resp.text
-    return resp.json()["id"]
+def _create_part(size=(0.1, 0.05, 0.03)) -> str:
+    return http_part(client, size)
 
 
 def _create_assembly(name: str = "Test asm") -> dict:

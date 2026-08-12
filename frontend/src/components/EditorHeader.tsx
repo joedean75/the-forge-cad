@@ -116,7 +116,9 @@ function LlmSelector() {
   return (
     <div
       className="flex items-center gap-1.5 h-9 pl-2 pr-1.5 rounded-sm border border-cad-border shrink-0"
-      title={on ? `Text-to-CAD via ${cfg?.provider}` : 'No LLM key — using the rule-based parser (add LLM_API_KEY to backend/.env)'}
+      title={on
+        ? `Text-to-CAD via ${cfg?.provider}`
+        : 'No LLM key — describing a part is unavailable. Start from a template instead, or add LLM_API_KEY to backend/.env.'}
     >
       <Cpu size={13} className={on ? 'text-cad-success' : 'text-cad-text/50'} />
       {on && cfg ? (
@@ -137,7 +139,9 @@ function LlmSelector() {
           ))}
         </select>
       ) : (
-        <span className="tabular text-[10px] text-cad-text/60 pr-1">rule-based</span>
+        // Not "rule-based" any more: there is no parser behind this, so
+        // saying so would promise a fallback that no longer exists.
+        <span className="tabular text-[10px] text-cad-text/60 pr-1">no model</span>
       )}
       {updating && <Loader2 size={11} className="animate-spin text-cad-text shrink-0" />}
     </div>

@@ -8,10 +8,17 @@ from app.services import quotes
 client = TestClient(app)
 
 
-def _part(prompt="box 0.1x0.06x0.02 m") -> str:
-    r = client.post("/api/documents", json={"prompt": prompt, "resolution": 64})
+def _part(size=(0.1, 0.06, 0.02)) -> str:
+    """A document with a body. Built through the operation API — it used to be
+    a prompt, which only worked because a rule-based parser answered it."""
+    r = client.post("/api/documents", json={"name": "quote part", "resolution": 64})
     assert r.status_code == 200, r.text
-    return r.json()["id"]
+    doc_id = r.json()["id"]
+    op = client.post(f"/api/documents/{doc_id}/op", json={
+        "op": "add_primitive", "args": {"shape": "box", "params": {
+            "size": {"x": size[0], "y": size[1], "z": size[2]}}}})
+    assert op.status_code == 200, op.text
+    return doc_id
 
 
 def test_quotes_cover_viable_processes():

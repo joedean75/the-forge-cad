@@ -98,6 +98,8 @@ class CamRequest(BaseModel):
 
 @router.post("", response_model=DesignDocument)
 def create_document(body: CreateDocumentRequest, acc: accounts.Account = Depends(current_account)):
+    from app.services.text_to_cad_engine import TextToCadUnavailable
+
     try:
         return docs.create_document(
             name=body.name,
@@ -106,6 +108,13 @@ def create_document(body: CreateDocumentRequest, acc: accounts.Account = Depends
             resolution=body.resolution,
             owner_id=acc.id,
         )
+    except TextToCadUnavailable as exc:
+        # A named condition with something to do about it, not a generic 400.
+        # There is no rule-based fallback any more: a generator that silently
+        # substitutes a different part is worse than one that says it cannot
+        # help. `remedy` points at the templates, which need no model.
+        raise HTTPException(status_code=422, detail={
+            "code": "PRECONDITION", "message": str(exc), "remedy": exc.remedy})
     except Exception:
         # Log the detail server-side; don't leak internals to the client.
         import logging

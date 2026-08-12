@@ -2,6 +2,7 @@
 
 from fastapi.testclient import TestClient
 
+from conftest import http_part
 from main import app
 
 client = TestClient(app)
@@ -14,9 +15,7 @@ def _user(email):
 
 
 def _doc(hdr):
-    r = client.post("/api/documents", json={"prompt": "box 0.05x0.05x0.05 m", "resolution": 32}, headers=hdr)
-    assert r.status_code == 200, r.text
-    return r.json()["id"]
+    return http_part(client, (0.05, 0.05, 0.05), resolution=32, headers=hdr)
 
 
 def _add_cyl(doc_id, hdr):

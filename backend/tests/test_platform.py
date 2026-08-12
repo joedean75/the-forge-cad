@@ -2,6 +2,7 @@
 
 from fastapi.testclient import TestClient
 
+from conftest import http_part
 from main import app
 
 client = TestClient(app)
@@ -41,9 +42,7 @@ def test_api_key_drives_the_operation_api_end_to_end():
     key = {"X-Api-Key": k.json()["api_key"]}
 
     # Create a part and mutate it using ONLY the API key.
-    d = client.post("/api/documents", json={"prompt": "box 0.1x0.06x0.02 m", "resolution": 64}, headers=key)
-    assert d.status_code == 200, d.text
-    doc_id = d.json()["id"]
+    doc_id = http_part(client, (0.1, 0.06, 0.02), headers=key)
     op = client.post(
         f"/api/documents/{doc_id}/op",
         json={"op": "add_primitive",

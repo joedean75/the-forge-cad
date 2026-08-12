@@ -787,6 +787,9 @@ export interface AssemblyPromptJob {
   progress?: string | null
   assembly_id?: string | null
   error?: string | null
+  /** What to do about the error, when the failure carries one — chiefly
+   *  "no language model is configured", which is useless without it. */
+  remedy?: string | null
 }
 
 export interface ComponentTransform {

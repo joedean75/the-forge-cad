@@ -16,6 +16,7 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import body_id, http_part
 from main import app
 from app.cad_kernel.io import pdf as pdf_io
 from app.services import artifacts, document_service as docs, drawing, release_package
@@ -23,10 +24,8 @@ from app.services import artifacts, document_service as docs, drawing, release_p
 client = TestClient(app)
 
 
-def _doc(prompt: str = "box 0.1x0.06x0.02 m") -> str:
-    resp = client.post("/api/documents", json={"prompt": prompt, "resolution": 64})
-    assert resp.status_code == 200, resp.text
-    return resp.json()["id"]
+def _doc(size=(0.1, 0.06, 0.02)) -> str:
+    return http_part(client, size)
 
 
 def _op(doc_id: str, op: str, **args) -> dict:
@@ -74,8 +73,10 @@ def test_exporting_the_same_body_twice_returns_the_same_url():
 def test_an_edit_moves_the_url():
     doc_id = _doc()
     before = _ok(doc_id, "export", format="stl")["hash"]
-    root = client.get(f"/api/documents/{doc_id}").json()["feature_tree"]["root"]["id"]
-    _ok(doc_id, "set_feature_params", feature_id=root,
+    # The box, not the root — the root is the union the datum planes sit in, and
+    # setting a size on it does nothing at all. See `conftest.body_id`.
+    box = body_id(client.get(f"/api/documents/{doc_id}").json()["feature_tree"])
+    _ok(doc_id, "set_feature_params", feature_id=box,
         params={"size": {"x": 0.25, "y": 0.06, "z": 0.02}})
     assert _ok(doc_id, "export", format="stl")["hash"] != before
 

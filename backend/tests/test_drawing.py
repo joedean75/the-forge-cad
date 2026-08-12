@@ -9,7 +9,7 @@ client = TestClient(app)
 
 
 def _bracket() -> str:
-    r = client.post("/api/documents", json={"prompt": "", "resolution": 48})
+    r = client.post("/api/documents", json={"name": "bracket", "resolution": 48})
     doc_id = r.json()["id"]
     # A plate with a through-hole so the top view has an inner contour.
     base_box(client, doc_id, size=(0.08, 0.05, 0.02))

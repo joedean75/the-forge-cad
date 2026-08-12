@@ -111,7 +111,9 @@ def test_recording_survives_a_restart_because_it_is_persisted():
 # --------------------------------------------------------------- provenance --
 
 def test_a_generated_document_remembers_the_prompt_that_made_it():
-    doc = docs.create_document(prompt="a 60x30x5 mm plate", resolution=32, owner_id=None)
+    from conftest import plate_tree, whole_tree_document
+
+    doc = whole_tree_document(plate_tree(), prompt="a 60x30x5 mm plate")
     assert doc.source_prompt == "a 60x30x5 mm plate"
 
 

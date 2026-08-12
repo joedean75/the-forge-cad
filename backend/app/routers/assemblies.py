@@ -70,6 +70,9 @@ class AssemblyPromptJob(BaseModel):
     progress: Optional[str] = None
     assembly_id: Optional[str] = None
     error: Optional[str] = None
+    # What to do about the error, when the failure carries one. The commonest
+    # one here is "no model configured", which is useless without it.
+    remedy: Optional[str] = None
 
 
 def _run_prompt_job(job: Dict[str, Any], prompt: str, resolution: int, owner_id: Optional[str]) -> None:
@@ -84,7 +87,14 @@ def _run_prompt_job(job: Dict[str, Any], prompt: str, resolution: int, owner_id:
         job["status"] = "done"
     except Exception as exc:  # noqa: BLE001 — the job must always resolve
         logging.getLogger(__name__).warning("text-to-assembly failed: %s", exc)
+        # `remedy` rides along when the failure has one. Without it the commonest
+        # error here — no model configured — reaches the user as a statement of
+        # fact with nothing to do about it, while every other typed failure in
+        # the product says where to go next.
         job["error"] = str(exc)
+        remedy = getattr(exc, "remedy", None)
+        if remedy:
+            job["remedy"] = remedy
         job["status"] = "error"
 
 
@@ -111,7 +121,8 @@ def assembly_from_prompt_job(job_id: str, acc: accounts.Account = Depends(curren
     if job is None or job["owner_id"] != acc.id:
         raise HTTPException(status_code=404, detail="Job not found")
     return AssemblyPromptJob(job_id=job["id"], status=job["status"], progress=job.get("progress"),
-                             assembly_id=job.get("assembly_id"), error=job.get("error"))
+                             assembly_id=job.get("assembly_id"), error=job.get("error"),
+                             remedy=job.get("remedy"))
 
 
 @router.get("/{assembly_id}", response_model=AssemblyDoc)

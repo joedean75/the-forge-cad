@@ -9,7 +9,7 @@ Every part then runs through the existing validated text-to-CAD pipeline
 become ordinary ``AssemblyComponent`` transforms.
 
 With no LLM configured this degrades to a single-part assembly from the rule
-parser, per the project's credential-free policy. The planner is injectable for
+planner is injectable for
 tests, like the Copilot planner.
 """
 
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from app.models.schemas import AssemblyDoc, ComponentTransform, Vector3
 from app.services import assembly_service, document_service, llm_client
@@ -76,15 +76,28 @@ def _plan(prompt: str) -> dict:
         return _ask_planner(retry)
 
 
-def _fallback_plan(prompt: str) -> dict:
-    """No LLM: a single-part assembly through the rule parser."""
-    stripped = prompt.strip()
-    name = stripped[:57] + "..." if len(stripped) > 60 else stripped
-    return {
-        "name": name,
-        "parts": [{"key": "part", "name": name, "prompt": prompt}],
-        "components": [{"part": "part"}],
-    }
+def _build_part(*, name, prompt, resolution, owner_id):
+    """One part, through the normal validated text-to-CAD pipeline."""
+    return document_service.create_document(
+        name=name, prompt=prompt, resolution=resolution, owner_id=owner_id)
+
+
+def _no_planner(prompt: str) -> dict:
+    """No LLM: refuse, rather than plan an assembly nothing can build.
+
+    This used to return a one-part plan and hand the prompt to the rule-based
+    parser. That parser is gone — it answered any description with a box — so
+    the "fallback" would now plan a part that cannot be built, and the failure
+    would surface deep inside the job instead of at the request. Text-to-CAD
+    raises the same condition for the same reason.
+    """
+    from app.services.text_to_cad_engine import TextToCadUnavailable
+
+    raise TextToCadUnavailable(
+        "text-to-assembly needs a language model and none is configured",
+        remedy="set LLM_API_KEY in backend/.env, or create an assembly and add "
+               "parts to it — insert_standard_part places purchased parts with "
+               "no model involved")
 
 
 def _vec_mm(v: Optional[dict]) -> Vector3:
@@ -104,9 +117,19 @@ def create_assembly_from_prompt(
     owner_id: Optional[str] = None,
     resolution: int = 96,
     planner: Optional[Planner] = None,
+    build_part: Optional[Callable[..., Any]] = None,
     on_progress: Optional[Callable[[str], None]] = None,
 ) -> AssemblyDoc:
-    """Generate parts + assembly from one prompt. Raises ValueError on a bad plan."""
+    """Generate parts + assembly from one prompt. Raises ValueError on a bad plan.
+
+    Both halves are injectable, and for the same reason. `planner` decides what
+    parts there are; `build_part` turns one part's description into a document.
+    By default both go through the LLM, and neither works without it — but the
+    logic *between* them (one document per distinct part, instances sharing it,
+    placement, mates) is ordinary code that should be testable on its own. It
+    was not: with the planner injected the parts were still built by
+    text-to-CAD, so a key was needed to exercise assembly composition at all.
+    """
 
     def progress(msg: str) -> None:
         if on_progress is not None:
@@ -116,7 +139,7 @@ def create_assembly_from_prompt(
                 pass
 
     if planner is None:
-        planner = _plan if llm_client.is_configured() else _fallback_plan
+        planner = _plan if llm_client.is_configured() else _no_planner
 
     progress("planning the assembly")
     plan = planner(prompt)
@@ -135,9 +158,9 @@ def create_assembly_from_prompt(
         if not part_prompt:
             continue
         progress(f"generating part {i + 1}/{len(parts)}: {p.get('name') or key}")
-        doc = document_service.create_document(
-            name=p.get("name"), prompt=part_prompt, resolution=resolution, owner_id=owner_id
-        )
+        make = build_part or _build_part
+        doc = make(name=p.get("name"), prompt=part_prompt,
+                   resolution=resolution, owner_id=owner_id)
         if doc.derived.error:
             _LOGGER.warning("text-to-assembly part '%s' evaluated with error: %s", key, doc.derived.error)
         part_ids[key] = doc.id

@@ -5,6 +5,7 @@ from starlette.websockets import WebSocketDisconnect
 
 import pytest
 
+from conftest import http_part
 from main import app
 
 
@@ -19,9 +20,7 @@ def _drain_until(ws, wanted_type: str, tries: int = 10) -> dict:
 def test_presence_and_live_update_broadcast():
     # Context-managed client so lifespan runs and the hub captures the loop.
     with TestClient(app) as client:
-        r = client.post("/api/documents", json={"prompt": "box 0.05x0.05x0.05 m", "resolution": 48})
-        assert r.status_code == 200, r.text
-        doc_id = r.json()["id"]
+        doc_id = http_part(client, (0.05, 0.05, 0.05), resolution=48)
 
         with client.websocket_connect(f"/api/documents/{doc_id}/ws") as ws1:
             hello = ws1.receive_json()

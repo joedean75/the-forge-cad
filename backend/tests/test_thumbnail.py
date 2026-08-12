@@ -8,6 +8,8 @@ already had the answers in the row it was reading.
 import numpy as np
 from fastapi.testclient import TestClient
 
+from conftest import http_part, plate_tree, whole_tree_document
+from app.cad_kernel.core.feature_tree import walk_nodes
 from main import app
 from app.services import document_service as docs
 from app.services import persistence, thumbnail
@@ -15,10 +17,9 @@ from app.services import persistence, thumbnail
 client = TestClient(app)
 
 
-def _create(prompt: str = "box 0.1x0.06x0.02 m") -> dict:
-    resp = client.post("/api/documents", json={"prompt": prompt, "resolution": 64})
-    assert resp.status_code == 200, resp.text
-    return resp.json()
+def _create(size=(0.1, 0.06, 0.02)) -> dict:
+    doc_id = http_part(client, size)
+    return client.get(f"/api/documents/{doc_id}").json()
 
 
 def _summary(doc_id: str) -> dict:
@@ -46,8 +47,8 @@ def test_an_empty_mesh_draws_nothing_rather_than_a_blank_png():
 
 def test_two_different_parts_do_not_render_the_same_picture():
     """The whole point: a thumbnail nobody can tell apart is an icon with a cost."""
-    plate = _create("box 0.1x0.06x0.02 m")
-    rod = _create("cylinder radius 0.02 m height 0.12 m")
+    plate = _create()
+    rod = _create((0.04, 0.04, 0.12))
     a = thumbnail.for_document(plate["id"], plate["derived"]["mesh_hash"])
     b = thumbnail.for_document(rod["id"], rod["derived"]["mesh_hash"])
     assert a and b and a != b
@@ -75,10 +76,11 @@ def test_a_hash_the_document_does_not_have_is_a_404_not_the_current_picture():
 
 
 def test_the_picture_follows_an_edit_rather_than_going_stale():
-    doc = _create("box 0.1x0.06x0.02 m")
+    doc = _create()
     first = doc["derived"]["mesh_hash"]
     tree = doc["feature_tree"]
-    tree["root"]["params"]["size"]["x"] = 0.25
+    box = next(n for n in walk_nodes(tree) if n.get("type") == "BoxFeature")
+    box["params"]["size"]["x"] = 0.25
     edited = client.put(
         f"/api/documents/{doc['id']}",
         json={"feature_tree": tree, "resolution": 64},
@@ -101,7 +103,7 @@ def test_a_thumbnail_is_derived_and_stays_out_of_the_document():
 # --- the facts on the card -------------------------------------------------
 
 def test_the_listing_says_what_the_part_is():
-    doc = _create("box 0.1x0.06x0.02 m")
+    doc = _create()
     client.post(f"/api/documents/{doc['id']}/material", json={"material_id": "steel-1018"})
     row = _summary(doc["id"])
     assert row["lifecycle_state"] == "draft"
@@ -122,15 +124,18 @@ def test_the_listing_carries_the_released_revision_letter():
 def test_the_listing_carries_the_prompt_the_part_was_asked_for():
     """Often the only thing anyone remembers about a generated part, which is
     why the library searches it alongside the name."""
-    doc = _create("box 0.1x0.06x0.02 m")
-    assert _summary(doc["id"])["source_prompt"] == "box 0.1x0.06x0.02 m"
+    # A prompt only reaches a document through text-to-CAD, which needs a model.
+    # The listing feature under test is independent of how it got there, so the
+    # tree is installed directly — see `conftest.whole_tree_document`.
+    doc = whole_tree_document(plate_tree(), prompt="a 60x30x5 mm plate")
+    assert _summary(doc.id)["source_prompt"] == "a 60x30x5 mm plate"
 
 
 def test_the_sql_and_in_memory_listing_paths_agree():
     """`list_documents` overlays live documents on the SQL rows. Two paths
     producing different cards is how a field silently only works after a
     restart."""
-    doc = _create("box 0.08x0.08x0.02 m")
+    doc = _create((0.08, 0.08, 0.02))
     client.post(f"/api/documents/{doc['id']}/material", json={"material_id": "al-6061"})
     fields = ("lifecycle_state", "material_id", "mass_kg", "revision",
               "mesh_hash", "created_at", "source_prompt")

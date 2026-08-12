@@ -3,6 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import http_part
 from main import app
 from app.services import materials as M
 
@@ -83,7 +84,7 @@ def test_materials_endpoint_returns_materials_and_categories():
 
 
 def test_a_document_can_be_bound_to_a_newly_added_grade():
-    doc = client.post("/api/documents", json={"prompt": "box 40x40x40 mm", "resolution": 32}).json()
-    resp = client.post(f"/api/documents/{doc['id']}/material", json={"material_id": "steel-4140"})
+    doc_id = http_part(client, (0.04, 0.04, 0.04), resolution=32)
+    resp = client.post(f"/api/documents/{doc_id}/material", json={"material_id": "steel-4140"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["material_id"] == "steel-4140"
