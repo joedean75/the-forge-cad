@@ -26,9 +26,30 @@ services:
         value: "1"
       - key: FORGE_JWT_SECRET        # stable signing secret (generated once)
         generateValue: true
+
+      # Render terminates TLS at its own load balancer and forwards the real
+      # client address in `X-Forwarded-For`. Without this the app trusts the
+      # socket peer instead — which *is* that load balancer — so every caller
+      # in the world collapses into one rate-limit bucket and ten failed logins
+      # from anybody locks out the whole deployment. One hop, because there is
+      # exactly one Render proxy in front of the container.
+      #
+      # The image already runs gunicorn with `--forwarded-allow-ips=`, so the
+      # server does not rewrite the peer itself and `app/rate_limit.py` is the
+      # single place that decides what is trusted. See DEPLOY.md.
+      - key: FORGE_TRUSTED_PROXY_HOPS
+        value: "1"
+
       - key: FORGE_CORS_ORIGINS      # SPA is same-origin; set only if you split hosts
         value: ""
-      - key: PUBLIC_BASE_URL        # your public URL, for Stripe redirects
+
+      # Where the sparse solves run. Render's standard plan is CPU-only, so this
+      # is pinned rather than left to autodetect — it makes the choice visible in
+      # the dashboard instead of implicit. Change it if you move to a GPU host.
+      - key: FORGE_DEVICE
+        value: "cpu"
+
+      - key: PUBLIC_BASE_URL        # your public URL, for OAuth/Stripe redirects
         sync: false
       - key: STRIPE_API_KEY
         sync: false
@@ -38,5 +59,11 @@ services:
         sync: false
       - key: STRIPE_PRICE_ENTERPRISE
         sync: false
-      - key: LLM_API_KEY            # optional; rule-based parser runs without it
+
+      # Optional. Without it the app runs fine and *describing* a part is
+      # unavailable — text-to-CAD and text-to-assembly refuse with a typed
+      # error pointing at the templates, which build a parametric part with no
+      # model involved. There is no rule-based fallback any more: it answered
+      # every description with a box, which was worse than refusing.
+      - key: LLM_API_KEY
         sync: false
