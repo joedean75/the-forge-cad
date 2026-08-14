@@ -56,8 +56,11 @@ UNIT_BY_NAME: Dict[str, str] = {
     "offset": "m", "offset_a": "m", "offset_b": "m", "spacing": "m",
     "center": "m", "distance": "m", "translate": "m", "path": "m",
     "a": "m", "b": "m",
+    # machined holes: the recess at the mouth
+    "recess_radius": "m", "recess_depth": "m",
     # angles
     "angle": "deg", "rotate": "deg",
+    "countersink_angle": "deg", "tip_angle": "deg",
     # already named for their unit, and not in metres — never warned about
     "feed_mm_min": "mm", "kerf_mm": "mm", "min_length_mm": "mm",
     "nominal_mm": "mm", "general_tolerance": "mm",
@@ -94,6 +97,10 @@ UNITLESS = frozenset({
     # folded into the description from the name.
     "key", "quantity", "category", "search", "limit", "fit", "counterbore",
     "screw",
+    # machined holes: the recess shape, whether it breaks out of the far side,
+    # and the thread callout. `tapped`/`thread` are designations ("M6"), which
+    # is why neither is called `size` — see `screw` above.
+    "hole_type", "through", "tapped", "thread",
     # the starter-part gallery: which template to build
     "template",
     # the purchased-parts listing: which portal an imported part came from

@@ -94,11 +94,33 @@ def compile_feature(feature) -> Optional[dict]:
             return None
         return {"op": "shell", "thickness": float(feature.thickness), "child": child}
     if isinstance(feature, HoleFeature):
+        from app.cad_kernel.core.types import Point3, Vector3
+        from app.cad_kernel.geom import holes
+
         child = compile_feature(feature.children[0]) if feature.children else None
         if child is None:
             return None
-        cyl = _cyl_program(feature.center, feature.radius, feature.depth, feature.axis)
-        return {"op": "boolean", "operation": "subtract", "children": [child, cyl]}
+        # The tool comes from the same `geom/holes` list the numpy and B-rep
+        # kernels build from. Re-deriving it here would be a third transcription
+        # of the arithmetic, and a native path that meshes a counterbore
+        # differently from numpy is exactly the correctness hazard the parity
+        # test exists to catch.
+        parts = []
+        for tool in holes.tools_for(feature):
+            if isinstance(tool, holes.Cyl):
+                parts.append(_cyl_program(Point3(*tool.center), tool.radius,
+                                          tool.height, Vector3(*tool.axis)))
+            else:
+                parts.append({
+                    "op": "cone", "center": list(tool.center),
+                    "base_radius": float(tool.base_radius),
+                    "height": float(tool.height),
+                    "rot": [float(v) for v in
+                            _rotation_matrix(Vector3(*tool.axis)).flatten()],
+                })
+        cut = parts[0] if len(parts) == 1 else {
+            "op": "boolean", "operation": "union", "children": parts}
+        return {"op": "boolean", "operation": "subtract", "children": [child, cut]}
     if isinstance(feature, TransformFeature):
         child = compile_feature(feature.children[0]) if feature.children else None
         if child is None:

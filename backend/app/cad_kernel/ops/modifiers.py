@@ -127,12 +127,37 @@ class ShellFeature(Feature):
 @register_feature
 @dataclass
 class HoleFeature(Feature):
-    """Subtract a cylindrical hole from the single child."""
+    """Subtract a machined hole from the single child.
+
+    A plain bore with every option at its default — which is what this was, and
+    what every stored document still deserialises to. The rest is the shape a
+    real hole has: a counterbore or countersink at the mouth, a conical drill
+    point below the shoulder, and a thread designation for a tapped one.
+
+    `depth` measures to the **shoulder**, not to the drill point, so adding a
+    `tip_angle` to an existing feature deepens the hole rather than silently
+    moving its flat bottom up. `through` lengthens the far end only, leaving the
+    mouth — and therefore the recess — where the caller put it.
+
+    `thread` is a callout, not geometry. A tapped hole is drilled at the tap
+    drill diameter and the thread is cut afterwards; modelling the helix is
+    `ThreadFeature`'s job, and a hole that quietly grew a 60° helical cut would
+    be a different body from the one every drawing and DFM figure describes.
+    The `add_hole` operation is what turns `tapped: "M6"` into the right
+    `radius` — this feature holds the number, not the lookup.
+    """
 
     radius: float = 0.005
     depth: float = 0.1
     center: Point3 = field(default_factory=Point3)
     axis: Vector3 = field(default_factory=lambda: Vector3(0.0, 0.0, 1.0))
+    hole_type: Literal["simple", "counterbore", "countersink"] = "simple"
+    recess_radius: float = 0.0        # counterbore / countersink, at the mouth
+    recess_depth: float = 0.0         # counterbore depth; countersink override
+    countersink_angle: float = 90.0   # included angle, degrees
+    tip_angle: float = 0.0            # 0 = flat bottom; 118 is a jobber drill
+    through: bool = False
+    thread: str = ""                  # e.g. "M6" — a callout, not a helix
     children: List[Feature] = field(default_factory=list)
 
     def evaluate(self) -> Solid:
@@ -144,6 +169,13 @@ class HoleFeature(Feature):
             "depth": self.depth,
             "center": _vd(self.center),
             "axis": _vd(self.axis),
+            "hole_type": self.hole_type,
+            "recess_radius": self.recess_radius,
+            "recess_depth": self.recess_depth,
+            "countersink_angle": self.countersink_angle,
+            "tip_angle": self.tip_angle,
+            "through": self.through,
+            "thread": self.thread,
             "children": [c.to_dict() for c in self.children],
         }
 
@@ -157,6 +189,13 @@ class HoleFeature(Feature):
             depth=p.get("depth", 0.1),
             center=_pt(p.get("center", {"x": 0, "y": 0, "z": 0})),
             axis=_vec(p.get("axis", {"x": 0, "y": 0, "z": 1})),
+            hole_type=p.get("hole_type", "simple"),
+            recess_radius=float(p.get("recess_radius", 0.0) or 0.0),
+            recess_depth=float(p.get("recess_depth", 0.0) or 0.0),
+            countersink_angle=float(p.get("countersink_angle", 90.0) or 90.0),
+            tip_angle=float(p.get("tip_angle", 0.0) or 0.0),
+            through=bool(p.get("through", False)),
+            thread=str(p.get("thread", "") or ""),
             children=_children_from(data),
         )
 

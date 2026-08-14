@@ -826,8 +826,18 @@ def _sdf_shell(f):
 
 
 def _sdf_hole(f):
-    hole = CylinderSDF(f.radius, f.depth, f.center, f.axis)
-    return BooleanSDF("subtract", [sdf_from_feature(f.children[0]), hole])
+    from app.cad_kernel.geom import holes
+
+    parts = []
+    for tool in holes.tools_for(f):
+        center = Point3(*tool.center)
+        axis = Vector3(*tool.axis)
+        if isinstance(tool, holes.Cyl):
+            parts.append(CylinderSDF(tool.radius, tool.height, center, axis))
+        else:
+            parts.append(ConeSDF(tool.base_radius, tool.height, center, axis))
+    tool_sdf = parts[0] if len(parts) == 1 else BooleanSDF("union", parts)
+    return BooleanSDF("subtract", [sdf_from_feature(f.children[0]), tool_sdf])
 
 
 def _sdf_transform(f):

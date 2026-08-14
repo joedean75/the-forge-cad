@@ -62,7 +62,12 @@ _BUILDERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
 # replay into a different shape. See `_BLENDS` below for how they are handled.
 _MODIFIERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "ShellFeature": ("shell", ("thickness",)),
-    "HoleFeature": ("hole", ("radius", "depth", "center", "axis")),
+    # Every hole parameter, not just the bore: a recess the decompiler drops is
+    # a counterbore that disappears on replay, and the mesh comparison would
+    # catch it as `geometry_mismatch` without ever saying which key went missing.
+    "HoleFeature": ("hole", ("radius", "depth", "center", "axis", "hole_type",
+                             "recess_radius", "recess_depth", "countersink_angle",
+                             "tip_angle", "through", "thread")),
     "PatternFeature": ("pattern", ("kind", "count", "spacing", "axis", "center")),
     "TransformFeature": ("transform", ("translate", "rotate", "scale")),
 }

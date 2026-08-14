@@ -463,11 +463,45 @@ def _boolean(f):
     return result
 
 
+def _cone_shape(base_radius: float, height: float, center, axis):
+    """Apex at +height/2 along the axis, base at -height/2 — `ConeSDF`'s convention."""
+    direction = gp_Dir(float(axis[0]), float(axis[1]), float(axis[2]))
+    half = gp_Vec(direction).Multiplied(float(height) / 2.0)
+    base = gp_Pnt(center[0] - half.X(), center[1] - half.Y(), center[2] - half.Z())
+    return BRepPrimAPI_MakeCone(gp_Ax2(base, direction),
+                                float(base_radius), 0.0, float(height)).Shape()
+
+
+def _hole_tool(f):
+    """The union of solids a hole subtracts — see `geom/holes.py`.
+
+    A plain bore is one cylinder and takes the same path it always did; only a
+    counterbored, countersunk or tipped hole pays for the fuse.
+    """
+    from app.cad_kernel.geom import holes
+
+    parts = []
+    for tool in holes.tools_for(f):
+        if isinstance(tool, holes.Cyl):
+            parts.append(BRepPrimAPI_MakeCylinder(
+                gp_Ax2(gp_Pnt(tool.center[0] - tool.axis[0] * tool.height / 2.0,
+                              tool.center[1] - tool.axis[1] * tool.height / 2.0,
+                              tool.center[2] - tool.axis[2] * tool.height / 2.0),
+                       gp_Dir(*tool.axis)),
+                float(tool.radius), float(tool.height)).Shape())
+        else:
+            parts.append(_cone_shape(tool.base_radius, tool.height,
+                                     tool.center, tool.axis))
+    if len(parts) == 1:
+        return parts[0]
+    return _fused(parts, "OCC hole tool fuse failed")
+
+
 def _hole(f):
     body = brep_from_feature(f.children[0])
     if body is None:
         raise BrepUnsupported("hole target has no exact form")
-    tool = _cylinder_shape(f.radius, f.depth, f.center, f.axis)
+    tool = _hole_tool(f)
     # The tool is a body in its own right as far as naming is concerned: the bore
     # wall a hole leaves is the cylinder's own lateral face, carried through the
     # cut, so a reference to it survives the plate being resized around it.

@@ -87,6 +87,9 @@ _PRIMITIVE_PARAMS = {
 _MODIFIER_TARGET = {"type": "string",
                     "description": "feature id to modify (default: the whole body)"}
 
+#: The recess a hole has at its mouth. `simple` is a plain bore.
+_HOLE_TYPES = ("simple", "counterbore", "countersink")
+
 _EDGE_SELECTION = {
     "type": ["array", "string"], "required": True,
     "description": 'edge ids from list_edges, or the string "all" for every edge',
@@ -108,6 +111,16 @@ _MODIFIER_PARAMS = {
         "scale": {"type": "number", "description": "transform"},
         "center": {**_VEC, "description": "hole / pattern"},
         "axis": {**_VEC, "description": "hole / pattern"},
+        # The machined-hole shape. Present here as well as on `add_hole` because
+        # the decompiler emits `add_modifier("hole")` for a `HoleFeature`, and a
+        # key the schema drops is a counterbore that silently vanishes on replay.
+        "hole_type": {"enum": _HOLE_TYPES, "description": "hole"},
+        "recess_radius": {"type": "number", "description": "hole: counterbore/countersink"},
+        "recess_depth": {"type": "number", "description": "hole: counterbore/countersink"},
+        "countersink_angle": {"type": "number", "description": "hole: included angle"},
+        "tip_angle": {"type": "number", "description": "hole: drill point"},
+        "through": {"type": "boolean", "description": "hole"},
+        "thread": {"type": "string", "description": "hole: tap callout, e.g. M6"},
     },
     "additionalProperties": False,
 }
@@ -187,7 +200,14 @@ def _make_modifier(kind: str, params: Dict[str, Any] | None) -> Dict[str, Any]:
     table = {
         "shell": ("ShellFeature", {"thickness": p.get("thickness", 0.004)}),
         "hole": ("HoleFeature", {"radius": p.get("radius", 0.005), "depth": p.get("depth", 0.1),
-                                 "center": center, "axis": axis}),
+                                 "center": center, "axis": axis,
+                                 "hole_type": p.get("hole_type", "simple"),
+                                 "recess_radius": p.get("recess_radius", 0.0),
+                                 "recess_depth": p.get("recess_depth", 0.0),
+                                 "countersink_angle": p.get("countersink_angle", 90.0),
+                                 "tip_angle": p.get("tip_angle", 0.0),
+                                 "through": p.get("through", False),
+                                 "thread": p.get("thread", "")}),
         "pattern": ("PatternFeature", {"kind": p.get("kind", "linear"), "count": p.get("count", 3),
                                        "spacing": p.get("spacing", 0.05), "axis": p.get("axis", {"x": 1, "y": 0, "z": 0}),
                                        "center": center}),
@@ -1767,6 +1787,133 @@ def _apply_template(doc_id, args):
             **outcome}
 
 
+def _axis_extent(bbox, axis: Dict[str, float]) -> tuple:
+    """`(centre, half-extent)` of the body along `axis`, both in metres.
+
+    Exact for any direction, not just the six axis-aligned ones: the support
+    function of a box in direction *n* is `sum(|n_i| * half_i)`, so a hole
+    drilled along (1,1,1) gets its mouth placed on the real silhouette rather
+    than on a guess.
+    """
+    import math as _math
+
+    n = (float(axis.get("x", 0.0)), float(axis.get("y", 0.0)), float(axis.get("z", 1.0)))
+    length = _math.sqrt(sum(c * c for c in n)) or 1.0
+    n = tuple(c / length for c in n)
+    lo = (bbox.min.x, bbox.min.y, bbox.min.z)
+    hi = (bbox.max.x, bbox.max.y, bbox.max.z)
+    centre = tuple((a + b) / 2.0 for a, b in zip(lo, hi))
+    half = sum(abs(n[i]) * (hi[i] - lo[i]) / 2.0 for i in range(3))
+    return centre, n, half
+
+
+@operation("add_hole", "mutate",
+           "Drill a hole, with the recess a real one has: plain, counterbored "
+           "for a socket head, or countersunk for a flat head. `tapped` takes a "
+           "metric designation and drills the tap-drill size for it (an M6 gets "
+           "5 mm, not 6) and records the thread as a callout — the helix itself "
+           "is not modelled. `depth` measures to the shoulder, so a `tip_angle` "
+           "adds a drill point below it rather than moving the bottom. With no "
+           "`center` the mouth is placed on the body's own face along `axis`, "
+           "which is what makes a counterbore land in material.",
+           {"radius": {"type": "number",
+                       "description": "bore radius; ignored when `tapped` is given"},
+            "depth": {"type": "number",
+                      "description": "to the shoulder. Defaults to the body's extent along `axis`."},
+            "center": {**_VEC, "description": "bore midpoint. Defaults to the body's centre "
+                                              "offset so the mouth sits on its face."},
+            "axis": _AXIS,
+            "hole_type": {"enum": list(_HOLE_TYPES), "default": "simple",
+                          "description": "the recess at the mouth"},
+            "recess_radius": {"type": "number",
+                              "description": "counterbore / countersink radius at the mouth"},
+            "recess_depth": {"type": "number",
+                             "description": "counterbore depth; for a countersink, "
+                                            "overrides the angle"},
+            "countersink_angle": {"type": "number", "default": 90.0,
+                                  "description": "countersink included angle"},
+            "tip_angle": {"type": "number", "default": 0.0,
+                          "description": "drill point below the shoulder; 118 is a jobber "
+                                         "drill, 0 leaves a flat bottom"},
+            "through": {"type": "boolean", "default": False,
+                        "description": "cut all the way out of the far side"},
+            "tapped": {"enum": list(_METRIC_SIZES),
+                       "description": "drill the tap-drill size for this thread and record it"},
+            "target": _MODIFIER_TARGET})
+def _add_hole(doc_id, args):
+    from app.cad_kernel.geom import holes
+
+    doc = _get(doc_id)
+    if not feature_ops.has_solid(doc.feature_tree):
+        raise PreconditionFailed(
+            "there is no material to drill through — this document has no body "
+            "yet. Add one with add_primitive, add_extrude or apply_template first.")
+
+    tapped = args.get("tapped")
+    if tapped and args.get("radius") is not None:
+        raise BadArgument(
+            "pass either 'radius' or 'tapped', not both — a tapped hole's bore "
+            "is the tap-drill size for the thread and is not free to choose.",
+            arg="tapped")
+    if tapped:
+        try:
+            radius = holes.tap_drill_radius(tapped)
+        except KeyError as exc:
+            raise BadArgument(f"unknown thread: {tapped}", arg="tapped") from exc
+    else:
+        radius = float(args.get("radius") or 0.005)
+    if radius <= 0:
+        raise BadArgument("hole radius must be positive", arg="radius")
+
+    axis = args.get("axis") or {"x": 0.0, "y": 0.0, "z": 1.0}
+    bbox = doc.derived.bbox
+    if bbox is not None:
+        body_centre, unit, half = _axis_extent(bbox, axis)
+    else:
+        body_centre, unit, half = (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 0.05
+
+    depth = float(args.get("depth") or (2.0 * half))
+    if depth <= 0:
+        raise BadArgument("hole depth must be positive", arg="depth")
+
+    if args.get("center") is not None:
+        centre = args["center"]
+    else:
+        # Mouth flush with the body's face along the axis, bore reaching inward.
+        mouth = tuple(body_centre[i] + unit[i] * half for i in range(3))
+        centre = {"x": mouth[0] - unit[0] * depth / 2.0,
+                  "y": mouth[1] - unit[1] * depth / 2.0,
+                  "z": mouth[2] - unit[2] * depth / 2.0}
+
+    hole_type = str(args.get("hole_type") or "simple")
+    recess_radius = float(args.get("recess_radius") or 0.0)
+    if hole_type != "simple" and recess_radius <= radius:
+        raise BadArgument(
+            f"a {hole_type} needs 'recess_radius' larger than the bore radius "
+            f"({radius * 1000:.2f} mm); got {recess_radius * 1000:.2f} mm.",
+            arg="recess_radius")
+    if hole_type == "counterbore" and float(args.get("recess_depth") or 0.0) <= 0:
+        raise BadArgument("a counterbore needs 'recess_depth'", arg="recess_depth")
+
+    node = {"type": "HoleFeature",
+            "name": f"{tapped} tapped hole" if tapped else f"{hole_type.capitalize()} hole",
+            "params": {"radius": radius, "depth": depth, "center": dict(centre),
+                       "axis": dict(axis), "hole_type": hole_type,
+                       "recess_radius": recess_radius,
+                       "recess_depth": float(args.get("recess_depth") or 0.0),
+                       "countersink_angle": float(args.get("countersink_angle") or 90.0),
+                       "tip_angle": float(args.get("tip_angle") or 0.0),
+                       "through": bool(args.get("through", False)),
+                       "thread": str(tapped or "")}}
+    tree = feature_ops.add_modifier(doc.feature_tree, node, target_id=args.get("target"))
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": f"drilled a {radius * 2000:.2f} mm {hole_type} hole"
+                       + (f" tapped {tapped}" if tapped else ""),
+            "feature_id": node["id"], "diameter_mm": round(radius * 2000, 3),
+            "depth_mm": round(depth * 1000, 3), "hole_type": hole_type,
+            "thread": tapped or None, "through": bool(args.get("through", False))}
+
+
 @operation("clearance_hole", "mutate",
            "Cut a properly sized through-hole for a metric screw — ISO 273 "
            "clearance, so an M4 gets 4.5 mm and not 4. Optionally counterbored "
@@ -1799,28 +1946,39 @@ def _clearance_hole(doc_id, args):
         raise PreconditionFailed(
             "there is no material to drill through — this document has no body yet")
 
-    bbox = doc.derived.bbox
-    reach = 4.0 * max((bbox.max.z - bbox.min.z) if bbox else 0.05, 0.01)
-    depth = float(args.get("depth") or reach)
-    centre = args.get("center") or {"x": 0.0, "y": 0.0, "z": 0.0}
+    # One `HoleFeature`, not a clearance cylinder with a second wider cylinder
+    # stacked on it. Two features meant `list_features` showed two rows for one
+    # hole, editing the diameter left the counterbore behind, and the counterbore
+    # depth had to be doubled to compensate for a cylinder that is *centred* on
+    # its origin — which is why the old table value was divided by 500 rather
+    # than by 1000. The recess is now measured from the mouth, so the published
+    # ISO 4762 head height goes in as itself.
     axis = args.get("axis") or {"x": 0.0, "y": 0.0, "z": 1.0}
+    bbox = doc.derived.bbox
+    if bbox is not None:
+        body_centre, unit, half = _axis_extent(bbox, axis)
+    else:
+        body_centre, unit, half = (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 0.05
+    depth = float(args.get("depth") or (2.0 * half))
+    if args.get("center") is not None:
+        centre = args["center"]
+    else:
+        centre = {k: body_centre[i] + unit[i] * (half - depth / 2.0)
+                  for i, k in enumerate("xyz")}
 
-    tools = [{"type": "CylinderFeature", "name": f"{screw} clearance",
-              "params": {"radius": hole["radius_m"], "height": depth,
-                         "center": dict(centre), "axis": dict(axis)}}]
-    if args.get("counterbore"):
-        tools.append({"type": "CylinderFeature", "name": f"{screw} counterbore",
-                      "params": {"radius": hole["counterbore_dia_mm"] / 2000.0,
-                                 "height": hole["counterbore_depth_mm"] / 500.0,
-                                 "center": dict(centre), "axis": dict(axis)}})
-
-    tree = doc.feature_tree
-    for tool in tools:
-        tree = feature_ops.add_primitive(tree, tool, "subtract")
+    counterbored = bool(args.get("counterbore"))
+    node = {"type": "HoleFeature", "name": f"{screw} clearance",
+            "params": {"radius": hole["radius_m"], "depth": depth,
+                       "center": dict(centre), "axis": dict(axis),
+                       "hole_type": "counterbore" if counterbored else "simple",
+                       "recess_radius": hole["counterbore_dia_mm"] / 2000.0,
+                       "recess_depth": hole["counterbore_depth_mm"] / 1000.0,
+                       "through": args.get("depth") is None}}
+    tree = feature_ops.add_modifier(doc.feature_tree, node)
     document_service.update_document(doc_id, feature_tree=tree)
     return {"message": f"cut a {hole['diameter_mm']} mm clearance hole for {screw}",
-            "feature_id": tools[0]["id"], **hole,
-            "counterbored": bool(args.get("counterbore"))}
+            "feature_id": node["id"], **hole,
+            "counterbored": counterbored}
 
 
 @operation("export", "query",
