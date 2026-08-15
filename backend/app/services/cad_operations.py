@@ -1258,25 +1258,135 @@ def _apply_exact(doc_id: str, previous_tree: Dict[str, Any], tree: Dict[str, Any
 
 
 @operation("fillet_edges", "mutate", "Round named edges of the body to a radius — a real fillet on selected "
-           "edges, not a blend between bodies. Pick edge ids with list_edges. "
-           "Requires the exact kernel.",
+           "edges, not a blend between bodies. Pass `radius_end` for a variable "
+           "fillet that runs from one radius to the other along each edge. Pick "
+           "edge ids with list_edges. Requires the exact kernel.",
            {"edges": _EDGE_SELECTION,
            "radius": {"type": "number", "required": True, "description": "metres"},
+           "radius_end": {"type": "number",
+                          "description": "radius at the far end of each edge, for a "
+                                         "variable fillet. Omit for a constant one."},
            "target": _MODIFIER_TARGET})
 def _fillet_edges(doc_id, args):
     doc = _get(doc_id)
     radius = float(require(args, "radius"))
     if radius <= 0:
         raise BadArgument("radius must be positive", arg="radius")
+    radius_end = float(args.get("radius_end") or 0.0)
+    if radius_end < 0:
+        raise BadArgument("radius_end must be positive", arg="radius_end")
     references = _selected(doc_id, require(args, "edges"), "edge")
 
     node = {"type": "EdgeFilletFeature", "name": "Fillet",
-            "params": {"radius": radius, "edges": references}}
+            "params": {"radius": radius, "radius_end": radius_end,
+                       "edges": references}}
+    tree = feature_ops.add_modifier(doc.feature_tree, node, target_id=args.get("target"))
+    span = (f"a {radius * 1000:g}-{radius_end * 1000:g} mm variable fillet"
+            if radius_end > 0 else f"a {radius * 1000:g} mm fillet")
+    _apply_exact(doc_id, doc.feature_tree, tree,
+                 f"{span} on {len(references)} edge(s)")
+    return {"message": f"filleted {len(references)} edge(s) — {span}",
+            "feature_id": node["id"], "edges": [r["id"] for r in references],
+            "variable": radius_end > 0}
+
+
+@operation("add_draft", "mutate",
+           "Taper named faces away from a pull direction so the part releases "
+           "from a mould or a die. This is the treatment for what `dfm` with "
+           "process=molding already measures and reports. The faces pivot about "
+           "the body's parting line — its extreme against the pull — so the "
+           "part is tapered rather than resized. Pick face ids with list_faces. "
+           "Requires the exact kernel.",
+           {"faces": {"type": ["array", "string"], "required": True,
+                      "description": 'face ids from list_faces, or "all"'},
+            "angle": {"type": "number", "default": 2.0,
+                      "description": "draft angle; 1-3 is the usual range for injection "
+                                     "moulding, more for a textured surface"},
+            "pull": {**_VEC, "description": "the direction the tool opens in; +Z by default"},
+            "neutral_offset": {"type": "number",
+                               "description": "move the pivot plane along the pull "
+                                              "direction from the parting line"},
+            "target": _MODIFIER_TARGET})
+def _add_draft(doc_id, args):
+    doc = _get(doc_id)
+    angle = float(args.get("angle") or 2.0)
+    if not 0 < angle < 90:
+        raise BadArgument(
+            f"a draft angle of {angle:g} degrees is not a taper — use 0 < angle < 90",
+            arg="angle")
+    references = _selected(doc_id, require(args, "faces"), "face")
+
+    node = {"type": "DraftFeature", "name": "Draft",
+            "params": {"angle": angle,
+                       "pull": args.get("pull") or {"x": 0.0, "y": 0.0, "z": 1.0},
+                       "neutral_offset": float(args.get("neutral_offset") or 0.0),
+                       "faces": references}}
     tree = feature_ops.add_modifier(doc.feature_tree, node, target_id=args.get("target"))
     _apply_exact(doc_id, doc.feature_tree, tree,
-                 f"a {radius * 1000:g} mm fillet on {len(references)} edge(s)")
-    return {"message": f"filleted {len(references)} edge(s) at {radius * 1000:g} mm",
-            "feature_id": node["id"], "edges": [r["id"] for r in references]}
+                 f"a {angle:g}° draft on {len(references)} face(s)")
+    return {"message": f"drafted {len(references)} face(s) by {angle:g}°",
+            "feature_id": node["id"], "faces": [r["id"] for r in references],
+            "angle": angle}
+
+
+@operation("add_rib", "mutate",
+           "Fuse a stiffening rib onto the body: a wall running from `start` to "
+           "`end`, growing `height` along `up`, `thickness` at its tip and "
+           "opened out at the base by `draft`. Dimensioned rather than grown to "
+           "the next face — the height is a parameter — but the tip, draft and "
+           "height stay in the relationship a moulder needs, which a hand-built "
+           "box does not.",
+           # Explicit units: `start` is a boolean elsewhere in this catalog
+           # (`print_part`), so the name alone cannot decide, and a descriptor's
+           # own unit is what `units.unit_of` reads first.
+           {"start": {**_VEC, "required": True, "unit": "m",
+                      "description": "one end of the rib's centreline, at its base"},
+            "end": {**_VEC, "required": True, "unit": "m",
+                    "description": "the other end"},
+            "up": {**_VEC, "description": "the direction the rib grows; +Z by default"},
+            "thickness": {"type": "number", "default": 0.002,
+                          "description": "at the tip, which is what a mould tool is cut to"},
+            "height": {"type": "number", "default": 0.01, "description": "how tall"},
+            "draft": {"type": "number", "default": 0.0,
+                      "description": "per side, opening the base out"},
+            "target": _MODIFIER_TARGET})
+def _add_rib(doc_id, args):
+    doc = _get(doc_id)
+    if not feature_ops.has_solid(doc.feature_tree):
+        raise PreconditionFailed(
+            "a rib stiffens a body and there is no body yet — add one with "
+            "add_primitive, add_extrude or apply_template first.")
+    start, end = require(args, "start"), require(args, "end")
+    thickness = float(args.get("thickness") or 0.002)
+    height = float(args.get("height") or 0.01)
+    if thickness <= 0 or height <= 0:
+        raise BadArgument("a rib needs a positive thickness and height",
+                          arg="thickness" if thickness <= 0 else "height")
+    draft = float(args.get("draft") or 0.0)
+    if not 0 <= draft < 90:
+        raise BadArgument("draft is per side and must be 0 <= draft < 90", arg="draft")
+
+    node = {"type": "RibFeature", "name": "Rib",
+            "params": {"start": dict(start), "end": dict(end),
+                       "up": args.get("up") or {"x": 0.0, "y": 0.0, "z": 1.0},
+                       "thickness": thickness, "height": height, "draft": draft}}
+    # Validated here rather than at evaluation: a rib whose `up` is parallel to
+    # its run has no cross-section, and `derived.error` would report that as a
+    # document-wide warning instead of naming the argument that caused it.
+    from app.cad_kernel.geom import ribs
+    try:
+        ribs.rib_prism(start=(start["x"], start["y"], start["z"]),
+                       end=(end["x"], end["y"], end["z"]),
+                       up=(node["params"]["up"]["x"], node["params"]["up"]["y"],
+                           node["params"]["up"]["z"]),
+                       thickness=thickness, height=height, draft=draft)
+    except ValueError as exc:
+        raise BadArgument(str(exc), arg="up") from exc
+
+    tree = feature_ops.add_modifier(doc.feature_tree, node, target_id=args.get("target"))
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": f"added a {thickness * 1000:g} mm rib, {height * 1000:g} mm tall",
+            "feature_id": node["id"], "draft": draft}
 
 
 @operation("chamfer_edges", "mutate", "Cut named edges back at 45° by a distance — a real chamfer on selected "
@@ -1324,7 +1434,8 @@ def _shell_faces(doc_id, args):
 
 
 # Features that hold references to named topology, and so can lose one.
-_ADDRESSES_TOPOLOGY = {"EdgeFilletFeature", "EdgeChamferFeature", "FaceShellFeature"}
+_ADDRESSES_TOPOLOGY = {"EdgeFilletFeature", "EdgeChamferFeature", "FaceShellFeature",
+                       "DraftFeature"}
 
 
 def _lost_references(doc_id: str, doc=None) -> int:

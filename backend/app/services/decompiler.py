@@ -54,6 +54,14 @@ _BUILDERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
                           ("thickness", "length", "width", "bend_radius", "k_factor", "flanges")),
 }
 
+# Features that wrap a body and are created by a first-class operation rather
+# than by `add_modifier`. A rib is one: `add_rib` takes its own arguments, and
+# routing it through the modifier table would need a `rib` entry there whose
+# only purpose is to be decompiled into.
+_WRAPPERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
+    "RibFeature": ("add_rib", ("start", "end", "up", "thickness", "height", "draft")),
+}
+
 # Feature type -> (modifier name, its params) for add_modifier.
 #
 # FilletFeature/ChamferFeature are absent on purpose. They are smooth booleans
@@ -79,6 +87,16 @@ _TOPOLOGY_OPS = {
     "EdgeFilletFeature": ("fillet_edges", "edges", "radius"),
     "EdgeChamferFeature": ("chamfer_edges", "edges", "distance"),
     "FaceShellFeature": ("shell_faces", "faces", "thickness"),
+    "DraftFeature": ("add_draft", "faces", "angle"),
+}
+
+#: Extra scalar arguments a topology op carries beyond its one sized parameter.
+#: Dropping one is a variable fillet replayed as a constant, or a draft pulled
+#: in the wrong direction — both of which rebuild into a different body that the
+#: mesh comparison reports as `geometry_mismatch` without saying why.
+_TOPOLOGY_EXTRA: Dict[str, Tuple[str, ...]] = {
+    "EdgeFilletFeature": ("radius_end",),
+    "DraftFeature": ("pull", "neutral_offset"),
 }
 
 # Bodies whose geometry is carried as data rather than parameters, so no
@@ -355,6 +373,14 @@ def _emit_body(node: dict, ctx: _Emit, root: Optional[dict] = None) -> int:
         op_name, args = _topology_args(node)
         return ctx.push(op_name, args, node)
 
+    if node_type in _WRAPPERS:
+        children = _body_children(node)
+        if not children:
+            raise Unsupported(f"{node_type} with no children", node_type)
+        _emit_body(children[0], ctx, root)
+        op_name, keys = _WRAPPERS[node_type]
+        return ctx.push(op_name, _pick(node.get("params") or {}, keys), node)
+
     if node_type in _BLENDS:
         passthrough = _blend_passthrough(node)
         if passthrough is None:
@@ -476,7 +502,7 @@ def _emit_leaf(node: dict, operation: str, ctx: _Emit, root: dict,
 
 
 def _topology_args(node: dict):
-    """A fillet/chamfer/shell as the operation that would create it."""
+    """A fillet/chamfer/shell/draft as the operation that would create it."""
     op_name, selection_key, size_key = _TOPOLOGY_OPS[node["type"]]
     params = node.get("params") or {}
     references = params.get(selection_key) or []
@@ -484,7 +510,16 @@ def _topology_args(node: dict):
     if not ids:
         raise Unsupported(f"{node['type']} has no resolvable selection to replay",
                           str(node["type"]))
-    return op_name, {selection_key: ids, size_key: params.get(size_key)}
+    args = {selection_key: ids, size_key: params.get(size_key)}
+    for extra in _TOPOLOGY_EXTRA.get(node["type"], ()):
+        value = params.get(extra)
+        # Zero is the "not asked for" value for both `radius_end` and
+        # `neutral_offset`, and emitting it changes nothing — but emitting
+        # `radius_end: 0` would still be a key the schema has to accept, so the
+        # absent case stays absent.
+        if value:
+            args[extra] = value
+    return op_name, args
 
 
 def _modifier_args(node: dict) -> dict:

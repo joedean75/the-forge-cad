@@ -50,9 +50,21 @@ def _evaluate_exact(feature: Feature) -> Solid:
 @register_feature
 @dataclass
 class EdgeFilletFeature(Feature):
-    """A real fillet: named edges of the child body rounded to a radius."""
+    """A real fillet: named edges of the child body rounded to a radius.
+
+    `radius_end` makes it variable. OCC's `BRepFilletAPI_MakeFillet.Add` takes
+    two radii and interpolates linearly along the edge's own parametrisation,
+    which is what every CAD system calls a variable-radius fillet. Left at
+    zero — the default, and what every stored feature deserialises to — the
+    constant-radius `Add` is called instead, byte for byte as before. That
+    matters more than it looks: a law-driven fillet is a *different surface*
+    from a constant one even when the two radii are equal, so routing existing
+    documents through it would change bodies nobody edited.
+    """
 
     radius: float = 0.002
+    #: End radius for a variable fillet. 0 means constant — see above.
+    radius_end: float = 0.0
     # Descriptors from `core.naming`, not indices — see the module docstring.
     edges: List[Dict[str, Any]] = field(default_factory=list)
     children: List[Feature] = field(default_factory=list)
@@ -61,14 +73,64 @@ class EdgeFilletFeature(Feature):
         return _evaluate_exact(self)
 
     def _serialize_params(self) -> Dict[str, Any]:
-        return {"radius": self.radius, "edges": self.edges,
+        return {"radius": self.radius, "radius_end": self.radius_end,
+                "edges": self.edges,
                 "children": [c.to_dict() for c in self.children]}
 
     @classmethod
     def _from_dict(cls, data: Dict[str, Any]) -> "EdgeFilletFeature":
         p = data["params"]
         return cls(id=data.get("id"), name=data.get("name", "Fillet"),
-                   radius=p.get("radius", 0.002), edges=p.get("edges", []) or [],
+                   radius=p.get("radius", 0.002),
+                   radius_end=float(p.get("radius_end", 0.0) or 0.0),
+                   edges=p.get("edges", []) or [],
+                   children=_children_from(data))
+
+
+@register_feature
+@dataclass
+class DraftFeature(Feature):
+    """Taper named faces away from a pull direction so the part releases.
+
+    Every moulded and cast part needs this, and `services/dfm_topology` has been
+    *measuring* it — reporting faces that will not come out of a tool — with no
+    feature able to add it. This is the treatment for the disease that report
+    diagnoses.
+
+    Exact-only, and not because of effort. Draft is a rotation of a face about
+    its intersection with a neutral plane, which is a statement about *faces*;
+    a sampled field has none, and the nearest field-side approximation (tapering
+    the whole body) is a different solid. `dfm_topology` would then measure the
+    approximation and report a draft the exact kernel would not agree with.
+
+    `neutral_offset` moves the pivot plane along the pull direction from the
+    body's own base. Zero — the default — pivots about the parting line at the
+    bottom of the body, which is where a two-plate tool splits.
+    """
+
+    angle: float = 2.0                # degrees, the mould-shop default
+    pull: Dict[str, float] = field(
+        default_factory=lambda: {"x": 0.0, "y": 0.0, "z": 1.0})
+    neutral_offset: float = 0.0
+    faces: List[Dict[str, Any]] = field(default_factory=list)
+    children: List[Feature] = field(default_factory=list)
+
+    def evaluate(self) -> Solid:
+        return _evaluate_exact(self)
+
+    def _serialize_params(self) -> Dict[str, Any]:
+        return {"angle": self.angle, "pull": self.pull,
+                "neutral_offset": self.neutral_offset, "faces": self.faces,
+                "children": [c.to_dict() for c in self.children]}
+
+    @classmethod
+    def _from_dict(cls, data: Dict[str, Any]) -> "DraftFeature":
+        p = data["params"]
+        return cls(id=data.get("id"), name=data.get("name", "Draft"),
+                   angle=float(p.get("angle", 2.0)),
+                   pull=p.get("pull") or {"x": 0.0, "y": 0.0, "z": 1.0},
+                   neutral_offset=float(p.get("neutral_offset", 0.0) or 0.0),
+                   faces=p.get("faces", []) or [],
                    children=_children_from(data))
 
 

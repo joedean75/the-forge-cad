@@ -904,10 +904,33 @@ def _edge_fillet(f):
 
     edges, _ = _resolved(body, f.edges, "edge", "fillet", f)
     builder = BRepFilletAPI_MakeFillet(body)
+    end = float(getattr(f, "radius_end", 0.0) or 0.0)
     for edge in edges:
-        builder.Add(float(f.radius), edge)
+        if end > 0:
+            # Two radii is OCC's linear law along the edge's own parametrisation
+            # — a variable-radius fillet. Reached only when asked for: the law
+            # builds a *different surface* from the constant form even where the
+            # two radii are equal, so every stored fillet must keep the one-arg
+            # call or bodies nobody edited would move.
+            builder.Add(float(f.radius), end, edge)
+        else:
+            builder.Add(float(f.radius), edge)
     builder.Build()
     if not builder.IsDone():
+        if end > 0:
+            # Not the same failure as a constant fillet, and worth saying so.
+            # OCC's variable-radius solver is markedly less robust than the
+            # constant one — on a plain box it declines the four longest edges
+            # while filleting the other eight at the same radii — so "your
+            # radius is too big" is usually the wrong diagnosis here. Falling
+            # back to a constant radius was considered and rejected: it would
+            # return `ok` for a body that is not the one that was asked for.
+            raise BrepUnsupported(
+                f"OCC could not build a {f.radius * 1000:g}-{end * 1000:g} mm "
+                f"variable fillet on those edges. Its variable-radius solver "
+                f"refuses some edges it will happily fillet at a constant "
+                f"radius; try fillet_edges without radius_end, or select fewer "
+                f"edges.")
         # Overwhelmingly this is a radius larger than the geometry can carry.
         raise BrepUnsupported(
             f"OCC could not build a {f.radius * 1000:g} mm fillet on those edges")
@@ -956,6 +979,108 @@ def _face_shell(f):
         raise BrepUnsupported(
             f"OCC could not shell to {f.thickness * 1000:g} mm through those faces")
     return _record(f, builder.Shape(), builder, [body])
+
+
+def _draft(f):
+    """Taper named faces away from a pull direction (`BRepOffsetAPI_DraftAngle`).
+
+    The neutral plane is the pivot: the face rotates about its intersection with
+    it, so geometry on that plane does not move. It is placed at the body's own
+    extreme *against* the pull — the parting line where a two-plate tool splits
+    — because a plane placed anywhere else silently resizes the part as well as
+    tapering it, and the resize is the half nobody notices until the first
+    inspection report.
+    """
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_DraftAngle
+    from OCP.gp import gp_Pln
+
+    body = brep_from_feature(f.children[0])
+    if body is None:
+        raise BrepUnsupported("draft target has no exact form")
+
+    angle = float(f.angle)
+    if angle <= 0 or angle >= 90:
+        raise BrepUnsupported(
+            f"a draft angle of {angle:g} degrees is not a taper; use 0 < angle < 90")
+
+    faces, _ = _resolved(body, f.faces, "face", "draft", f)
+
+    pull = f.pull or {}
+    vector = (float(pull.get("x", 0.0)), float(pull.get("y", 0.0)),
+              float(pull.get("z", 1.0)))
+    if math.sqrt(sum(c * c for c in vector)) < 1e-9:
+        raise BrepUnsupported("the pull direction has no length")
+    direction = gp_Dir(*vector)
+
+    box = Bnd_Box()
+    BRepBndLib.Add_s(body, box)
+    lo = box.CornerMin()
+    hi = box.CornerMax()
+    corners = [(lo.X(), lo.Y(), lo.Z()), (hi.X(), hi.Y(), hi.Z())]
+    n = (direction.X(), direction.Y(), direction.Z())
+    # The support point *against* the pull: the lowest projection onto it.
+    base = min(sum(c[i] * n[i] for i in range(3)) for c in _corner_set(corners))
+    origin = gp_Pnt(*[n[i] * (base + float(f.neutral_offset)) for i in range(3)])
+    neutral = gp_Pln(origin, direction)
+
+    builder = BRepOffsetAPI_DraftAngle(body)
+    for face in faces:
+        builder.Add(face, direction, math.radians(angle), neutral)
+        if not builder.AddDone():
+            builder.Remove(face)
+    builder.Build()
+    if not builder.IsDone():
+        raise BrepUnsupported(
+            f"OCC could not draft those faces by {angle:g} degrees — a taper "
+            f"that consumes the face it is applied to has no solution")
+    return _record(f, builder.Shape(), builder, [body])
+
+
+def _corner_set(box_corners):
+    """All eight corners of an axis-aligned box given its two extremes."""
+    (x0, y0, z0), (x1, y1, z1) = box_corners
+    return [(x, y, z) for x in (x0, x1) for y in (y0, y1) for z in (z0, z1)]
+
+
+def _rib(f):
+    """A trapezoidal prism fused onto the body — see `geom/ribs.py`.
+
+    The corner points come from the same function the field form reads, so the
+    two kernels cannot drift about what a rib's taper is.
+    """
+    from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeEdge,
+                                    BRepBuilderAPI_MakeFace,
+                                    BRepBuilderAPI_MakePolygon)
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from app.cad_kernel.geom import ribs
+
+    body = brep_from_feature(f.children[0])
+    if body is None:
+        raise BrepUnsupported("rib target has no exact form")
+
+    try:
+        prism = ribs.prism_for(f)
+    except ValueError as exc:
+        raise BrepUnsupported(str(exc)) from exc
+
+    polygon = BRepBuilderAPI_MakePolygon()
+    for point in prism.section:
+        polygon.Add(gp_Pnt(*point))
+    polygon.Close()
+    if not polygon.IsDone():
+        raise BrepUnsupported("rib section is degenerate")
+    face = BRepBuilderAPI_MakeFace(polygon.Wire())
+    if not face.IsDone():
+        raise BrepUnsupported("rib section does not bound a face")
+    tool = BRepPrimAPI_MakePrism(face.Face(), gp_Vec(*prism.sweep)).Shape()
+    _record_map(tool, _seeded(tool, f"{_owner(f)}~rib"))
+
+    builder = BRepAlgoAPI_Fuse(body, tool)
+    if not builder.IsDone():
+        raise BrepUnsupported("OCC could not fuse the rib onto the body")
+    return _record(f, builder.Shape(), builder, [body, tool], trust_deleted=True)
 
 
 # Revolve axis name -> (world index along the axis, the two in-plane indices),
@@ -1245,6 +1370,8 @@ _BUILDERS = {
     "ConeFeature": _cone,
     "BooleanFeature": _boolean,
     "HoleFeature": _hole,
+    "RibFeature": _rib,
+    "DraftFeature": _draft,
     "TransformFeature": _transform,
     "MirrorFeature": _mirror,
     "PatternFeature": _pattern,
@@ -1257,7 +1384,7 @@ _BUILDERS = {
 # the real reason, which is usually specific and actionable ("radius too large
 # for that edge"), replacing it with a generic "needs the exact kernel".
 EXACT_ONLY = {"EdgeFilletFeature", "EdgeChamferFeature", "FaceShellFeature",
-              "BrepBodyFeature", "RuledLoftFeature"}
+              "BrepBodyFeature", "RuledLoftFeature", "DraftFeature"}
 
 
 def requires_exact(feature) -> bool:

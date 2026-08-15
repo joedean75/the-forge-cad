@@ -58,9 +58,14 @@ UNIT_BY_NAME: Dict[str, str] = {
     "a": "m", "b": "m",
     # machined holes: the recess at the mouth
     "recess_radius": "m", "recess_depth": "m",
+    # variable fillet and draft. A rib's `start`/`end` are *not* here: `start`
+    # is already a boolean on `print_part`, so one name genuinely means two
+    # things and the rib's descriptors carry an explicit `unit` instead — which
+    # is what `unit_of` checks before either map.
+    "radius_end": "m", "neutral_offset": "m",
     # angles
     "angle": "deg", "rotate": "deg",
-    "countersink_angle": "deg", "tip_angle": "deg",
+    "countersink_angle": "deg", "tip_angle": "deg", "draft": "deg",
     # already named for their unit, and not in metres — never warned about
     "feed_mm_min": "mm", "kerf_mm": "mm", "min_length_mm": "mm",
     "nominal_mm": "mm", "general_tolerance": "mm",
@@ -101,6 +106,9 @@ UNITLESS = frozenset({
     # and the thread callout. `tapped`/`thread` are designations ("M6"), which
     # is why neither is called `size` — see `screw` above.
     "hole_type", "through", "tapped", "thread",
+    # a rib's growth direction and a draft's pull direction — both are
+    # directions, like `axis`, so neither carries a unit
+    "up", "pull",
     # the starter-part gallery: which template to build
     "template",
     # the purchased-parts listing: which portal an imported part came from

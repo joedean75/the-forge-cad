@@ -202,6 +202,63 @@ class HoleFeature(Feature):
 
 @register_feature
 @dataclass
+class RibFeature(Feature):
+    """A stiffening rib fused onto the single child.
+
+    Until now the only way to model one was to union a thin box in by hand,
+    which works right up until the wall thickness changes: a box does not know
+    it is a rib, so nothing holds its tip thickness, its height and its draft in
+    the relationship a moulder needs. This carries all four.
+
+    A **dimensioned** rib, deliberately — not an "up to next" one. Growing until
+    the rib meets material needs a face reference, and the SDF kernel has none,
+    so such a rib would exist on one kernel and not the other. Height is a
+    parameter; everything else is a real rib.
+
+    The solid is a trapezoidal prism (`geom/ribs.py`), which both kernels build
+    from the same four corner points.
+    """
+
+    start: Point3 = field(default_factory=Point3)
+    end: Point3 = field(default_factory=lambda: Point3(0.05, 0.0, 0.0))
+    up: Vector3 = field(default_factory=lambda: Vector3(0.0, 0.0, 1.0))
+    thickness: float = 0.002          # at the tip, which is what a tool is cut to
+    height: float = 0.01
+    draft: float = 0.0                # degrees per side, opening the base out
+    children: List[Feature] = field(default_factory=list)
+
+    def evaluate(self) -> Solid:
+        return _evaluate_via_sdf(self)
+
+    def _serialize_params(self) -> Dict[str, Any]:
+        return {
+            "start": _vd(self.start),
+            "end": _vd(self.end),
+            "up": _vd(self.up),
+            "thickness": self.thickness,
+            "height": self.height,
+            "draft": self.draft,
+            "children": [c.to_dict() for c in self.children],
+        }
+
+    @classmethod
+    def _from_dict(cls, data: Dict[str, Any]) -> "RibFeature":
+        p = data["params"]
+        return cls(
+            id=data.get("id"),
+            name=data.get("name", "Rib"),
+            start=_pt(p.get("start", {"x": 0, "y": 0, "z": 0})),
+            end=_pt(p.get("end", {"x": 0.05, "y": 0, "z": 0})),
+            up=_vec(p.get("up", {"x": 0, "y": 0, "z": 1})),
+            thickness=float(p.get("thickness", 0.002)),
+            height=float(p.get("height", 0.01)),
+            draft=float(p.get("draft", 0.0) or 0.0),
+            children=_children_from(data),
+        )
+
+
+@register_feature
+@dataclass
 class TransformFeature(Feature):
     """Rigid transform + uniform scale of the single child."""
 

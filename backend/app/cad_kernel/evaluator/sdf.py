@@ -240,6 +240,31 @@ class ShellSDF(SDF):
         return Bounds(b.min - pad, b.max + pad)
 
 
+class ConvexPrismSDF(SDF):
+    """The intersection of half-spaces — what a rib's trapezoidal prism is.
+
+    Exact on the boundary, which is the only place marching cubes reads, and an
+    underestimate of the true distance outside near a convex edge. That is the
+    same trade `ConeSDF` above makes, and the zero set — the surface — is
+    unaffected by it.
+    """
+
+    def __init__(self, planes, corners):
+        self.points = np.asarray([p for p, _ in planes], dtype=float)
+        self.normals = np.asarray([n for _, n in planes], dtype=float)
+        self.offsets = np.einsum("ij,ij->i", self.points, self.normals)
+        # Taken separately, not read off the planes: a plane's reference point
+        # is *a* point on it, not an extreme of the solid, so bounding by them
+        # would clip the far cap and mesh half a rib.
+        self.corners = np.asarray(corners, dtype=float)
+
+    def __call__(self, points: np.ndarray) -> np.ndarray:
+        return (points @ self.normals.T - self.offsets).max(axis=1)
+
+    def bounds(self) -> Bounds:
+        return Bounds(self.corners.min(axis=0), self.corners.max(axis=0))
+
+
 class SmoothBooleanSDF(SDF):
     """Boolean of children with a fillet (polynomial) or chamfer blend radius."""
 
@@ -825,6 +850,17 @@ def _sdf_shell(f):
     return ShellSDF(sdf_from_feature(f.children[0]), f.thickness)
 
 
+def _sdf_rib(f):
+    from app.cad_kernel.geom import ribs
+
+    prism = ribs.prism_for(f)
+    sweep = np.asarray(prism.sweep, dtype=float)
+    section = np.asarray(prism.section, dtype=float)
+    corners = np.vstack([section, section + sweep])
+    rib = ConvexPrismSDF(ribs.half_spaces(prism), corners)
+    return BooleanSDF("union", [sdf_from_feature(f.children[0]), rib])
+
+
 def _sdf_hole(f):
     from app.cad_kernel.geom import holes
 
@@ -923,6 +959,7 @@ _SDF_BUILDERS = {
     "ChamferFeature": _sdf_smooth_boolean,
     "ShellFeature": _sdf_shell,
     "HoleFeature": _sdf_hole,
+    "RibFeature": _sdf_rib,
     "TransformFeature": _sdf_transform,
     "PatternFeature": _sdf_pattern,
     "ExtrudeFeature": _sdf_extrude,
@@ -939,6 +976,11 @@ _SDF_BUILDERS = {
     # arriving as a bare KeyError from deep inside evaluation.
     "EdgeFilletFeature": _sdf_needs_exact_kernel,
     "EdgeChamferFeature": _sdf_needs_exact_kernel,
+    # Draft rotates named faces about a neutral plane. A sampled field has no
+    # faces, and the nearest field-side approximation — tapering the whole body
+    # — is a different solid that `dfm_topology` would then measure and report a
+    # draft angle the exact kernel does not agree with.
+    "DraftFeature": _sdf_needs_exact_kernel,
     "FaceShellFeature": _sdf_needs_exact_kernel,
     "BrepBodyFeature": _sdf_needs_exact_kernel,
     "RuledLoftFeature": _sdf_needs_exact_kernel,
