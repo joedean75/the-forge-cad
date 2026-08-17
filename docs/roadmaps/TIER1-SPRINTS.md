@@ -1,5 +1,11 @@
 # Tier 1 roadmap — eight sprints against the competitive gaps
 
+> **S1–S6 shipped; the remaining order is superseded.** The product is now aimed
+> at RC, drone and robotics work, which re-ranks what is left —
+> see [`RC-DRONE-ROBOTICS.md`](RC-DRONE-ROBOTICS.md). Surfacing (S7) and
+> in-context design (S8) are still real gaps and are still planned in full
+> below; they are no longer next.
+
 Source: [`docs/COMPETITIVE-GAPS.md`](../COMPETITIVE-GAPS.md). Tier 1 is the set
 of gaps that make real parts **impossible to build** — not merely awkward. This
 file is the order those get closed in, and what "done" means for each.

@@ -1,8 +1,16 @@
 # Where we lose to Onshape, Fusion 360 and SolidWorks
 
-An honest audit, written against the code as it stands (`main`, 26 feature types,
-76 operations, 1000 backend tests green). Competitor capabilities are from their
-current shipping documentation and 2026 release notes.
+An honest audit, written against the code as it stands. Competitor capabilities
+are from their current shipping documentation and 2026 release notes.
+
+> **Superseded as a plan, still accurate as an audit.** The product is now aimed
+> at being an **internal tool for RC, drone and robotics work** rather than a
+> general-purpose CAD product competing for seats. This document is still right
+> about *what is missing*; it is no longer right about **which of it matters** —
+> surfacing in particular drops a long way, and a whole column of things a CAD
+> competitor is never judged on (vehicle mass budget, simulator export, motors
+> and flight controllers in the catalog) rises above it. The current plan is
+> [`roadmaps/RC-DRONE-ROBOTICS.md`](roadmaps/RC-DRONE-ROBOTICS.md).
 
 The point of this document is not a feature-count contest — we would lose one, and
 losing it does not tell us anything. The point is to separate **gaps that make a

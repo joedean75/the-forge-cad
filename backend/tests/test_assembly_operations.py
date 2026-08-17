@@ -54,6 +54,7 @@ def test_the_catalog_declares_which_kind_of_id_each_operation_takes():
         "list_components", "insert_part", "insert_standard_part",
         "remove_component", "place_component", "list_mates", "add_mate",
         "remove_mate", "check_interference", "bill_of_materials", "dof",
+        "mass_budget", "export_urdf",
     }
 
 

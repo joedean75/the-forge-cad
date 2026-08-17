@@ -126,6 +126,8 @@ UNITLESS = frozenset({
     "z_axis", "x_axis", "base_connector", "moved_connector",
     # the toolpath verifier: a grid resolution, like `resolution` above.
     "samples",
+    # URDF export: whether links reference their mesh for visual geometry.
+    "mesh_urls",
     # the starter-part gallery: which template to build
     "template",
     # the purchased-parts listing: which portal an imported part came from

@@ -86,6 +86,51 @@ def _dof(asm_id, args):
     return assembly_mates.degrees_of_freedom(asm.components, asm.mates)
 
 
+# Not `mass_properties`: that name is already the part-level operation, and the
+# catalog is keyed by name. `mass_budget` is also what an airframe actually
+# calls this — the sheet you check before you fly.
+@operation("mass_budget", "query",
+           "All-up weight, centre of gravity and inertia tensor for the whole "
+           "assembly, in assembly space — the three numbers an airframe, a drone "
+           "or a robot is checked against before it flies or moves. Each part's "
+           "own centre of mass is rotated and translated by its placement first, "
+           "and the inertia tensors are rotated into assembly axes and shifted "
+           "by the parallel-axis theorem. Components are listed by how far they "
+           "move the balance, which is not the same order as by weight: a light "
+           "part on a long arm outvotes a heavy one at the centre.",
+           {}, subject="assembly")
+def _assembly_mass_properties(asm_id, args):
+    from app.services import assembly_mass
+
+    _assembly(asm_id)
+    return assembly_mass.assembly_mass_properties(asm_id)
+
+
+@operation("export_urdf", "query",
+           "The assembly as URDF, for a robotics simulator. Connector mates "
+           "become real joints — revolute, prismatic, planar — and bounding-box "
+           "mates become fixed, because a face-on-face placement is not an "
+           "articulation. Says what it could not represent rather than quietly "
+           "dropping it: URDF is a tree, so a closed loop has no representation, "
+           "and it has no cylindrical or spherical joint.",
+           {"name": {"type": "string",
+                     "description": "robot name in the file; defaults to the "
+                                    "assembly's"},
+            "mesh_urls": {"type": "boolean", "default": True,
+                          "description": "reference each link's mesh for visual "
+                                         "and collision geometry"}},
+           subject="assembly")
+def _export_urdf(asm_id, args):
+    from app.services import urdf
+
+    _assembly(asm_id)
+    try:
+        return urdf.export_urdf(asm_id, name=args.get("name"),
+                                mesh_urls=bool(args.get("mesh_urls", True)))
+    except ValueError as exc:
+        raise PreconditionFailed(str(exc)) from exc
+
+
 @operation("list_components", "query",
            "The parts placed in this assembly: id, which part document each "
            "references, where it sits (mm) and how big it is. A component whose "
