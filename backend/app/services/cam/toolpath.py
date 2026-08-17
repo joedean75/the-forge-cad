@@ -62,7 +62,26 @@ def _runs(mask_row: np.ndarray) -> List[Tuple[int, int]]:
     return list(zip(starts.tolist(), ends.tolist()))
 
 
-def generate_toolpaths(root_feature, tool: ToolParams) -> dict:
+@dataclass
+class Passes:
+    """What the planner decided, before any of it becomes G-code.
+
+    Split out so `cam/verify.py` can check the *same* passes the post-processor
+    writes. Re-deriving them there would be a second planner, and a verifier
+    that checks a different toolpath from the one the shop receives is worse
+    than no verifier — it would report a clean cut for a program that gouges.
+    """
+
+    rough: List[Tuple[float, List["RoughSeg"]]]
+    finish: List[Tuple[float, List[np.ndarray]]]
+    stock_lo: np.ndarray          # metres, tool-centre stock box
+    stock_hi: np.ndarray
+    safe_z: float
+    tool_radius_m: float
+
+
+def plan_passes(root_feature, tool: ToolParams) -> Passes:
+    """Roughing segments and finishing contours, level by level."""
     from skimage.measure import find_contours
 
     sdf = sdf_from_feature(root_feature)
@@ -138,6 +157,14 @@ def generate_toolpaths(root_feature, tool: ToolParams) -> dict:
             if polylines:
                 finish_by_level.append((z, polylines))
 
+    return Passes(rough_by_level, finish_by_level, lo_s, hi_s, safe_z, tool_r_m)
+
+
+def generate_toolpaths(root_feature, tool: ToolParams) -> dict:
+    passes = plan_passes(root_feature, tool)
+    rough_by_level, finish_by_level = passes.rough, passes.finish
+    safe_z = passes.safe_z
+
     gcode, cut_len_m, n_plunges = _emit_gcode(rough_by_level, finish_by_level, safe_z, tool)
 
     feed_mps = tool.feed_mm_min / M / 60.0
@@ -157,9 +184,9 @@ def generate_toolpaths(root_feature, tool: ToolParams) -> dict:
         ],
         "estimated_minutes": est_minutes,
         "stock_size": {
-            "x": float(span[0] + 2 * margin_m),
-            "y": float(span[1] + 2 * margin_m),
-            "z": float(span[2]),
+            "x": float(passes.stock_hi[0] - passes.stock_lo[0]),
+            "y": float(passes.stock_hi[1] - passes.stock_lo[1]),
+            "z": float(passes.stock_hi[2] - passes.stock_lo[2]),
         },
     }
 

@@ -1782,6 +1782,56 @@ def _simulate(doc_id, args):
         elements=int(args["elements"]) if args.get("elements") else None)
 
 
+@operation("verify_toolpath", "query",
+           "Cut the stock with the planned 2.5-axis path and compare what is "
+           "left against the finished part. Reports gouge — material inside the "
+           "part that the cut removed, which is a scrapped part and so a failing "
+           "check — and leftover, stock still standing that is not part of the "
+           "body. Some leftover is unavoidable: a 2.5-axis path cannot reach an "
+           "undercut. This checks the same passes the G-code is written from.",
+           {"diameter_mm": {"type": "number", "default": 3.0, "unit": "mm",
+                            "description": "flat endmill diameter"},
+            "stepdown_mm": {"type": "number", "default": 1.0, "unit": "mm",
+                            "description": "depth of cut per level"},
+            "stepover_mm": {"type": "number", "default": 1.2, "unit": "mm",
+                            "description": "sideways bite between raster passes"},
+            "stock_margin_mm": {"type": "number", "default": 4.0, "unit": "mm",
+                                "description": "stock added around the part"},
+            "samples": {"type": "integer", "default": 128,
+                        "description": "grid samples across the longest side; a "
+                                       "feature thinner than one cell is invisible "
+                                       "to the comparison"}})
+def _verify_toolpath(doc_id, args):
+    from app.services.cam.toolpath import ToolParams
+    from app.services.cam.verify import verify_toolpaths
+
+    doc = _get(doc_id)
+    if not feature_ops.has_solid(doc.feature_tree):
+        raise PreconditionFailed(
+            "there is nothing to machine — this document has no body yet")
+    tree = document_service.resolved_tree(doc)
+    # `x or default` would turn an explicit 0 into the default and machine the
+    # part with a 3 mm cutter the caller never asked for. A zero tool is a
+    # mistake worth naming, not one worth silently correcting.
+    def _mm(name: str, default: float) -> float:
+        value = args.get(name)
+        return default if value is None else float(value)
+
+    tool = ToolParams(diameter_mm=_mm("diameter_mm", 3.0),
+                      stepdown_mm=_mm("stepdown_mm", 1.0),
+                      stepover_mm=_mm("stepover_mm", 1.2),
+                      stock_margin_mm=_mm("stock_margin_mm", 4.0))
+    for name, value in (("diameter_mm", tool.diameter_mm),
+                        ("stepdown_mm", tool.stepdown_mm),
+                        ("stepover_mm", tool.stepover_mm)):
+        if value <= 0:
+            raise BadArgument(f"{name} must be positive, got {value:g}", arg=name)
+    from app.cad_kernel.core.feature_tree import Feature
+
+    return verify_toolpaths(Feature.from_dict(tree["root"]), tool,
+                            samples=int(args.get("samples") or 128))
+
+
 @operation("profile_cut", "query", "2D laser/plasma/waterjet cut of the part outline from sheet, kerf-compensated. "
            "Fetch G-code at GET /api/documents/{id}/profile-cut.gcode.",
            {"kerf_mm": {"type": "number", "default": 0.2}, "plane": {"enum": ["xy", "xz", "yz"], "default": "xy",

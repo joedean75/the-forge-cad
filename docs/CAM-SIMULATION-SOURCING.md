@@ -61,7 +61,9 @@ is CPU-only and where `FORGE_DEVICE` is pinned to `cpu` for exactly that reason.
 A dependency whose entire value is GPU throughput, on a host with no GPU, is a
 fourth way for a deployment to be half-configured.
 
-## What we would actually build instead
+## What was built instead — and it exists now
+
+> **Shipped**: `services/cam/verify.py` and the `verify_toolpath` operation.
 
 The gap is not simulation, it is **verification** — and the machinery is
 already here. `cam/toolpath.py` is SDF-native: it samples the body's signed
@@ -84,6 +86,25 @@ That is a *verifier*, which is the shape everything else in this action space
 takes — `verify_against_spec`, `check_geometry`, `check_drawing`, `dfm` — and it
 needs no new dependency at all. It is also the thing an agent can optimise
 against, which a physics engine's contact forces are not.
+
+Three things about the implementation are worth knowing:
+
+- **It reads the planner's own passes.** `toolpath.generate_toolpaths` was one
+  function and is now `plan_passes` plus a post-processor, so the verifier
+  checks the passes the G-code is written from. Re-deriving them would be a
+  second planner, and a verifier that checks a different toolpath from the one
+  the shop receives is worse than none — it would report a clean cut for a
+  program that gouges.
+- **A flat endmill cutting top-down collapses to one 2D array.** A point is
+  removed exactly when it sits at or above the *lowest* level that cleared its
+  (x, y). That floor map is the entire swept volume, so the check is a fraction
+  of a second rather than a swept solid per segment.
+- **The reading is correctly insensitive to stepdown**, which surprises people.
+  Intermediate levels change the cutting load and the cycle time, not the
+  geometry left behind. Stepover and tool diameter do move it: a fat cutter
+  leaves a fillet in every internal corner it cannot fit into. Both directions
+  are pinned by tests, because a checker whose number never moves is reporting
+  a constant.
 
 ## The adjacent thing that is worth revisiting: Warp, not Newton
 

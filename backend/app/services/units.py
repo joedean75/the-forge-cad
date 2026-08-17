@@ -124,6 +124,8 @@ UNITLESS = frozenset({
     # mate connectors: a frame's two direction vectors, and the ids a mate
     # uses to name one on each side. Directions, like `axis`, carry no unit.
     "z_axis", "x_axis", "base_connector", "moved_connector",
+    # the toolpath verifier: a grid resolution, like `resolution` above.
+    "samples",
     # the starter-part gallery: which template to build
     "template",
     # the purchased-parts listing: which portal an imported part came from
