@@ -42,6 +42,38 @@ def can_access(asm: AssemblyDoc, account_id: Optional[str]) -> bool:
     return _role(asm, account_id) is not None
 
 
+def connector_frames(asm: AssemblyDoc) -> dict:
+    """`{part_id: {connector_id: (origin, rotation)}}` for every part in play.
+
+    Read fresh on every resolve rather than cached on the mate. A connector is a
+    feature of the part, so moving it — or resizing the part around it — has to
+    carry the mate with it; a frame copied into the assembly at mate time would
+    be a stale placement that looks correct until somebody edits the part.
+    """
+    from app.cad_kernel.core.feature_tree import walk_nodes
+    from app.cad_kernel.ops.mate_connector import MateConnectorFeature
+
+    frames: dict = {}
+    for part_id in {c.part_id for c in asm.components}:
+        part = document_service.get_document(part_id)
+        if part is None:
+            continue
+        found = {}
+        for node in walk_nodes(part.feature_tree):
+            if node.get("type") != "MateConnectorFeature" or not node.get("id"):
+                continue
+            try:
+                found[node["id"]] = MateConnectorFeature.from_dict(node).frame()
+            except Exception:                       # noqa: BLE001
+                # A malformed connector is one unusable mate, not an assembly
+                # that will not open. The mate falls back to the bbox path,
+                # which is visibly wrong rather than invisibly absent.
+                continue
+        if found:
+            frames[part_id] = found
+    return frames
+
+
 def _resolve(asm: AssemblyDoc) -> AssemblyDoc:
     """Populate each component's mesh_url/bbox/missing, solve mates, and the envelope."""
     # 1) Resolve each component's part geometry (mesh + part-space bbox).
@@ -62,7 +94,7 @@ def _resolve(asm: AssemblyDoc) -> AssemblyDoc:
     if asm.mates:
         from app.services import assembly_mates
 
-        assembly_mates.solve(asm.components, asm.mates)
+        assembly_mates.solve(asm.components, asm.mates, connector_frames(asm))
 
     # 3) Axis-aligned envelope of the placed parts (rotation ignored for the
     #    envelope — good enough for camera-fit; exact placement is rendered).

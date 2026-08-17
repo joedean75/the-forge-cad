@@ -52,6 +52,34 @@ _E_VOID = 1e-9
 _DEFAULT_ELEMENTS = 8000
 _MAX_ELEMENTS = 60000
 
+# The fewest elements that may lie across a body's *thinnest* dimension before
+# the mesh stops describing it. Below about four, a wall has no through-thickness
+# gradient at all, so the bending stress in it is not underestimated — it is
+# absent, and the safety factor comes back optimistic. That is the one output
+# here that must never be quietly optimistic, which is why this scales the
+# budget rather than merely warning about it.
+_MIN_CELLS_ACROSS_THIN = 4
+
+
+def default_elements(bounds) -> int:
+    """An element budget that resolves the body rather than a fixed 8k.
+
+    A flat budget is a statement about the *volume*, and stress lives across the
+    thin direction. 8k elements is generous for a 50 mm cube and gives a 1.5 mm
+    sheet a single element through its thickness, where the answer is not
+    approximate but meaningless.
+
+    Clamped below by the old default — so nothing that used to resolve now
+    resolves less — and above by `_MAX_ELEMENTS`, which is where the solve stops
+    being something a caller waits for. A body thin enough to want more than the
+    ceiling gets the ceiling and the caller is told what it bought.
+    """
+    span = np.asarray(bounds.max, dtype=float) - np.asarray(bounds.min, dtype=float)
+    span = np.maximum(span, 1e-9)
+    cell = float(span.min()) / _MIN_CELLS_ACROSS_THIN
+    wanted = float(span[0] * span[1] * span[2]) / (cell ** 3)
+    return int(np.clip(wanted, _DEFAULT_ELEMENTS, _MAX_ELEMENTS))
+
 # Above this many free DOFs the direct solve is abandoned for conjugate
 # gradients. A sparse LU of a 3D elasticity system fills in badly: a 98k-DOF
 # beam took over five minutes and 5 GB before it was killed, where CG on the
@@ -286,7 +314,7 @@ def _occupancy_field(body_feature):
 
 def solve(body_feature, *, youngs_pa: float, yield_mpa: float, density: float,
           loads: List[Any], constraints: List[Any],
-          target_elements: int = _DEFAULT_ELEMENTS) -> Dict[str, Any]:
+          target_elements: Optional[int] = None) -> Dict[str, Any]:
     """Linear-static analysis of an evaluated body. SI in, mm/MPa out.
 
     `loads` carry a point and a force vector in newtons; `constraints` carry a
@@ -299,9 +327,15 @@ def solve(body_feature, *, youngs_pa: float, yield_mpa: float, density: float,
             "a static analysis needs at least one load case — with no force "
             "applied, every stress and displacement is zero by definition")
 
-    target_elements = int(np.clip(target_elements, 200, _MAX_ELEMENTS))
     field = _occupancy_field(body_feature)
     bounds = field.bounds()
+    # An unstated budget is chosen from the body, not from a constant: see
+    # `default_elements`. An explicit one is honoured, clamped only by what the
+    # solver can carry.
+    requested = target_elements
+    if target_elements is None:
+        target_elements = default_elements(bounds)
+    target_elements = int(np.clip(target_elements, 200, _MAX_ELEMENTS))
     nelx, nely, nelz, span = _grid_for(bounds, target_elements)
     lo = bounds.min
     hx, hy, hz = span[0] / nelx, span[1] / nely, span[2] / nelz
@@ -408,6 +442,19 @@ def solve(body_feature, *, youngs_pa: float, yield_mpa: float, density: float,
             "elements": int(solid.sum()),
             "grid": [nelx, nely, nelz],
             "element_size_mm": round(float(min(hx, hy, hz)) * 1000.0, 4),
+            "budget": int(target_elements),
+            # Said out loud because it changes what the numbers mean. A body
+            # thin enough to want more than `_MAX_ELEMENTS` is under-resolved
+            # across its thin direction, and an under-resolved wall reports a
+            # safety factor that is optimistic rather than merely approximate.
+            "budget_chosen": requested is None,
+            # How many elements lie across the body's thinnest dimension. Below
+            # about four there is no through-thickness gradient, so a wall's
+            # bending stress is absent rather than approximate — which makes the
+            # safety factor optimistic, and that is the one number here that
+            # must never be.
+            "cells_across_thinnest": round(
+                float(min(span)) / float(min(hx, hy, hz)), 1),
         },
         "grounded_on": grounded,
         "notes": [

@@ -294,6 +294,12 @@ Ranked by (parts unblocked) ÷ (weeks), not by scorecard optics.
 Deliberately not on this list: CAM, simulation breadth, native import, PDM. Those
 are Tier 2 and Tier 3, and they are how the roadmap gets eaten.
 
+> On CAM specifically: NVIDIA's Newton physics engine was investigated as a way
+> to add machining simulation and declined —
+> [`CAM-SIMULATION-SOURCING.md`](CAM-SIMULATION-SOURCING.md). Material removal is
+> a geometry problem, not a dynamics one, and the thing worth building is a
+> toolpath *verifier* over the SDF `cam/toolpath.py` already samples.
+
 ---
 
 ## 7. The one-sentence version

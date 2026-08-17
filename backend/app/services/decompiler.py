@@ -52,6 +52,8 @@ _BUILDERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
                          ("profile_a", "profile_b", "plane", "offset_a", "offset_b", "ruled")),
     "SheetMetalFeature": ("add_sheet_metal",
                           ("thickness", "length", "width", "bend_radius", "k_factor", "flanges")),
+    "HelixFeature": ("add_helix", ("helix_radius", "wire_radius", "pitch", "turns",
+                                   "center", "axis", "right_handed")),
 }
 
 # Features that wrap a body and are created by a first-class operation rather
@@ -76,7 +78,8 @@ _MODIFIERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "HoleFeature": ("hole", ("radius", "depth", "center", "axis", "hole_type",
                              "recess_radius", "recess_depth", "countersink_angle",
                              "tip_angle", "through", "thread")),
-    "PatternFeature": ("pattern", ("kind", "count", "spacing", "axis", "center")),
+    "PatternFeature": ("pattern", ("kind", "count", "spacing", "axis", "center",
+                                   "path", "transforms")),
     "TransformFeature": ("transform", ("translate", "rotate", "scale")),
 }
 

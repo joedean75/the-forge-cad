@@ -39,7 +39,25 @@ IGES_FORMATS = step_import.IGES_FORMATS
 EXACT_FORMATS = step_import.EXACT_FORMATS
 SUPPORTED_FORMATS = MESH_FORMATS | EXACT_FORMATS
 
+# How large a file this will import, by kind.
+#
+# A supplier assembly STEP routinely exceeds 50 MB, which was the flat cap and
+# the reason a real vendor model could not be brought in at all. Exact formats
+# get more room because the payload is *worth* more: OCC keeps the analytic
+# surfaces, so the faces stay addressable and the body re-exports as an editable
+# solid.
+#
+# Meshes keep the old cap on purpose. A 50 MB STL is already around a million
+# triangles and the import path voxelises it — more triangles buy nothing that
+# survives the grid, and the file has to be resident in memory to be parsed.
 MAX_FILE_BYTES = 50 * 1024 * 1024
+MAX_EXACT_FILE_BYTES = 128 * 1024 * 1024
+
+
+def max_bytes_for(ext: str) -> int:
+    """The size cap for a file of this extension."""
+    return (MAX_EXACT_FILE_BYTES if str(ext).lower().lstrip(".") in EXACT_FORMATS
+            else MAX_FILE_BYTES)
 DEFAULT_RESOLUTION = 96  # voxels along the longest axis
 MAX_RESOLUTION = 160
 
@@ -242,12 +260,19 @@ def import_document(
     STEP/IGES import exactly when OpenCascade is present; everything else — and
     a STEP file OCC cannot read — goes through the voxel path.
     """
-    if len(data) > MAX_FILE_BYTES:
-        raise ImportError_(f"File too large ({len(data) // (1024 * 1024)} MB > {MAX_FILE_BYTES // (1024 * 1024)} MB).")
-
     base = filename.rsplit("/", 1)[-1]
     stem = base.rsplit(".", 1)[0] if "." in base else base
     ext = base.rsplit(".", 1)[-1].lower() if "." in base else ""
+
+    cap = max_bytes_for(ext)
+    if len(data) > cap:
+        raise ImportError_(
+            f"File too large ({len(data) // (1024 * 1024)} MB > "
+            f"{cap // (1024 * 1024)} MB)."
+            + ("" if ext in EXACT_FORMATS else
+               f" Meshes are capped at {MAX_FILE_BYTES // (1024 * 1024)} MB "
+               f"because they are voxelised on import; STEP and IGES may be "
+               f"up to {MAX_EXACT_FILE_BYTES // (1024 * 1024)} MB."))
 
     tree: Optional[dict] = None
     if ext in EXACT_FORMATS and step_import.available():

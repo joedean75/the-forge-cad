@@ -63,6 +63,10 @@ UNIT_BY_NAME: Dict[str, str] = {
     # things and the rib's descriptors carry an explicit `unit` instead — which
     # is what `unit_of` checks before either map.
     "radius_end": "m", "neutral_offset": "m",
+    # helices: the coil, the wire wound on it, and the rise per turn
+    "helix_radius": "m", "wire_radius": "m", "pitch": "m",
+    # a mate connector's frame origin, in part space
+    "origin": "m",
     # angles
     "angle": "deg", "rotate": "deg",
     "countersink_angle": "deg", "tip_angle": "deg", "draft": "deg",
@@ -109,6 +113,17 @@ UNITLESS = frozenset({
     # a rib's growth direction and a draft's pull direction — both are
     # directions, like `axis`, so neither carries a unit
     "up", "pull",
+    # a helix's turn count (a number of revolutions) and its handedness
+    "turns", "right_handed",
+    # a table pattern's placements. Unitless at the top: the lengths inside it
+    # are under `translate`, which `_walk` does not descend into for a list of
+    # objects — so those escape the magnitude warning, deliberately and not by
+    # oversight. A pattern is written by the decompiler far more often than by
+    # hand, and a per-entry warning on a fifty-copy pattern is fifty warnings.
+    "transforms",
+    # mate connectors: a frame's two direction vectors, and the ids a mate
+    # uses to name one on each side. Directions, like `axis`, carry no unit.
+    "z_axis", "x_axis", "base_connector", "moved_connector",
     # the starter-part gallery: which template to build
     "template",
     # the purchased-parts listing: which portal an imported part came from

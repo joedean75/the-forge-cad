@@ -378,14 +378,15 @@ _SKETCH_CONSUMERS: Dict[str, Dict[str, Dict[str, str]]] = {
 
 SKETCH_TYPE = "SketchFeature"
 DATUM_PLANE_TYPE = "DatumPlaneFeature"
+MATE_CONNECTOR_TYPE = "MateConnectorFeature"
 
-#: Features that live in the tree and contribute no material. Both are pruned
+#: Features that live in the tree and contribute no material. All are pruned
 #: before evaluation, because nothing downstream — booleans, the mesher, the
 #: bounding box, DFM — has a sensible answer for a node that is not a solid.
-#: They differ only in that a sketch is *substituted* into its consumers first;
-#: a plane is read by the caller (a sketch's `plane`, a view) and needs nothing
-#: baked in.
-BODYLESS_TYPES = frozenset({SKETCH_TYPE, DATUM_PLANE_TYPE})
+#: They differ only in who reads them: a sketch is *substituted* into its
+#: consumers first; a plane is read by the caller (a sketch's `plane`, a view);
+#: a mate connector is read by the assembly the part is placed in.
+BODYLESS_TYPES = frozenset({SKETCH_TYPE, DATUM_PLANE_TYPE, MATE_CONNECTOR_TYPE})
 
 
 def has_solid(tree: Optional[Dict[str, Any]]) -> bool:

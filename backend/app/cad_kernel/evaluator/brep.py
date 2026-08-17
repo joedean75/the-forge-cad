@@ -560,35 +560,36 @@ def _mirror(f):
 
 
 def _pattern(f):
-    """Linear or circular copies fused together, matching _pattern_transforms."""
+    """Copies fused together, placed by `geom/patterns` — the same list the
+    field form reads.
+
+    This used to work the placements out for itself, with a comment saying it
+    picks a single dominant world axis for a circular pattern because the SDF
+    does. Both now read one function, so there is nothing left to match.
+    """
+    from app.cad_kernel.geom import patterns
+
     child = brep_from_feature(f.children[0])
     if child is None:
         raise BrepUnsupported("pattern target has no exact form")
 
-    count = max(1, int(f.count))
+    try:
+        places = patterns.placements(f)
+    except ValueError as exc:
+        raise BrepUnsupported(str(exc)) from exc
+
     copies = []
-    if getattr(f, "kind", "linear") == "circular":
-        axis = f.axis
-        # The SDF picks a single dominant world axis rather than using the vector
-        # as given; matching that is what keeps the two kernels in agreement.
-        if abs(axis.z) >= abs(axis.x) and abs(axis.z) >= abs(axis.y):
-            direction = gp_Dir(0.0, 0.0, 1.0)
-        elif abs(axis.y) >= abs(axis.x):
-            direction = gp_Dir(0.0, 1.0, 0.0)
-        else:
-            direction = gp_Dir(1.0, 0.0, 0.0)
-        pivot = gp_Ax1(_pnt(f.center), direction)
-        for i in range(count):
-            trsf = gp_Trsf()
-            trsf.SetRotation(pivot, math.radians(360.0 * i / count))
-            copies.append(_instance(child, trsf, f, i))
-    else:
-        for i in range(count):
-            trsf = gp_Trsf()
-            trsf.SetTranslation(gp_Vec(float(f.axis.x) * float(f.spacing) * i,
-                                       float(f.axis.y) * float(f.spacing) * i,
-                                       float(f.axis.z) * float(f.spacing) * i))
-            copies.append(_instance(child, trsf, f, i))
+    for i, (rotation, translate) in enumerate(places):
+        trsf = gp_Trsf()
+        # Built from the matrix rather than re-derived from angles, so a copy
+        # cannot land in one place on this kernel and another on the field one.
+        (ax, ay, az), angle = patterns.axis_and_angle(rotation)
+        if angle > 1e-12:
+            trsf.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(ax, ay, az)), angle)
+        shift = gp_Trsf()
+        shift.SetTranslation(gp_Vec(float(translate[0]), float(translate[1]),
+                                    float(translate[2])))
+        copies.append(_instance(child, shift.Multiplied(trsf), f, i))
 
     result = copies[0]
     for other in copies[1:]:
@@ -979,6 +980,85 @@ def _face_shell(f):
         raise BrepUnsupported(
             f"OCC could not shell to {f.thickness * 1000:g} mm through those faces")
     return _record(f, builder.Shape(), builder, [body])
+
+
+def _helix(f):
+    """A round wire wound as a helix.
+
+    The spine is a straight line in the cylinder's *parameter* space, which is
+    a true helix in 3D — no polyline, no segment count. The profile circle is
+    placed at the spine's start with its plane normal along the start tangent,
+    and Frenet mode carries it round: a helix has constant curvature and
+    torsion, and its Frenet normal always points at the axis, which is exactly
+    the frame a wound wire keeps.
+
+    A warning for anyone verifying this: `Bnd_Box` on the result bounds the
+    *control points* of the swept BSpline surface, not the surface, and reports
+    a coil five times too wide. Measure the tessellation. Two hours went into
+    chasing a sweep that was correct all along.
+    """
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeWire
+    from OCP.BRepLib import BRepLib
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
+    from OCP.GCE2d import GCE2d_MakeSegment
+    from OCP.Geom import Geom_CylindricalSurface
+    from OCP.gp import gp_Ax3, gp_Circ, gp_Pnt2d
+
+    radius = float(f.helix_radius)
+    wire = float(f.wire_radius)
+    pitch = float(f.pitch)
+    turns = float(f.turns)
+    if radius <= 0 or wire <= 0 or turns <= 0:
+        raise BrepUnsupported("a helix needs a positive radius, wire and turn count")
+    if wire >= radius:
+        raise BrepUnsupported(
+            f"the wire ({wire * 1000:g} mm radius) is thicker than the coil it is "
+            f"wound on ({radius * 1000:g} mm) — the turns would pass through the axis")
+    if pitch <= 2.0 * wire:
+        raise BrepUnsupported(
+            f"a pitch of {pitch * 1000:g} mm is not more than the wire diameter "
+            f"({wire * 2000:g} mm), so consecutive turns would intersect")
+
+    origin = gp_Pnt(float(f.center.get("x", 0.0)), float(f.center.get("y", 0.0)),
+                    float(f.center.get("z", 0.0)))
+    axis_vec = (float(f.axis.get("x", 0.0)), float(f.axis.get("y", 0.0)),
+                float(f.axis.get("z", 1.0)))
+    if math.sqrt(sum(c * c for c in axis_vec)) < 1e-9:
+        raise BrepUnsupported("the helix axis has no length")
+    frame = gp_Ax3(origin, gp_Dir(*axis_vec))
+    surface = Geom_CylindricalSurface(frame, radius)
+
+    sweep = 2.0 * math.pi * turns * (1.0 if f.right_handed else -1.0)
+    segment = GCE2d_MakeSegment(gp_Pnt2d(0.0, 0.0),
+                                gp_Pnt2d(sweep, pitch * turns)).Value()
+    edge = BRepBuilderAPI_MakeEdge(segment, surface).Edge()
+    BRepLib.BuildCurves3d_s(edge)
+    spine = BRepBuilderAPI_MakeWire(edge).Wire()
+
+    # Start point and tangent, both in the frame the surface was built with —
+    # taken from it rather than assumed, because `gp_Ax3` picks its own X for an
+    # arbitrary axis and a hardcoded (R, 0, 0) would only be right for +Z.
+    x_dir, y_dir, z_dir = frame.XDirection(), frame.YDirection(), frame.Direction()
+    start = gp_Pnt(origin.X() + x_dir.X() * radius,
+                   origin.Y() + x_dir.Y() * radius,
+                   origin.Z() + x_dir.Z() * radius)
+    along = 2.0 * math.pi * radius * (1.0 if f.right_handed else -1.0)
+    tangent = gp_Dir(y_dir.X() * along + z_dir.X() * pitch,
+                     y_dir.Y() * along + z_dir.Y() * pitch,
+                     y_dir.Z() * along + z_dir.Z() * pitch)
+    profile = BRepBuilderAPI_MakeWire(
+        BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(start, tangent), wire)).Edge()).Wire()
+
+    builder = BRepOffsetAPI_MakePipeShell(spine)
+    builder.SetMode(True)                      # Frenet — see the docstring
+    builder.Add(profile, False, False)
+    builder.Build()
+    if not builder.IsDone() or not builder.MakeSolid():
+        raise BrepUnsupported(
+            f"OCC could not wind a {turns:g}-turn helix of {wire * 2000:g} mm wire "
+            f"at {pitch * 1000:g} mm pitch on a {radius * 2000:g} mm coil")
+    # A leaf, so `_build` seeds its entities — the same path a primitive takes.
+    return builder.Shape()
 
 
 def _draft(f):
@@ -1372,6 +1452,7 @@ _BUILDERS = {
     "HoleFeature": _hole,
     "RibFeature": _rib,
     "DraftFeature": _draft,
+    "HelixFeature": _helix,
     "TransformFeature": _transform,
     "MirrorFeature": _mirror,
     "PatternFeature": _pattern,
@@ -1384,7 +1465,8 @@ _BUILDERS = {
 # the real reason, which is usually specific and actionable ("radius too large
 # for that edge"), replacing it with a generic "needs the exact kernel".
 EXACT_ONLY = {"EdgeFilletFeature", "EdgeChamferFeature", "FaceShellFeature",
-              "BrepBodyFeature", "RuledLoftFeature", "DraftFeature"}
+              "BrepBodyFeature", "RuledLoftFeature", "DraftFeature",
+              "HelixFeature"}
 
 
 def requires_exact(feature) -> bool:

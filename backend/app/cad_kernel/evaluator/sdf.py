@@ -981,6 +981,10 @@ _SDF_BUILDERS = {
     # — is a different solid that `dfm_topology` would then measure and report a
     # draft angle the exact kernel does not agree with.
     "DraftFeature": _sdf_needs_exact_kernel,
+    # The distance to a helix has no closed form. The usual field-side trick
+    # unwraps the point into helical coordinates and drops the tangential term,
+    # which is an approximation that is worst exactly where the pitch matters.
+    "HelixFeature": _sdf_needs_exact_kernel,
     "FaceShellFeature": _sdf_needs_exact_kernel,
     "BrepBodyFeature": _sdf_needs_exact_kernel,
     "RuledLoftFeature": _sdf_needs_exact_kernel,
@@ -994,6 +998,9 @@ _SDF_BUILDERS = {
     # pruning was missed, and saying so beats returning an empty solid that
     # would delete whatever the plane sits beside.
     "DatumPlaneFeature": _sdf_datum_plane,
+    # Same contract: a coordinate frame, pruned before evaluation, and this
+    # entry exists to name it if the pruning is ever missed.
+    "MateConnectorFeature": _sdf_datum_plane,
 }
 
 
@@ -1009,29 +1016,16 @@ def sdf_from_feature(feature) -> SDF:
 
 
 def _pattern_transforms(child: SDF, feature) -> List["SDF"]:
-    """Build the transformed copies for a linear or circular pattern."""
-    copies: List[SDF] = []
-    count = max(1, int(feature.count))
-    if feature.kind == "circular":
-        axis = feature.axis
-        center = np.array([feature.center.x, feature.center.y, feature.center.z])
-        for i in range(count):
-            ang = 360.0 * i / count
-            if abs(axis.z) >= abs(axis.x) and abs(axis.z) >= abs(axis.y):
-                R = _euler_matrix(0, 0, ang)
-            elif abs(axis.y) >= abs(axis.x):
-                R = _euler_matrix(0, ang, 0)
-            else:
-                R = _euler_matrix(ang, 0, 0)
-            # rotate about center: world = R (p - center) + center  ->  translate = center - R@center
-            t = center - R @ center
-            copies.append(TransformSDF(child, t, R, 1.0))
-    else:  # linear
-        step = np.array([feature.axis.x, feature.axis.y, feature.axis.z]) * feature.spacing
-        R = np.eye(3)
-        for i in range(count):
-            copies.append(TransformSDF(child, step * i, R, 1.0))
-    return copies
+    """The transformed copies of a pattern, placed by `geom/patterns`.
+
+    The arithmetic used to live here *and* in `evaluator/brep._pattern`, whose
+    comment about matching this one's choice of dominant axis is the comment you
+    write when two copies have already disagreed once.
+    """
+    from app.cad_kernel.geom import patterns
+
+    return [TransformSDF(child, translate, rotation, 1.0)
+            for rotation, translate in patterns.placements(feature)]
 
 
 def grid_dims(bounds: Bounds, resolution: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int, int, int]:

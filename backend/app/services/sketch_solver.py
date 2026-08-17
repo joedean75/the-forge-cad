@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import math
 from math import hypot
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy.optimize import least_squares
@@ -397,16 +397,49 @@ def _residuals(x, model: _Model) -> np.ndarray:
 _TOLERANCE = 1e-6          # a residual this small is a satisfied constraint
 _RANK_TOLERANCE = 1e-7     # relative to the largest singular value
 
-# How large a sketch this will accept. The residual evaluation and the Jacobian
-# are both linear in the sketch now, but the rank comes from an SVD, which is
-# not: it costs O(rows^2 x variables) and `_redundancy_groups` asks for the full
-# left basis, which allocates rows x rows. Unbounded, one request could spend
-# minutes of CPU and hundreds of megabytes — the operation surface is reachable
-# by anyone who can open a document, so the bound belongs here rather than in a
-# comment about reasonable use. A hand-drawn sketch is tens of entities; a
-# generated one is low hundreds.
-MAX_ENTITIES = 600
-MAX_CONSTRAINTS = 600
+# How large a sketch this will accept.
+#
+# The residual evaluation and the Jacobian are both linear in the sketch, but
+# the least-squares solve and the rank are not: the rank comes from an SVD
+# costing O(rows^2 x variables), and `_redundancy_groups` asks for the full left
+# basis, which allocates rows x rows. The operation surface is reachable by
+# anyone who can open a document and `routers/operations` allows 300 calls a
+# minute, so this is a denial-of-service bound and not a style preference.
+#
+# **Measured, on the machine this was written on.** A polyline chain, one
+# `distance` and one `horizontal` per segment (the ordinary shape), against the
+# same chain with an `equal_length` added per segment (the expensive shape — it
+# reads four points, so its Jacobian rows are denser):
+#
+#     entities  constraints   ordinary   expensive
+#          601          601      0.41 s      2.24 s   (900 constraints)
+#         1201         1201      2.04 s          --
+#         1001         1500          --      7.06 s
+#         1801         1801      5.66 s          --
+#         1501         2250          --     22.65 s
+#
+# Two things follow, and the second is why this is not simply a bigger number
+# than it was. **Cost tracks entities x constraints, not either alone**: a
+# 1500-entity traced outline carrying 300 constraints is cheap, and refusing it
+# because of an entity count tuned for a heavily-dimensioned sketch was the
+# actual limitation. And **the old 600/600 pair was about right for the
+# expensive shape** — 2.24 s at that corner — so raising both flatly would have
+# multiplied the worst case rather than moved the ceiling.
+#
+# So the bound is on the product, with generous per-axis caps to stop either
+# running away on its own.
+MAX_ENTITIES = 2000
+MAX_CONSTRAINTS = 2000
+
+#: `entities x constraints`. 600 x 900 measured 2.24 s and 47 MB on the
+#: expensive shape, which is the most one request may cost when three hundred a
+#: minute are allowed.
+MAX_SOLVE_WORK = 600_000
+
+#: Past half the budget a sketch is in territory where a solve is seconds rather
+#: than milliseconds. Warned about rather than refused: it is legitimate work,
+#: and the caller is the one who can decide to split it.
+WARN_SOLVE_WORK = MAX_SOLVE_WORK // 2
 
 
 def sketch_size(spec: dict) -> Tuple[int, int]:
@@ -416,8 +449,37 @@ def sketch_size(spec: dict) -> Tuple[int, int]:
     return entities, len(spec.get("constraints") or ())
 
 
+def solve_work(spec: dict) -> int:
+    """`entities x constraints` — what the solve actually costs. See the caps."""
+    entities, constraints = sketch_size(spec)
+    return entities * constraints
+
+
+def size_warning(spec: dict) -> Optional[str]:
+    """A note for a sketch heading towards the ceiling, or None.
+
+    Separate from `check_size` because it is not a refusal: a big sketch is
+    legitimate work, and the caller is the one who can decide to split it.
+    """
+    work = solve_work(spec)
+    if work <= WARN_SOLVE_WORK:
+        return None
+    entities, constraints = sketch_size(spec)
+    return (f"this sketch is {entities} entities x {constraints} constraints, "
+            f"{work * 100 // MAX_SOLVE_WORK}% of what the solver will take — "
+            f"expect the solve to cost seconds rather than milliseconds, and "
+            f"expect a refusal past {MAX_SOLVE_WORK // max(constraints, 1)} "
+            f"entities at this constraint count")
+
+
 def check_size(spec: dict) -> None:
-    """Refuse a sketch too large to diagnose, by name and with the number."""
+    """Refuse a sketch too expensive to solve, by name and with the number.
+
+    The bound is on `entities x constraints` rather than on either alone,
+    because that is what the cost tracks: a 1500-entity traced outline carrying
+    300 constraints is cheap, and the old per-axis cap refused it on the
+    strength of a number tuned for a heavily-dimensioned sketch.
+    """
     entities, constraints = sketch_size(spec)
     if entities > MAX_ENTITIES:
         raise SketchError(
@@ -427,6 +489,15 @@ def check_size(spec: dict) -> None:
         raise SketchError(
             f"sketch has {constraints} constraints, more than the "
             f"{MAX_CONSTRAINTS} this solver will diagnose")
+    work = entities * constraints
+    if work > MAX_SOLVE_WORK:
+        allowed = MAX_SOLVE_WORK // max(constraints, 1)
+        raise SketchError(
+            f"sketch is {entities} entities x {constraints} constraints, which "
+            f"is {work // 1000}k units of solver work against a {MAX_SOLVE_WORK // 1000}k "
+            f"budget — the cost grows with the product, not with either alone. "
+            f"At {constraints} constraints this solver will take {allowed} "
+            f"entities; drop constraints or split it across several sketches")
 
 
 def _sketch_scale(x: np.ndarray) -> float:
@@ -674,6 +745,9 @@ def solve_sketch(spec: dict) -> dict:
         "converged": residual < 1e-6,
     }
     solved.update(diagnose(model, sol_x))
+    note = size_warning(spec)
+    if note:
+        solved["size_note"] = note
     return solved
 
 

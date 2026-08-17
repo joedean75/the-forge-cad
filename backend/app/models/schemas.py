@@ -455,23 +455,39 @@ class AssemblyComponent(BaseModel):
 
 
 class AssemblyMate(BaseModel):
-    """A positional constraint between two components (feature 04).
+    """A positional constraint between two components.
 
-    Solved into the moved component's ComponentTransform, replacing hand-typed
-    placements: ``fasten`` rigidly attaches at an offset; ``coincident`` mates a
-    face of each part along an axis (stacking); ``concentric`` makes two parts
-    coaxial; ``distance`` holds a gap along an axis. Mates assume axis-aligned
-    parts (no relative rotation), covering the common assembly cases.
+    Two schemes, and the mate says which by whether it names connectors.
+
+    **Bounding-box mates** read a component's bbox *extremes* along one world
+    axis: ``fasten`` rigidly attaches at an offset; ``coincident`` mates a face
+    of each part (stacking); ``concentric`` makes two parts coaxial;
+    ``distance`` holds a gap. They keep parts axis-aligned, because there is
+    nothing in an extreme that could express a rotation. Unchanged, and stored
+    assemblies depend on them staying that way.
+
+    **Connector mates** name a `MateConnectorFeature` on each part — a frame
+    that lives in the part rather than on its silhouette — and align the two.
+    ``revolute`` (a hinge), ``slider`` (a rail), ``cylindrical`` (a shaft in a
+    bearing), ``planar``, ``ball`` and ``parallel`` are all that same alignment
+    with a different set of degrees of freedom left free, which is also the only
+    way a part gets *rotated* into place here.
     """
 
     id: str
-    type: Literal["fasten", "coincident", "concentric", "distance"]
+    type: Literal["fasten", "coincident", "concentric", "distance",
+                  "revolute", "slider", "cylindrical", "planar", "ball", "parallel"]
     base: str    # component id held fixed
     moved: str   # component id positioned by the mate
     axis: Literal["x", "y", "z"] = "z"
     base_face: Literal["min", "max", "center"] = "max"
     moved_face: Literal["min", "max", "center"] = "min"
     offset_mm: float = 0.0
+    #: Feature ids of a `MateConnectorFeature` in each part. Both or neither:
+    #: one alone has nothing to align against, so the mate falls back to the
+    #: bounding-box path and the caller is told rather than left guessing.
+    base_connector: Optional[str] = None
+    moved_connector: Optional[str] = None
 
 
 class AssemblyDoc(BaseModel):

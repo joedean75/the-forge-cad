@@ -1,23 +1,106 @@
-"""Assembly mate solver (roadmap feature 04).
+"""Assembly mate solver.
 
-Resolves positional constraints — fasten, coincident, concentric, distance —
-into each moved component's ``ComponentTransform``, so an assembly is built by
-*relationships* ("this face sits on that face", "these two are coaxial") rather
-than hand-typed coordinates. This is what text-to-assembly and the UI emit.
+Two schemes live here, and which one runs is decided by whether the mate names
+mate connectors.
 
-Mates assume axis-aligned parts (no relative rotation), which covers the common
-stacking/coaxial/attach cases; the moved part inherits the base part's rotation.
-Solved in dependency order so a chain (A→B→C) places correctly.
+**Bounding-box mates** came first: `fasten`, `coincident`, `concentric`,
+`distance`, each reading a component's bbox *extremes* along one world axis.
+That places a bolted stack and nothing else, and it keeps parts axis-aligned
+because there is nothing in it that could express a rotation. Every one of them
+still behaves exactly as it did — assemblies are persisted, and a stack that
+moves because the solver got cleverer is a regression however much better the
+new scheme is.
+
+**Connector mates** are the table those extremes were standing in for. A mate
+connector (`cad_kernel/ops/mate_connector.py`) is a named frame *in the part*;
+a mate aligns two of them, and every mate type worth having is that same
+alignment with a different set of degrees of freedom left free. This is what
+lets a part be rotated into place at all, and what makes `revolute` mean
+something more than "positioned and then never moved again".
+
+**Degrees of freedom are a property of the constraint, not of the placement.**
+A revolute mate leaves one rotation free; the solver still has to *pick* a
+value for it, and picks the connectors' own alignment. Reporting DOF from the
+chosen placement would report zero for everything, which is true of the numbers
+and false about the assembly.
 """
 
 from __future__ import annotations
 
-from typing import Dict, List
+import math
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
 
 from app.models.schemas import AssemblyComponent, AssemblyMate, ComponentTransform, Vector3
 
 _AX = {"x": 0, "y": 1, "z": 2}
 MM = 1000.0
+
+#: What each mate type leaves free, as `(rotational, translational)`.
+#:
+#: The three legacy face mates are listed at their *constraint's* freedom, not
+#: at what the bbox solver happens to pin down: `coincident` states that a face
+#: sits on a face, which removes one translation and two rotations, and the
+#: solver's extra decision to centre the other two axes is a resting position
+#: rather than part of what was asked for.
+FREEDOMS: Dict[str, Tuple[int, int]] = {
+    "fasten": (0, 0),
+    "revolute": (1, 0),        # a hinge
+    "slider": (0, 1),          # a linear rail
+    "cylindrical": (1, 1),     # a shaft in a plain bearing
+    "planar": (1, 2),          # a face sliding on a face
+    "ball": (3, 0),            # a rod end
+    "parallel": (1, 3),        # two axes held parallel, nothing else
+    # legacy, bbox-based
+    "concentric": (1, 1),
+    "coincident": (1, 2),
+    "distance": (1, 2),
+}
+
+#: Mate types that need a connector on each side. The legacy four do not, and
+#: may not have one either — their whole definition is the bounding box.
+CONNECTOR_TYPES = frozenset({"revolute", "slider", "cylindrical", "planar",
+                             "ball", "parallel"})
+
+MATE_TYPES = tuple(FREEDOMS)
+
+#: The frames a solve was given: `{part_id: {connector_id: (origin, rotation)}}`
+#: in part space. Passed in rather than read here, so this module stays a pure
+#: function of its arguments and the document lookup stays in the service that
+#: already owns it.
+Frames = Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray]]]
+
+
+def removed(mate_type: str) -> int:
+    """How many of the six degrees of freedom a mate of this type removes."""
+    rotational, translational = FREEDOMS.get(mate_type, (0, 0))
+    return 6 - rotational - translational
+
+
+def _euler_matrix(rx: float, ry: float, rz: float) -> np.ndarray:
+    from app.cad_kernel.evaluator.sdf import _euler_matrix as build
+
+    return build(rx, ry, rz)
+
+
+def _euler_degrees(rotation: np.ndarray) -> Tuple[float, float, float]:
+    """The inverse of `_euler_matrix`, whose convention is ``Rz @ Ry @ Rx``.
+
+    Written out rather than pulled from a library because getting the
+    convention wrong is silent: the part lands somewhere plausible and only a
+    non-axis-aligned mate shows it.
+    """
+    sy = float(np.clip(-rotation[2, 0], -1.0, 1.0))
+    beta = math.asin(sy)
+    if abs(sy) > 1.0 - 1e-9:
+        # Gimbal lock: pitch is +-90 and roll/yaw are no longer separable, so
+        # fold the whole remaining rotation into yaw and leave roll at zero.
+        return (0.0, math.degrees(beta),
+                math.degrees(math.atan2(-rotation[0, 1], rotation[1, 1])))
+    return (math.degrees(math.atan2(rotation[2, 1], rotation[2, 2])),
+            math.degrees(beta),
+            math.degrees(math.atan2(rotation[1, 0], rotation[0, 0])))
 
 
 def _face_coord(comp: AssemblyComponent, axis: str, face: str) -> float:
@@ -44,7 +127,8 @@ def _center_world(comp: AssemblyComponent, axis: str) -> float:
     return _face_coord(comp, axis, "center")
 
 
-def solve(components: List[AssemblyComponent], mates: List[AssemblyMate]) -> None:
+def solve(components: List[AssemblyComponent], mates: List[AssemblyMate],
+          frames: Optional[Frames] = None) -> None:
     """Update moved components' transforms in place to satisfy the mates.
 
     Runs in dependency order: a mate is applied once its base is placed (base
@@ -65,12 +149,111 @@ def solve(components: List[AssemblyComponent], mates: List[AssemblyMate]) -> Non
                 continue
             if mate.base not in solved:
                 continue  # base not placed yet
-            _apply(mate, base, moved)
+            pair = _frame_pair(mate, base, moved, frames)
+            if pair is not None:
+                _apply_connectors(mate, base, moved, *pair)
+            else:
+                _apply(mate, base, moved)
             solved.add(mate.moved)
             remaining.remove(mate)
             progressed = True
         if not progressed:
             break
+
+
+def degrees_of_freedom(components: List[AssemblyComponent],
+                       mates: List[AssemblyMate]) -> Dict[str, Any]:
+    """What each component can still move, and whether anything is over-mated.
+
+    A free body has six degrees of freedom. Each mate naming a component as
+    `moved` removes what its type removes; the total is floored at zero, and a
+    component whose mates remove more than six is reported as over-constrained
+    rather than being silently clamped — two mates can be individually valid and
+    jointly impossible, and the count is the cheapest signal that they are.
+    """
+    rows = []
+    for component in components:
+        applied = [m for m in mates if m.moved == component.id]
+        taken = sum(removed(m.type) for m in applied)
+        rows.append({
+            "component_id": component.id,
+            "name": component.name,
+            "dof": max(0, 6 - taken),
+            "constrained_by": [m.id for m in applied],
+            "over_constrained": taken > 6,
+        })
+    return {
+        "components": rows,
+        "dof": sum(r["dof"] for r in rows),
+        "over_constrained": [r["component_id"] for r in rows if r["over_constrained"]],
+        "grounded": [r["component_id"] for r in rows if r["dof"] == 0],
+    }
+
+
+def _frame_pair(mate: AssemblyMate, base: AssemblyComponent,
+                moved: AssemblyComponent, frames: Optional[Frames]):
+    """The two part-space frames a connector mate aligns, or None.
+
+    Returns None when either side is unnamed or unresolvable, which sends the
+    mate down the bounding-box path — right for the legacy four, and for the
+    connector-only types the caller has already refused the mate before it got
+    here, so a missing frame at this point means the part was edited and the
+    connector deleted. Placing it by bbox is then a visible wrong answer rather
+    than an assembly that fails to load.
+    """
+    base_id = getattr(mate, "base_connector", None)
+    moved_id = getattr(mate, "moved_connector", None)
+    if not base_id or not moved_id or not frames:
+        return None
+    base_frame = (frames.get(base.part_id) or {}).get(base_id)
+    moved_frame = (frames.get(moved.part_id) or {}).get(moved_id)
+    if base_frame is None or moved_frame is None:
+        return None
+    return base_frame, moved_frame
+
+
+def _world(component: AssemblyComponent) -> Tuple[np.ndarray, np.ndarray]:
+    t = component.transform
+    return (np.array([t.translate.x, t.translate.y, t.translate.z]),
+            _euler_matrix(t.rotate_deg.x, t.rotate_deg.y, t.rotate_deg.z))
+
+
+def _apply_connectors(mate: AssemblyMate, base: AssemblyComponent,
+                      moved: AssemblyComponent,
+                      base_frame, moved_frame) -> None:
+    """Place `moved` so its connector lands on the base's.
+
+    The two frames are aligned **directly** — Z onto Z, X onto X — and `offset`
+    then separates them along that shared Z. Direct alignment rather than the
+    face-to-face convention some packages use, because either can be had by
+    defining the connector the other way round, and a rule with no hidden flip
+    in it is one a caller can predict from the schema alone.
+
+        T_moved . F_moved  =  T_base . F_base . offset
+
+    so `T_moved = T_base . F_base . offset . F_moved⁻¹`, which is the whole
+    solver. Scale is left alone: a mate positions a part, it does not resize it.
+    """
+    base_origin, base_rotation = _world(base)
+    fb_origin, fb_rotation = base_frame
+    fm_origin, fm_rotation = moved_frame
+
+    # The base connector, in world.
+    target_rotation = base_rotation @ fb_rotation
+    target_origin = base_origin + base_rotation @ (fb_origin * base.transform.scale)
+    # Offset along the shared Z, which is the connector's own primary axis.
+    target_origin = target_origin + target_rotation @ np.array(
+        [0.0, 0.0, mate.offset_mm / MM])
+
+    rotation = target_rotation @ fm_rotation.T
+    translate = target_origin - rotation @ (fm_origin * moved.transform.scale)
+    rx, ry, rz = _euler_degrees(rotation)
+    moved.transform = ComponentTransform(
+        translate=Vector3(x=float(translate[0]), y=float(translate[1]),
+                          z=float(translate[2])),
+        rotate_deg=Vector3(x=rx, y=ry, z=rz),
+        scale=moved.transform.scale,
+    )
 
 
 def _apply(mate: AssemblyMate, base: AssemblyComponent, moved: AssemblyComponent) -> None:
@@ -100,6 +283,15 @@ def _apply(mate: AssemblyMate, base: AssemblyComponent, moved: AssemblyComponent
         for a in others:
             k = _AX[a]
             tr[k] = _center_world(base, a) - (_center_world(moved, a) - tr[k])
+    elif mate.type in CONNECTOR_TYPES:
+        # A connector mate that reached the bounding-box path: the part was
+        # edited and the connector it named is gone. `add_mate` refuses these
+        # without connectors, so this is not a call that can be made — it is a
+        # part that moved out from under one. The component is left where it
+        # was rather than being placed by an invented equivalent, because a
+        # revolute is not "concentric, roughly" and a plausible wrong placement
+        # is harder to notice than a part that visibly did not move.
+        return
     elif mate.type == "concentric":
         # Coaxial: share the axis line (center the two non-axis coords); offset
         # positions along the axis (center-to-center).

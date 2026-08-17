@@ -235,6 +235,59 @@ class RuledLoftFeature(Feature):
 
 @register_feature
 @dataclass
+class HelixFeature(Feature):
+    """A round wire wound as a helix — a coil spring, an auger flight, a coil.
+
+    Nothing here could make one before, which is why springs were absent from
+    the catalog entirely. `SweepFeature` next door is a union of *capsules*
+    along a polyline, so a helix approximated that way is faceted at whatever
+    segment count somebody picked, and the facets are visible at any count a
+    document can afford.
+
+    Exact-only. The distance to a helix has no closed form — the usual
+    field-side trick unwraps the point into helical coordinates and ignores the
+    tangential term, which is an approximation that is worst exactly where the
+    pitch is interesting. A body that is one shape with OCP installed and
+    another without is the thing this kernel split exists to prevent.
+
+    `pitch` is the rise per turn and `turns` may be fractional. A left-handed
+    coil winds the other way, which is a real distinction for a spring that has
+    to nest with something.
+    """
+
+    helix_radius: float = 0.01     # of the coil, to the wire's centreline
+    wire_radius: float = 0.001     # of the round section being wound
+    pitch: float = 0.004           # rise per turn
+    turns: float = 5.0
+    center: Dict[str, float] = field(
+        default_factory=lambda: {"x": 0.0, "y": 0.0, "z": 0.0})
+    axis: Dict[str, float] = field(
+        default_factory=lambda: {"x": 0.0, "y": 0.0, "z": 1.0})
+    right_handed: bool = True
+
+    def evaluate(self) -> Solid:
+        return _evaluate_exact(self)
+
+    def _serialize_params(self) -> Dict[str, Any]:
+        return {"helix_radius": self.helix_radius, "wire_radius": self.wire_radius,
+                "pitch": self.pitch, "turns": self.turns, "center": self.center,
+                "axis": self.axis, "right_handed": self.right_handed}
+
+    @classmethod
+    def _from_dict(cls, data: Dict[str, Any]) -> "HelixFeature":
+        p = data["params"]
+        return cls(id=data.get("id"), name=data.get("name", "Helix"),
+                   helix_radius=float(p.get("helix_radius", 0.01)),
+                   wire_radius=float(p.get("wire_radius", 0.001)),
+                   pitch=float(p.get("pitch", 0.004)),
+                   turns=float(p.get("turns", 5.0)),
+                   center=p.get("center") or {"x": 0.0, "y": 0.0, "z": 0.0},
+                   axis=p.get("axis") or {"x": 0.0, "y": 0.0, "z": 1.0},
+                   right_handed=bool(p.get("right_handed", True)))
+
+
+@register_feature
+@dataclass
 class BrepBodyFeature(Feature):
     """An imported B-rep solid, carried as serialized OpenCascade geometry.
 

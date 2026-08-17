@@ -294,13 +294,28 @@ class TransformFeature(Feature):
 @register_feature
 @dataclass
 class PatternFeature(Feature):
-    """Linear or circular pattern (union of copies) of the single child."""
+    """A union of placed copies of the single child.
 
-    kind: Literal["linear", "circular"] = "linear"
+    Four kinds. `linear` and `circular` were here first and their placements are
+    unchanged; `curve` spaces instances by equal arc length along a polyline,
+    and `table` lists the placements outright — which is the kind that can
+    express an arrangement the other three cannot, and the one the decompiler
+    can recover an arbitrary set of copies into.
+
+    Where the copies go is decided in `geom/patterns.py` and both kernels read
+    it from there.
+    """
+
+    kind: Literal["linear", "circular", "curve", "table"] = "linear"
     count: int = 3
     spacing: float = 0.05  # metres (linear)
     axis: Vector3 = field(default_factory=lambda: Vector3(1.0, 0.0, 0.0))
     center: Point3 = field(default_factory=Point3)  # circular pivot
+    #: `curve`: the polyline to space instances along, in metres.
+    path: List[Dict[str, float]] = field(default_factory=list)
+    #: `table`: one `{translate, rotate}` per instance. Complete — the first
+    #: entry is the first instance and there is no implicit copy at the origin.
+    transforms: List[Dict[str, Any]] = field(default_factory=list)
     children: List[Feature] = field(default_factory=list)
 
     def evaluate(self) -> Solid:
@@ -313,6 +328,8 @@ class PatternFeature(Feature):
             "spacing": self.spacing,
             "axis": _vd(self.axis),
             "center": _vd(self.center),
+            "path": self.path,
+            "transforms": self.transforms,
             "children": [c.to_dict() for c in self.children],
         }
 
@@ -327,5 +344,7 @@ class PatternFeature(Feature):
             spacing=p.get("spacing", 0.05),
             axis=_vec(p.get("axis", {"x": 1, "y": 0, "z": 0})),
             center=_pt(p.get("center", {"x": 0, "y": 0, "z": 0})),
+            path=list(p.get("path") or []),
+            transforms=list(p.get("transforms") or []),
             children=_children_from(data),
         )

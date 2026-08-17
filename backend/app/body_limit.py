@@ -43,11 +43,18 @@ MB = 1024 * 1024
 #: ``PUT /api/documents/{id}`` and far below what it takes to hurt a worker.
 DEFAULT_MAX_BYTES = 8 * MB
 
-#: File uploads. `import_service.MAX_FILE_BYTES` is 50 MB and is still the
-#: authority on whether a *file* is acceptable — this only stops the transfer
-#: from being unbounded, so the slack covers multipart framing around a
-#: maximum-size file.
-UPLOAD_MAX_BYTES = 56 * MB
+#: File uploads. `import_service.max_bytes_for` is still the authority on
+#: whether a *file* is acceptable — 50 MB for a mesh, 128 MB for STEP or IGES,
+#: which OCC keeps as analytic surfaces rather than voxelising. This only stops
+#: the transfer from being unbounded, so it is the larger of those plus slack
+#: for the multipart framing around a maximum-size file.
+#:
+#: The cost of the raise is real and worth stating: every upload route does
+#: `data = await file.read()`, so a 128 MB body is 128 MB resident before
+#: anything looks at it, and OCC's parse of a STEP that size is several hundred
+#: more. That is affordable on the deployment this ships to and would not be on
+#: a smaller one — see DEPLOY.md.
+UPLOAD_MAX_BYTES = 136 * MB
 
 #: (path substring, cap). Substring rather than prefix because the document
 #: upload routes sit under `/api/documents/{id}/...` and `/api/documents/meta/...`.

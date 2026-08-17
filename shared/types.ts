@@ -810,15 +810,56 @@ export interface AssemblyComponent {
   missing: boolean
 }
 
+/**
+ * Two schemes, and the mate says which by whether it names connectors.
+ *
+ * Without them it reads the parts' bounding-box extremes along one world axis
+ * (`fasten` | `coincident` | `concentric` | `distance`) and the parts stay
+ * axis-aligned, because an extreme cannot express a rotation. With
+ * `base_connector`/`moved_connector` it aligns two frames that live in the
+ * parts — the only way a part gets rotated into place here — and the six
+ * kinematic types below are that same alignment with different degrees of
+ * freedom left free.
+ */
 export interface AssemblyMate {
   id: string
-  type: 'fasten' | 'coincident' | 'concentric' | 'distance'
+  type:
+    | 'fasten' | 'coincident' | 'concentric' | 'distance'
+    | 'revolute' | 'slider' | 'cylindrical' | 'planar' | 'ball' | 'parallel'
   base: string
   moved: string
   axis: 'x' | 'y' | 'z'
   base_face: 'min' | 'max' | 'center'
   moved_face: 'min' | 'max' | 'center'
   offset_mm: number
+  /** Feature ids of a MateConnectorFeature in each part. Both or neither. */
+  base_connector?: string | null
+  moved_connector?: string | null
+}
+
+/** One row of the `dof` operation: what a component can still move. */
+export interface ComponentDof {
+  component_id: string
+  name?: string | null
+  dof: number
+  constrained_by: string[]
+  over_constrained: boolean
+}
+
+export interface DofReport {
+  components: ComponentDof[]
+  dof: number
+  over_constrained: string[]
+  grounded: string[]
+}
+
+/** A named coordinate frame on a part, from `list_mate_connectors`. */
+export interface MateConnector {
+  connector_id: string
+  name?: string | null
+  origin_mm: [number, number, number]
+  x_axis: [number, number, number]
+  z_axis: [number, number, number]
 }
 
 export interface AssemblyDoc {

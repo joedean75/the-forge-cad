@@ -31,7 +31,15 @@ MM = 1000.0
 _COMPONENT = {"type": "string", "required": True,
               "description": "component id, from list_components"}
 
-_MATE_TYPES = ["fasten", "coincident", "concentric", "distance"]
+# Imported rather than restated: the enum a constrained decoder reads and
+# the solver's own freedom table must name the same set, or a mate type can
+# be accepted by the schema and have no degrees of freedom defined for it.
+from app.services.assembly_mates import (  # noqa: E402
+    CONNECTOR_TYPES as _CONNECTOR_TYPES,
+    MATE_TYPES as _MATE_TYPES_TUPLE,
+)
+
+_MATE_TYPES = list(_MATE_TYPES_TUPLE)
 
 
 def _assembly(asm_id: str):
@@ -49,6 +57,33 @@ def _component(asm, component_id: str):
             f"no component {component_id!r} in this assembly; it has: {known}",
             arg="component_id")
     return found
+
+
+def _has_connector(part_id: str, connector_id: str) -> bool:
+    from app.cad_kernel.core.feature_tree import walk_nodes
+    from app.services import document_service
+
+    part = document_service.get_document(part_id)
+    if part is None:
+        return False
+    return any(n.get("type") == "MateConnectorFeature" and n.get("id") == connector_id
+               for n in walk_nodes(part.feature_tree))
+
+
+@operation("dof", "query",
+           "What each component can still move. A free body has six degrees of "
+           "freedom; each mate removes what its type removes — a fasten all six, "
+           "a revolute five, a slider five, a planar three. A component at zero "
+           "is fully located; one whose mates remove more than six is "
+           "over-constrained, which two individually valid mates can be jointly. "
+           "This is a property of the constraints, not of where the solver "
+           "happened to put things.",
+           {}, subject="assembly")
+def _dof(asm_id, args):
+    from app.services import assembly_mates
+
+    asm = _assembly(asm_id)
+    return assembly_mates.degrees_of_freedom(asm.components, asm.mates)
 
 
 @operation("list_components", "query",
@@ -205,11 +240,17 @@ def _list_mates(asm_id, args):
 
 @operation("add_mate", "mutate",
            "Constrain one component against another and re-solve every placement. "
-           "`coincident` mates a face of each along an axis (stacking), "
-           "`concentric` makes them coaxial, `distance` holds a gap, `fasten` "
-           "attaches rigidly at an offset. Faces are the part's bounding-box "
-           "extremes along the axis, not individual model faces, and mates keep "
-           "parts axis-aligned.",
+           "Two schemes. Without connectors the mate reads the parts' "
+           "bounding-box extremes along one world axis: `coincident` stacks a "
+           "face on a face, `concentric` makes them coaxial, `distance` holds a "
+           "gap, `fasten` attaches rigidly — and the parts stay axis-aligned, "
+           "because an extreme cannot express a rotation. With "
+           "`base_connector`/`moved_connector` (ids from list_mate_connectors) "
+           "the mate aligns two frames that live *in* the parts, which is the "
+           "only way a part gets rotated into place: `revolute` is a hinge, "
+           "`slider` a rail, `cylindrical` a shaft in a bearing, plus `planar`, "
+           "`ball` and `parallel`. Those six need a connector on each side. Use "
+           "`dof` afterwards to see what is still free.",
            {"type": {"enum": _MATE_TYPES, "required": True,
                      "description": "which constraint to apply"},
             "base": {"type": "string", "required": True,
@@ -223,24 +264,54 @@ def _list_mates(asm_id, args):
             "moved_face": {"enum": ["min", "center", "max"], "default": "min",
                            "description": "which extreme of the moved part meets it"},
             "offset_mm": {"type": "number", "default": 0.0, "unit": "mm",
-                          "description": "gap held between the two faces"}},
+                          "description": "gap held between the two faces, or "
+                                         "along the connectors' shared axis"},
+            "base_connector": {"type": "string",
+                               "description": "mate connector on the base part, "
+                                              "from list_mate_connectors"},
+            "moved_connector": {"type": "string",
+                                "description": "mate connector on the moved part"}},
            subject="assembly")
 def _add_mate(asm_id, args):
     asm = _assembly(asm_id)
     base, moved = require(args, "base"), require(args, "moved")
     if base == moved:
         raise BadArgument("a mate needs two different components", arg="moved")
-    _component(asm, base)
-    _component(asm, moved)
+    base_component = _component(asm, base)
+    moved_component = _component(asm, moved)
+
+    mate_type = require(args, "type")
+    base_connector = args.get("base_connector")
+    moved_connector = args.get("moved_connector")
+    if mate_type in _CONNECTOR_TYPES and not (base_connector and moved_connector):
+        raise BadArgument(
+            f"a {mate_type} mate aligns two frames and needs "
+            f"'base_connector' and 'moved_connector' — add them to the parts "
+            f"with add_mate_connector, or use one of "
+            f"{', '.join(sorted(set(_MATE_TYPES) - _CONNECTOR_TYPES))} instead, "
+            f"which read the bounding box.",
+            arg="base_connector" if not base_connector else "moved_connector")
+    # Checked here rather than at solve time: a connector id that names nothing
+    # leaves the solver on the bounding-box path, which places the part
+    # plausibly and wrongly. The one moment it is cheap to catch is now.
+    for side, component, connector in (("base", base_component, base_connector),
+                                       ("moved", moved_component, moved_connector)):
+        if connector and not _has_connector(component.part_id, connector):
+            raise BadArgument(
+                f"the {side} part has no mate connector {connector!r} — "
+                f"see list_mate_connectors on that document",
+                arg=f"{side}_connector")
 
     before = next((c.transform.translate.model_dump()
                    for c in asm.components if c.id == moved), None)
     updated = assembly_service.add_mate(asm_id, {
-        "id": "", "type": require(args, "type"), "base": base, "moved": moved,
+        "id": "", "type": mate_type, "base": base, "moved": moved,
         "axis": args.get("axis", "z"),
         "base_face": args.get("base_face", "max"),
         "moved_face": args.get("moved_face", "min"),
         "offset_mm": float(args.get("offset_mm", 0.0)),
+        "base_connector": base_connector,
+        "moved_connector": moved_connector,
     })
     if updated is None:
         raise NoSuchDocument(f"no assembly {asm_id!r}")
@@ -248,8 +319,14 @@ def _add_mate(asm_id, args):
     after = next((c.transform.translate.model_dump()
                   for c in updated.components if c.id == moved), None)
     mate = updated.mates[-1]
+    from app.services import assembly_mates
+
+    rotational, translational = assembly_mates.FREEDOMS.get(mate.type, (0, 0))
     result: Dict[str, Any] = {"message": f"mated {moved} to {base}", "mate_id": mate.id,
-                              "mate_count": len(updated.mates)}
+                              "mate_count": len(updated.mates),
+                              "removes_dof": assembly_mates.removed(mate.type),
+                              "leaves_free": {"rotational": rotational,
+                                              "translational": translational}}
     # A mate that positions nothing differently is the assembly-side version of
     # an edit that reports success and changes nothing. Say so rather than
     # leaving the caller to diff two transforms.

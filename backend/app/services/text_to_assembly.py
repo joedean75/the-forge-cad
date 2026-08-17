@@ -24,8 +24,18 @@ from app.services import assembly_service, document_service, llm_client
 
 _LOGGER = logging.getLogger(__name__)
 
-MAX_PARTS = 6
-MAX_COMPONENTS = 16
+# How large an assembly the planner may describe.
+#
+# Six was a placeholder and it showed: the marquee demo could not describe a
+# gearbox. The cost that bounds this is one text-to-CAD call per *part*, which
+# is why parts and placements are capped separately — sixteen bolts placed from
+# one part cost one call, and sixteen different parts cost sixteen.
+#
+# Exceeding either is **reported, not silently truncated**. The old code sliced
+# the list and said nothing, so an assembly quietly arrived missing its last
+# four parts and looked like the planner's fault.
+MAX_PARTS = 16
+MAX_COMPONENTS = 48
 
 Planner = Callable[[str], dict]
 
@@ -143,8 +153,27 @@ def create_assembly_from_prompt(
 
     progress("planning the assembly")
     plan = planner(prompt)
-    parts: List[dict] = list(plan.get("parts") or [])[:MAX_PARTS]
-    components: List[dict] = list(plan.get("components") or [])[:MAX_COMPONENTS]
+    requested = list(plan.get("parts") or [])
+    parts: List[dict] = requested[:MAX_PARTS]
+    dropped_parts = [str(p.get("name") or p.get("key") or "?") for p in requested[MAX_PARTS:]]
+    requested_components = list(plan.get("components") or [])
+    components: List[dict] = requested_components[:MAX_COMPONENTS]
+    dropped_components = len(requested_components) - len(components)
+    # Reported through `progress`, which the job forwards to the caller, and not
+    # only to the log. A silent slice is how an assembly arrives missing its
+    # last four parts and looks like the planner's fault.
+    if dropped_parts:
+        message = (f"the plan asked for {len(requested)} parts; this build is "
+                   f"capped at {MAX_PARTS}, so these were left out: "
+                   f"{', '.join(dropped_parts)}")
+        _LOGGER.warning("%s", message)
+        progress(message)
+    if dropped_components:
+        message = (f"the plan asked for {len(requested_components)} placements; "
+                   f"capped at {MAX_COMPONENTS}, so {dropped_components} were "
+                   f"left out")
+        _LOGGER.warning("%s", message)
+        progress(message)
     if not parts:
         raise ValueError("the planner produced no parts")
     if not components:  # place each part once if the planner omitted placements

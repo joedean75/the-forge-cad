@@ -90,6 +90,10 @@ _MODIFIER_TARGET = {"type": "string",
 #: The recess a hole has at its mouth. `simple` is a plain bore.
 _HOLE_TYPES = ("simple", "counterbore", "countersink")
 
+#: How a pattern places its copies. Imported rather than restated so the enum a
+#: constrained decoder reads and the kernel's own table cannot drift apart.
+from app.cad_kernel.geom.patterns import PATTERN_KINDS as _PATTERN_KINDS  # noqa: E402
+
 _EDGE_SELECTION = {
     "type": ["array", "string"], "required": True,
     "description": 'edge ids from list_edges, or the string "all" for every edge',
@@ -105,7 +109,20 @@ _MODIFIER_PARAMS = {
         "depth": {"type": "number", "description": "hole"},
         "count": {"type": "integer", "description": "pattern"},
         "spacing": {"type": "number", "description": "pattern"},
-        "kind": {"enum": ["linear", "circular"], "description": "pattern"},
+        "kind": {"enum": list(_PATTERN_KINDS),
+                 "description": "pattern: linear/circular use axis+spacing+center; "
+                                "curve spaces `count` instances by equal arc length "
+                                "along `path`; table places them at `transforms`"},
+        "path": {"type": "array", "items": _VEC,
+                 "description": "pattern (curve): the polyline to space instances along"},
+        "transforms": {
+            "type": "array",
+            "items": {"type": "object",
+                      "properties": {"translate": _VEC, "rotate": _VEC},
+                      "additionalProperties": False},
+            "description": "pattern (table): one {translate, rotate} per instance. "
+                           "Complete — the first entry is the first instance, and "
+                           "there is no implicit copy at the origin"},
         "translate": {**_VEC, "description": "transform"},
         "rotate": {**_VEC, "description": "transform: XYZ euler degrees"},
         "scale": {"type": "number", "description": "transform"},
@@ -210,7 +227,9 @@ def _make_modifier(kind: str, params: Dict[str, Any] | None) -> Dict[str, Any]:
                                  "thread": p.get("thread", "")}),
         "pattern": ("PatternFeature", {"kind": p.get("kind", "linear"), "count": p.get("count", 3),
                                        "spacing": p.get("spacing", 0.05), "axis": p.get("axis", {"x": 1, "y": 0, "z": 0}),
-                                       "center": center}),
+                                       "center": center,
+                                       "path": p.get("path") or [],
+                                       "transforms": p.get("transforms") or []}),
         "transform": ("TransformFeature", {"translate": p.get("translate", {"x": 0, "y": 0, "z": 0}),
                                            "rotate": p.get("rotate", {"x": 0, "y": 0, "z": 0}),
                                            "scale": p.get("scale", 1.0)}),
@@ -662,7 +681,12 @@ def _sketch_result(solved: dict) -> dict:
             "status": solved["status"], "dof": solved["dof"],
             "redundant": solved["redundant"],
             "redundant_groups": solved["redundant_groups"],
-            "solver_message": solved["message"]}
+            "solver_message": solved["message"],
+            # Present only when the sketch is heading for the solver's ceiling.
+            # A band below the refusal, because the sketch that gets refused is
+            # usually the one after the one that took four seconds — and the
+            # caller is the only one who can decide to split it.
+            **({"size_note": solved["size_note"]} if solved.get("size_note") else {})}
 
 
 @operation("add_sketch", "mutate", "Solve a constrained 2D sketch (points/lines/arcs/circles + constraints) and extrude the profile. "
@@ -1288,6 +1312,114 @@ def _fillet_edges(doc_id, args):
     return {"message": f"filleted {len(references)} edge(s) — {span}",
             "feature_id": node["id"], "edges": [r["id"] for r in references],
             "variable": radius_end > 0}
+
+
+@operation("add_mate_connector", "mutate",
+           "Put a named coordinate frame on the part for assemblies to mate "
+           "against. `z_axis` is the mate axis — what a revolute turns about and "
+           "a slider travels along — and `x_axis` fixes rotation about it. The "
+           "frame lives in the part, so editing the part carries every mate that "
+           "uses it. Contributes no geometry.",
+           {"origin": {**_VEC, "description": "where the frame sits, in part space"},
+            "z_axis": {**_VEC, "description": "the mate axis; +Z by default"},
+            "x_axis": {**_VEC, "description": "in-plane reference fixing rotation "
+                                              "about the mate axis; +X by default"},
+            "name": {"type": "string",
+                     "description": "what to call it, e.g. 'left bearing bore'"}})
+def _add_mate_connector(doc_id, args):
+    doc = _get(doc_id)
+    node = {"type": "MateConnectorFeature",
+            "name": str(args.get("name") or "Mate connector"),
+            "params": {"origin": args.get("origin") or {"x": 0.0, "y": 0.0, "z": 0.0},
+                       "z_axis": args.get("z_axis") or {"x": 0.0, "y": 0.0, "z": 1.0},
+                       "x_axis": args.get("x_axis") or {"x": 1.0, "y": 0.0, "z": 0.0}}}
+    # Bodyless, so it joins the tree the way a datum plane does — beside the
+    # body rather than wrapping it. A union with a frame would be a boolean with
+    # a child that has no solid, which `resolve_sketches` then prunes to nothing.
+    tree = feature_ops.add_primitive(doc.feature_tree, node, "union")
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": f"added mate connector {node['name']!r}",
+            "feature_id": node["id"], "connector_id": node["id"]}
+
+
+@operation("list_mate_connectors", "query",
+           "The named frames on this part that an assembly can mate against.",
+           {})
+def _list_mate_connectors(doc_id, args):
+    from app.cad_kernel.ops.mate_connector import MateConnectorFeature
+
+    doc = _get(doc_id)
+    out = []
+    for node in feature_ops.flatten(doc.feature_tree):
+        if node.get("type") != "MateConnectorFeature":
+            continue
+        origin, rotation = MateConnectorFeature.from_dict(node).frame()
+        out.append({
+            "connector_id": node.get("id"),
+            "name": node.get("name"),
+            # Millimetres out, as everywhere an observation is read back.
+            "origin_mm": [round(float(c) * 1000.0, 4) for c in origin],
+            # Orthonormalised, which is what the solver will actually use — a
+            # caller that supplied a skewed x_axis should see what it became.
+            "x_axis": [round(float(c), 6) for c in rotation[:, 0]],
+            "z_axis": [round(float(c), 6) for c in rotation[:, 2]],
+        })
+    return {"connectors": out}
+
+
+@operation("add_helix", "mutate",
+           "Wind a round wire into a helix — a coil spring, an auger flight, a "
+           "coil. A true helix, not a polyline sweep: `add_sweep` is a union of "
+           "capsules and facets visibly at any segment count a document can "
+           "afford. Requires the exact kernel.",
+           {"helix_radius": {"type": "number", "default": 0.01,
+                             "description": "of the coil, to the wire's centreline"},
+            "wire_radius": {"type": "number", "default": 0.001,
+                            "description": "of the round section being wound"},
+            "pitch": {"type": "number", "default": 0.004,
+                      "description": "rise per turn; must exceed the wire diameter "
+                                     "or consecutive turns intersect"},
+            "turns": {"type": "number", "default": 5.0,
+                      "description": "how many revolutions; may be fractional"},
+            "center": {**_VEC, "description": "where the axis starts"},
+            "axis": {**_VEC, "description": "which way it winds up; +Z by default"},
+            "right_handed": {"type": "boolean", "default": True,
+                             "description": "handedness — a real distinction for a "
+                                            "spring that has to nest with something"},
+            "target": _MODIFIER_TARGET})
+def _add_helix(doc_id, args):
+    doc = _get(doc_id)
+    node = {"type": "HelixFeature", "name": "Helix",
+            "params": {"helix_radius": float(args.get("helix_radius") or 0.01),
+                       "wire_radius": float(args.get("wire_radius") or 0.001),
+                       "pitch": float(args.get("pitch") or 0.004),
+                       "turns": float(args.get("turns") or 5.0),
+                       "center": args.get("center") or {"x": 0.0, "y": 0.0, "z": 0.0},
+                       "axis": args.get("axis") or {"x": 0.0, "y": 0.0, "z": 1.0},
+                       "right_handed": bool(args.get("right_handed", True))}}
+    p = node["params"]
+    if p["helix_radius"] <= 0 or p["wire_radius"] <= 0 or p["turns"] <= 0:
+        raise BadArgument("a helix needs a positive radius, wire and turn count",
+                          arg="helix_radius")
+    if p["wire_radius"] >= p["helix_radius"]:
+        raise BadArgument(
+            f"the wire ({p['wire_radius'] * 1000:g} mm radius) is thicker than the "
+            f"coil it is wound on ({p['helix_radius'] * 1000:g} mm) — the turns "
+            f"would pass through the axis", arg="wire_radius")
+    if p["pitch"] <= 2.0 * p["wire_radius"]:
+        raise BadArgument(
+            f"a pitch of {p['pitch'] * 1000:g} mm is not more than the wire "
+            f"diameter ({p['wire_radius'] * 2000:g} mm), so consecutive turns "
+            f"would intersect", arg="pitch")
+
+    tree = feature_ops.add_primitive(doc.feature_tree, node, "union",
+                                     target_id=args.get("target"))
+    _apply_exact(doc_id, doc.feature_tree, tree,
+                 f"a {p['turns']:g}-turn helix")
+    return {"message": f"wound a {p['turns']:g}-turn helix of "
+                       f"{p['wire_radius'] * 2000:g} mm wire",
+            "feature_id": node["id"],
+            "free_length_mm": round(p["pitch"] * p["turns"] * 1000, 3)}
 
 
 @operation("add_draft", "mutate",

@@ -118,27 +118,41 @@ unchanged. A test pins the mesh hash of a constant fillet before and after.
 
 ## S3 — Helix and thread
 
+> **Landed: the helix. Deferred: the thread.** See the note at the end.
+
 **Gap.** No sweep along a helical path. Springs, augers and worm gears are
 impossible, and `parts_catalog` ships every fastener with `fidelity:
 as-standard` and no thread helix — the correct call given the limitation, and
 the limitation is this.
 
-**Scope.**
-- `HelixFeature` — a profile swept along `GeomAdaptor` helical path
-  (`BRepOffsetAPI_MakePipeShell` with an auxiliary spine). Exact-only: a
-  helical sweep has no closed-form SDF and a capsule-union approximation would
-  be a visibly different body at any usable segment count.
-- `ThreadFeature` — an ISO 261 metric profile (60°, `P` pitch from the
-  designation) cut or added on a cylindrical face. Internal and external.
-- `parts_catalog` gains a third fidelity, `threaded`, opt-in per part.
+**What shipped.** `HelixFeature` + `add_helix`: a round wire wound as a true
+helix, the spine being a straight line in a `Geom_CylindricalSurface`'s
+parameter space swept by `BRepOffsetAPI_MakePipeShell` in Frenet mode. Exact
+against the closed form (section area × centreline length) to 0.1%, radially
+on-coil to 50 µm, valid for booleans, and windable about any axis. Exact-only:
+the distance to a helix has no closed form, and the usual field-side trick
+drops the tangential term precisely where the pitch is interesting.
 
-**Exit.** An M8×1.25 external thread measures the right pitch diameter;
-a spring built from `add_helix` has the expected free length and wire count.
+**What did not, and what was learned.** `ThreadFeature` is deferred. The
+sweep machinery is proven — the same construction builds the ISO 261 groove
+tool correctly (radially 3.30–4.43 mm for an M8, exactly the theoretical minor
+to major+margin) — but cutting it from the core yields a body whose volume is
+still the full major cylinder, and that was not resolved in the sprint. Two
+findings are worth keeping so the next attempt does not repeat them:
 
-**Risk.** Medium. Thread geometry is where OCC boolean robustness gets tested —
-a full-length 60° helical cut on a small diameter is exactly the tangency case
-`_boolean` already raises `BrepUnsupported` for. Expect to need a tolerance
-pass and expect some diameters to legitimately refuse.
+- **`Bnd_Box` on a swept BSpline bounds the control points, not the surface.**
+  It reported a 10 mm coil as 60 mm across and sent the first two hours of this
+  sprint chasing a sweep that was correct all along. Measure the tessellation.
+- **Only Frenet mode works for a helical spine.** `SetMode(gp_Dir)`, the
+  auxiliary-spine modes and plain `MakePipe` all mis-place the profile; the
+  contact modes fail outright. A helix has constant curvature and torsion and
+  its Frenet normal always points at the axis, which is exactly the frame a
+  wound wire keeps — so this is a property of the geometry, not a lucky guess.
+
+`parts_catalog`'s third fidelity waits on the thread.
+
+**Risk (as assessed, and it was right).** Medium — thread geometry is where OCC
+boolean robustness gets tested.
 
 ---
 
@@ -181,6 +195,22 @@ existing assemblies load and solve identically.
 positions directly; DOF accounting needs a real constraint count. Backwards
 compatibility is the hard requirement — legacy mates carry no connectors.
 
+> **Landed.** All of the above. Two things came out differently from the plan:
+>
+> - **DOF is reported for the legacy mates too**, at their *constraint's*
+>   freedom rather than at what the bbox solver pins down. `coincident` states
+>   that a face sits on a face — one translation and two rotations — and the
+>   solver's extra decision to centre the other two axes is a resting position,
+>   not part of what was asked for. Reporting 6-removed for everything would
+>   have been true of the numbers and false about the assembly.
+> - **Connector frames are re-read on every resolve rather than cached.** The
+>   plan did not say either way, and caching is the obvious implementation; it
+>   is also wrong, because a connector is a feature of the part and a frame
+>   copied at mate time goes stale the moment somebody edits it.
+>
+> Still open from §2.2: no motion simulation, and no drag-to-position that
+> respects the constraints. The DOF count is what those would be built on.
+
 ---
 
 ## S6 — Ceilings that degrade rather than refuse
@@ -201,6 +231,33 @@ them changed from a refusal into a *silent* truncation.
 **Risk.** Low, but `MAX_ENTITIES` is a security bound, not a style preference —
 the rank comes from an SVD that is O(rows²·vars) and `_redundancy_groups`
 allocates rows². Any raise has to be measured, not guessed.
+
+> **Landed — and measuring first changed two of the four answers.**
+>
+> - **The sketch cap was not raised, it was re-shaped.** Measured on two sketch
+>   shapes, the cost tracks **entities × constraints**, not either alone: a
+>   601-entity chain costs 0.41 s at one constraint per segment and 2.24 s at
+>   three. The old 600/600 pair was about right *for the dense shape*, and
+>   `routers/operations` allows 300 calls a minute, so a flat raise would have
+>   multiplied a real DoS bound rather than moved a ceiling. The bound is now on
+>   the product (600k units ≈ 2.2 s worst case) with generous per-axis caps, so a
+>   1500-point traced outline — the case that was actually blocked, and which
+>   solves in well under a second — now goes through. `size_warning` is the band
+>   below it, surfaced as `size_note` on the operation result.
+> - **The FEA budget scales with the body's thinnest dimension**, not with a
+>   flat 8k. 8k is generous for a 50 mm cube and gives a 1.5 mm sheet one
+>   element through its thickness, where the bending stress is not
+>   underestimated but *absent* — and an absent stress is an optimistic safety
+>   factor, the one output here that must never be that. `mesh.budget_chosen`
+>   distinguishes "the solver picked this" from "you asked for this".
+> - **Text-to-assembly: 6 → 16 parts, 16 → 48 placements**, and the truncation
+>   is now *reported through `progress`* rather than being a silent list slice.
+>   That was the worse bug: an assembly arrived missing its last parts and
+>   looked like the planner's fault.
+> - **Import: 128 MB for STEP/IGES, 50 MB kept for meshes.** The exact payload is
+>   worth more — OCC keeps the analytic surfaces — where a 50 MB STL is already
+>   a million triangles being voxelised. `body_limit.UPLOAD_MAX_BYTES` follows
+>   it to 136 MB, with the memory cost written down rather than implied.
 
 ---
 
@@ -262,13 +319,20 @@ one that is not.
 
 ## Progress
 
-| Sprint | Status |
-|---|---|
-| S1 Hole types | — |
-| S2 Draft, rib, variable fillet | — |
-| S3 Helix and thread | — |
-| S4 Pattern types | — |
-| S5 Mate connectors | — |
-| S6 Ceilings | — |
-| S7 Surfacing | — |
-| S8 In-context design | — |
+| Sprint | Status | What landed |
+|---|---|---|
+| S1 Hole types | **done** | Counterbore, countersink, drill point, through, tapped; `add_hole`; `clearance_hole` rebuilt as one feature. Geometry enumerated once in `geom/holes.py` for all three samplers. |
+| S2 Draft, rib, variable fillet | **done** | `DraftFeature` (exact-only, frustum-exact to 1e-5), `RibFeature` (both kernels, `geom/ribs.py`), `radius_end` on `EdgeFilletFeature`. |
+| S3 Helix and thread | **part** | `HelixFeature` + `add_helix`, exact to 0.1%. Thread deferred — see the section above for the two OCC findings. |
+| S4 Pattern types | **done** | `curve` and `table` kinds; placements unified into `geom/patterns.py`, which removes the "the SDF does it this way so we match" duplication. |
+| S5 Mate connectors | **done** | `MateConnectorFeature` (bodyless), `add_mate_connector` / `list_mate_connectors`, six kinematic mate types built on frame alignment, and a `dof` operation. The legacy four are byte-identical. |
+| S6 Ceilings | **done** | Sketch bound re-shaped onto `entities × constraints` with a warning band; FEA budget scaled to the thinnest dimension; text-to-assembly 6→16 parts and its truncation reported; STEP/IGES to 128 MB. |
+| S7 Surfacing | — | |
+| S8 In-context design | — | |
+
+**A pattern across S1, S2 and S4 worth naming.** Each sprint ended by moving
+geometry that two kernels had been computing separately into one `geom/` module
+they both read — `holes.py`, `ribs.py`, `patterns.py`. That was not planned; it
+is what adding a second variant to any of them made unavoidable. Two
+transcriptions of the same arithmetic agree on the day they are written, and
+the differential tests then compare two different parts without saying so.

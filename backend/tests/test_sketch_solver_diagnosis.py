@@ -444,8 +444,40 @@ def test_a_sketch_at_the_limit_still_solves():
     assert result["status"] == "under_constrained"
 
 
+def _dimensioned_ring(n):
+    """A ring where every segment is also dimensioned — the expensive shape.
+
+    Cost tracks entities x constraints, so this is what actually reaches the
+    bound; `_ring` alone is 2n entities carrying nothing, which is cheap however
+    many points it has.
+    """
+    spec = _ring(n)
+    spec["constraints"] = [
+        {"type": "distance", "a": f"p{i}", "b": f"p{(i + 1) % n}", "value": 0.01}
+        for i in range(n)]
+    return spec
+
+
 def test_the_operation_surface_reports_the_bound_as_a_typed_failure():
-    result = ops.execute("add_sketch", _doc(), {"sketch": _ring(500), "depth": 0.01})
+    result = ops.execute("add_sketch", _doc(),
+                         {"sketch": _dimensioned_ring(600), "depth": 0.01})
     assert not result["ok"]
     assert result["error"]["code"] == "BAD_ARG"
-    assert "entities" in result["error"]["message"]
+    assert "solver work" in result["error"]["message"]
+
+
+def test_a_large_but_lightly_constrained_sketch_is_no_longer_refused():
+    """The case the old per-axis cap got wrong. A traced outline is hundreds of
+    points and almost no constraints, and it solves in well under a second — it
+    was refused on a number tuned for a heavily-dimensioned sketch."""
+    spec = _ring(700)                                  # 1400 entities, 0 constraints
+    entities, constraints = sketch_solver.sketch_size(spec)
+    assert entities > 600, "this must be over the cap that used to apply"
+    sketch_solver.check_size(spec)                     # must not raise
+
+
+def test_the_refusal_names_the_count_that_would_fit():
+    """A bound the caller can act on: not just which number was exceeded, but
+    what would be accepted at the constraint count they have."""
+    with pytest.raises(sketch_solver.SketchError, match="this solver will take"):
+        sketch_solver.solve_sketch(_dimensioned_ring(600))
