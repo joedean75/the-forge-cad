@@ -4,6 +4,13 @@ An assembly's parts list — quantity, material, per-part and extended mass, and
 part number — rolled up from the placed components. Distinct parts are grouped
 (four wheel instances → one line, qty 4). A CSV export is provided for handoff,
 and an optional whole-assembly cost estimate ties into the quote material data.
+
+**A purchased part's mass is the catalog's, not its envelope's.** A line whose
+document came from the standard-parts catalog takes that entry's published mass
+where it has one, because a motor modelled as a solid steel block weighs nearly
+twice what the motor weighs — see `standard_parts.published_mass_kg`. Every line
+says which figure it used in `mass_source`, and carries the modelled one beside
+it when the two differ, so a total can be checked rather than taken on trust.
 """
 
 from __future__ import annotations
@@ -12,7 +19,8 @@ import csv
 import io
 from typing import Dict, List
 
-from app.services import assembly_service, document_service, materials
+from app.services import (assembly_service, document_service, materials,
+                          standard_parts)
 
 
 def _part_number(doc_id: str, index: int) -> str:
@@ -41,13 +49,23 @@ def bill_of_materials(asm_id: str) -> Dict:
         g = groups[part_id]
         doc = document_service.get_document(part_id)
         unit_mass = 0.0
+        modelled_mass = None
+        mass_source = "geometry"
         material_name = "—"
         cost = 0.0
         if doc is not None:
             document_service.ensure_derived(doc)
             unit_mass = float(doc.derived.mass or 0.0)
+            published = standard_parts.published_mass_kg(doc.catalog_ref)
+            if published is not None:
+                modelled_mass, unit_mass = unit_mass, published
+                mass_source = "published"
             mat = materials.get_material(doc.material_id)
             material_name = mat.name
+            # Costed against the mass the line reports rather than against the
+            # geometry: a line that prints 350 g and charges for 672 g of steel
+            # is internally inconsistent, and the printed mass is the one a
+            # reader would check the figure against.
             cost = unit_mass * mat.cost_per_kg
         ext_mass = unit_mass * g["qty"]
         ext_cost = cost * g["qty"]
@@ -63,6 +81,13 @@ def bill_of_materials(asm_id: str) -> Dict:
             "unit_mass_g": round(unit_mass * 1000, 2),
             "ext_mass_g": round(ext_mass * 1000, 2),
             "ext_material_cost_usd": round(ext_cost, 2),
+            # Where the unit mass came from — the part's own geometry, or the
+            # catalog's published figure for a purchased part whose envelope
+            # over-states it. The modelled figure is kept beside it when they
+            # differ so the substitution can be seen rather than inferred.
+            "mass_source": mass_source,
+            **({"modelled_mass_g": round(modelled_mass * 1000, 2)}
+               if modelled_mass is not None else {}),
             "missing": g["missing"],
         })
 
@@ -82,12 +107,18 @@ def bom_csv(asm_id: str) -> str:
     data = bill_of_materials(asm_id)
     buf = io.StringIO()
     w = csv.writer(buf)
+    # `Mass Source` travels with the numbers: this file is read by somebody who
+    # cannot ask where a figure came from, and a published mass sitting in a
+    # column headed the same as a measured one is exactly the ambiguity the
+    # field exists to remove.
     w.writerow(["Item", "Part Number", "Name", "Qty", "Material",
-                "Unit Mass (g)", "Ext Mass (g)", "Ext Material Cost (USD)"])
+                "Unit Mass (g)", "Ext Mass (g)", "Ext Material Cost (USD)",
+                "Mass Source"])
     for ln in data["lines"]:
         w.writerow([ln["item"], ln["part_number"], ln["name"], ln["quantity"], ln["material"],
-                    ln["unit_mass_g"], ln["ext_mass_g"], ln["ext_material_cost_usd"]])
+                    ln["unit_mass_g"], ln["ext_mass_g"], ln["ext_material_cost_usd"],
+                    ln["mass_source"]])
     w.writerow([])
     w.writerow(["", "", "TOTAL", data["component_count"], "",
-                "", data["total_mass_g"], data["total_material_cost_usd"]])
+                "", data["total_mass_g"], data["total_material_cost_usd"], ""])
     return buf.getvalue()

@@ -20,6 +20,18 @@ Three pieces of arithmetic, none of them optional:
   when nothing is turned, which is exactly the case the mate connectors were
   added to stop being true.
 
+**A purchased part weighs what the catalog says, not what its envelope does.**
+A catalog part is a solid envelope, and for a motor — laminations, windings and
+air — that envelope weighs nearly twice the motor. `mass_budget` is the number
+an airframe is checked against, so it takes the published figure where there is
+one and says so in each row's `mass_source`. What it does **not** do is scale
+the inertia tensor by that ratio: a motor's mass sits in its stator and magnets
+rather than being spread evenly through the bell, so the ratio is right for the
+mass and wrong for the second moment. The tensors are reported as modelled and
+a note says so — the honest correction needs a mass distribution the catalog
+does not carry, and inventing one would be a plausible wrong tensor in place of
+a known-approximate one.
+
 **Scale is refused rather than approximated.** A component scaled by `s` has
 `s³` the mass and `s⁵` the inertia, and the material density is a property of
 the material rather than of the instance — so a scaled instance is a different
@@ -33,7 +45,8 @@ from typing import Any, Dict, List
 
 import numpy as np
 
-from app.services import assembly_service, document_service, mass_properties
+from app.services import (assembly_service, document_service, mass_properties,
+                          standard_parts)
 
 MM = 1000.0
 G = 1000.0
@@ -88,6 +101,14 @@ def assembly_mass_properties(asm_id: str) -> Dict[str, Any]:
             continue
 
         mass = float(part["mass_kg"])
+        modelled_mass = None
+        mass_source = "geometry"
+        doc = document_service.get_document(component.part_id)
+        published = standard_parts.published_mass_kg(
+            doc.catalog_ref if doc is not None else None)
+        if published is not None:
+            modelled_mass, mass = mass, published
+            mass_source = "published"
         if mass <= 0:
             notes.append(f"{component.name or component.id}: zero mass — is a "
                          f"material assigned?")
@@ -103,6 +124,12 @@ def assembly_mass_properties(asm_id: str) -> Dict[str, Any]:
 
         # kg·mm² back to SI, rotated into assembly axes, then shifted from the
         # part's CG to the assembly origin. Both steps, in that order.
+        #
+        # The part's own tensor is as modelled and is deliberately *not* scaled
+        # by published/geometric — see the module docstring. The parallel-axis
+        # term does take the reported mass, because it has to: the CG above and
+        # the back-shift below are both weighted by it, and a shift computed
+        # against one total and undone against another is not a tensor at all.
         local_inertia = np.asarray(part["inertia_kg_mm2"], dtype=float) / (MM ** 2)
         inertia = rotation @ local_inertia @ rotation.T
         inertia_origin += inertia + _parallel_axis(mass, cg)
@@ -114,8 +141,23 @@ def assembly_mass_properties(asm_id: str) -> Dict[str, Any]:
             "name": component.name,
             "mass_g": round(mass * G, 3),
             "center_of_mass_mm": [round(float(v) * MM, 4) for v in cg],
+            "mass_source": mass_source,
+            **({"modelled_mass_g": round(modelled_mass * G, 3)}
+               if modelled_mass is not None else {}),
             "exact": bool(part.get("exact")),
         })
+
+    substituted = sum(1 for r in rows if r["mass_source"] == "published")
+    if substituted:
+        notes.append(
+            f"{substituted} of {len(rows)} components weigh what the catalog "
+            f"publishes rather than what their envelope measures — each says "
+            f"which in mass_source, with the modelled figure beside it. Their "
+            f"own inertia tensors are as modelled and are not scaled by that "
+            f"ratio: a motor's mass is in its stator and magnets rather than "
+            f"spread through the bell, so the ratio is right for the mass and "
+            f"wrong for the second moment. Correcting it needs a mass "
+            f"distribution this catalog does not carry.")
 
     if total_mass <= 0:
         return {

@@ -893,6 +893,14 @@ export interface BomLine {
   unit_mass_g: number
   ext_mass_g: number
   ext_material_cost_usd: number
+  /** Where `unit_mass_g` came from. `geometry` is the part's own solid, which
+   *  is what a modelled part reports. `published` is the standard-parts
+   *  catalog's figure for a purchased part whose envelope over-states it — a
+   *  NEMA 17 modelled as solid steel weighs 672 g against a real 350 g. */
+  mass_source: 'geometry' | 'published'
+  /** The geometric mass the substitution replaced. Present only when
+   *  `mass_source` is `published`, so the swap can be checked. */
+  modelled_mass_g?: number
   /** The referenced part document was deleted; the line is a placeholder. */
   missing: boolean
 }

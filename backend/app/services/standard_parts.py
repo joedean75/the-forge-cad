@@ -127,3 +127,41 @@ def document_for(entry, owner_id: Optional[str] = None) -> str:
     doc.provenance = "imported"
     docs.update_document(doc.id, feature_tree=doc.feature_tree, resolution=96)
     return doc.id
+
+
+def published_mass_kg(catalog_ref: Optional[str]) -> Optional[float]:
+    """The mass the catalog *publishes* for a document, where its own is wrong.
+
+    A catalog part is a solid envelope — that is what `fidelity: envelope` says
+    — and for anything with air, windings or a circuit board inside it, the
+    envelope's geometric mass is not the part's mass. A NEMA 17 modelled as a
+    solid steel block weighs 672 g against a real 350 g, so every BOM total and
+    every mass budget containing a motor was nearly double.
+
+    Three rules hold this honest:
+
+    * **The document goes on reporting its own geometric mass.**
+      `mass_properties` measures that part's geometry and must not start lying
+      about it. The substitution belongs here, at the roll-up, where the
+      question is "what does the real thing weigh" rather than "how big is this
+      body".
+    * **Whoever substitutes says so.** Both callers carry `mass_source` on the
+      row, and the modelled figure beside it, because a number whose provenance
+      is invisible is one nobody can check.
+    * **A supplier-imported part is never substituted.** Its mass came from the
+      body its manufacturer published, so there is no second figure to prefer —
+      `supplier_parts.describe` reports the geometric mass under
+      `typical_mass_g` precisely because for those rows the two are the same.
+
+    Returns kilograms, which is what both callers already work in, or `None`
+    when the document is not a catalog part or the entry publishes no figure.
+    """
+    from app.services import parts_catalog, supplier_parts
+
+    ref = (catalog_ref or "").strip()
+    if not ref or ref.startswith(supplier_parts.PREFIX):
+        return None
+    entry = parts_catalog.by_key(ref)
+    if entry is None or entry.typical_mass_g is None:
+        return None
+    return float(entry.typical_mass_g) / 1000.0
