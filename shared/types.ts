@@ -940,6 +940,12 @@ export interface StandardPart {
   size_mm: Vector3
   /** Published mass, where the solid envelope is known to over-state it. */
   typical_mass_g?: number
+  /** What varies by manufacturer on this row, where tabling it would be
+   *  inventing it — a motor's bell diameter, a board's outline, a LiPo's
+   *  envelope. Pass values under `params` to `insertStandardPart`; anything
+   *  omitted takes the default. Absent on a row with one configuration, which
+   *  is everything generated from an ISO table. */
+  params?: Record<string, StandardPartParam>
   /** A search — deliberately not a claimed part number. */
   supplier_search: string
   // ── imported parts only ──
@@ -951,9 +957,22 @@ export interface StandardPart {
   created_at?: string
 }
 
+/** One configurable dimension of a catalog row. The unit is carried by the
+ *  parameter's name — `…_mm` millimetres, `…_in` inches, `mass_g` grams — and
+ *  repeated here so nothing has to parse it. `default` is a figure typical for
+ *  the class rather than a published dimension; `description` says so. */
+export interface StandardPartParam {
+  default: number
+  unit: string
+  min: number | null
+  max: number | null
+  description: string
+}
+
 export type PartCategory =
   | 'fastener' | 'bearing' | 'motor' | 'extrusion'
-  | 'electronics' | 'pneumatic' | 'hardware' | 'other'
+  | 'electronics' | 'battery' | 'propeller' | 'stock'
+  | 'pneumatic' | 'hardware' | 'other'
 
 /** A portal an imported part can have come from. `search` is a query URL — a
  *  hyperlink out, never a fetch: no path in this system reaches into a portal

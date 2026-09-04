@@ -60,8 +60,14 @@ _METRIC_SIZES = ("M2", "M2.5", "M3", "M4", "M5", "M6", "M8", "M10", "M12")
 # Same reasoning. The generated catalog only fills the first four; the rest
 # exist because an imported supplier part has to be filed somewhere, and
 # "electronics" is where a connector goes.
+# `battery`, `propeller` and `stock` are here because nothing already in the
+# list is what they are: a LiPo pack is not electronics, a propeller is not
+# hardware, and carbon sheet and tube are neither. Everything else in the RC
+# catalog fits — a brushless motor and a servo are motors, a flight controller
+# and an ESC are electronics, a standoff is hardware.
 _PART_CATEGORIES = ("fastener", "bearing", "motor", "extrusion", "electronics",
-                    "pneumatic", "hardware", "other")
+                    "battery", "propeller", "stock", "pneumatic", "hardware",
+                    "other")
 _PART_SOURCES = ("3dfindit", "traceparts", "grabcad", "manufacturer", "other")
 
 # `add_primitive` and `add_modifier` used to declare `params: {"type": "object"}`
@@ -1999,12 +2005,17 @@ def _verify_against_spec(doc_id, args):
 @operation("list_standard_parts", "query",
            "Browse the purchased parts you can place. Two kinds in one list. "
            "Generated: screws, nuts, washers, dowel pins, ball bearings, NEMA "
-           "steppers and T-slot extrusion, built from the published "
-           "dimensional standard rather than downloaded from anyone. Imported: "
+           "steppers and T-slot extrusion from the published dimensional "
+           "standards, plus brushless motors, flight controllers, 4-in-1 ESCs, "
+           "RC servos, hex standoffs, propellers, carbon plate and tube and "
+           "LiPo packs from the settled conventions of RC, drone and robotics "
+           "work — built here rather than downloaded from anyone. Imported: "
            "supplier CAD files this account brought in itself. Every row states "
            "`fidelity` (`as-standard` / `envelope` / `supplier`) and `geometry` "
-           "(`exact` — faces and edges are addressable — or `mesh`). Each "
-           "row\'s `key` goes to insert_standard_part on an assembly.",
+           "(`exact` — faces and edges are addressable — or `mesh`), and a row "
+           "whose dimensions vary by manufacturer also states the `params` it "
+           "takes and what each defaults to. Each row\'s `key` goes to "
+           "insert_standard_part on an assembly.",
            {"category": {"enum": list(_PART_CATEGORIES),
                          "description": "narrow to one kind"},
             "search": {"type": "string",

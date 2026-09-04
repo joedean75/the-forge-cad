@@ -19,7 +19,8 @@ interface AssemblyState {
   rename: (name: string) => Promise<void>
   insertPart: (partId: string) => Promise<void>
   /** Place a standard purchased part by catalog key — no part document needed. */
-  insertStandardPart: (key: string, quantity?: number) => Promise<void>
+  insertStandardPart: (key: string, quantity?: number,
+                      params?: Record<string, number>) => Promise<void>
   removeComponent: (componentId: string) => Promise<void>
   setTransform: (componentId: string, transform: ComponentTransform) => Promise<void>
   select: (componentId: string | null) => void
@@ -135,13 +136,18 @@ export const useAssemblyStore = create<AssemblyState>((set, get) => ({
     }
   },
 
-  insertStandardPart: async (key, quantity = 1) => {
+  insertStandardPart: async (key, quantity = 1, params) => {
     const { assembly } = get()
     if (!assembly) return
     set({ busy: true, error: null })
     try {
+      // `params` is omitted rather than sent empty when the row takes none: the
+      // handler refuses a parameter the row does not declare, and an empty
+      // object on a row with no parameters is a difference the reference would
+      // have to encode.
       const env = await api.runAssemblyOperation(assembly.id, 'insert_standard_part',
-                                                 { key, quantity })
+                                                 { key, quantity,
+                                                   ...(params ? { params } : {}) })
       if (!env.ok) throw new Error(env.error?.message ?? 'Insert failed')
       // Refetch unconditionally rather than through `refresh()`, which is gated
       // on `stale` — that flag means "a component's *part* was edited elsewhere",

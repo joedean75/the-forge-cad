@@ -21,6 +21,16 @@ can be edited (a screw with a wider head is a legitimate thing to want), and
 editing it changes every place it is used. That last part is the assembly
 contract, not a surprise — and it is why the copy is per account rather than
 per assembly.
+
+**A configuration is part of the key, not a second document with the same
+name.** Half the RC catalog is parameterised — a LiPo pack, a carbon plate, a
+motor whose can is a different diameter — and two packs of different sizes are
+two parts. So the reuse key is the *reference*, `parts_catalog.make_ref`, which
+is the bare key for the default configuration and the key plus its changed
+parameters otherwise. Two consequences, and both are the point: eight packs of
+one size are still one document and therefore one BOM line of qty 8, and every
+document stored before parameters existed still resolves, because its bare key
+is what the default configuration produces.
 """
 
 from __future__ import annotations
@@ -34,7 +44,12 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _existing(key: str, owner_id: Optional[str]) -> Optional[str]:
-    """The document this account already has for `key`, if any."""
+    """The document this account already has for this reference, if any.
+
+    `key` here is a `parts_catalog` *reference* — a bare catalog key, or a key
+    with the parameters that make it a different part. Matching on the whole
+    string is what keeps two differently-sized packs two documents.
+    """
     from app.services import document_service as docs
 
     for doc in docs.DOCUMENTS.values():
@@ -87,39 +102,58 @@ def listing(owner_id: Optional[str] = None, *, category: Optional[str] = None,
             "imported": len(mine),
             "sources": supplier_parts.sources(),
             "source": "generated from the published dimensional standards "
-                      "(ISO 4762/4032/7089/2338/273, ISO 15, NEMA frames), plus "
-                      "the supplier files this account imported"}
+                      "(ISO 4762/4032/7089/2338/273, ISO 15, NEMA frames) and "
+                      "from the settled conventions of RC, drone and robotics "
+                      "work (the 30.5/20/16 stack patterns, the four-digit "
+                      "brushless stator code, the three servo classes), plus "
+                      "the supplier files this account imported. What varies "
+                      "by manufacturer is a parameter rather than a table row"}
 
 
-def document_for_key(key: str, owner_id: Optional[str] = None) -> Optional[str]:
+def document_for_key(key: str, owner_id: Optional[str] = None,
+                     params: Optional[dict] = None) -> Optional[str]:
     """The document for any catalog key — generated or supplier-imported.
 
     One entry point because `insert_standard_part` takes one `key` argument and
     must not have to know which half of the catalog it names. A supplier part
     *is* a document already (somebody imported the file), so there is nothing to
-    build: the row names it. A generated one is built on first use.
+    build: the row names it, and it takes no parameters because its geometry is
+    a file rather than a builder.
     """
     from app.services import parts_catalog, supplier_parts
 
     if str(key).startswith(supplier_parts.PREFIX):
+        if params:
+            raise ValueError("an imported supplier part has no parameters — "
+                             "its geometry is the file its maker published")
         row = supplier_parts.by_key(key, owner_id)
         return row["document_id"] if row else None
     entry = parts_catalog.by_key(key)
-    return document_for(entry, owner_id) if entry else None
+    return document_for(entry, owner_id, params) if entry else None
 
 
-def document_for(entry, owner_id: Optional[str] = None) -> str:
-    """The id of this account's document for a catalog entry, making it if needed."""
+def document_for(entry, owner_id: Optional[str] = None,
+                 params: Optional[dict] = None) -> str:
+    """The id of this account's document for one configuration of an entry.
+
+    Raises `ValueError` for a parameter the entry does not declare or a value
+    outside its range — `parts_catalog.resolve_params` decides, and the
+    operation layer turns it into a typed `BAD_ARG`.
+    """
     from app.services import document_service as docs
+    from app.services import parts_catalog
 
-    found = _existing(entry.key, owner_id)
+    resolved = parts_catalog.resolve_params(entry, params)
+    ref = parts_catalog.make_ref(entry.key, resolved)
+    found = _existing(ref, owner_id)
     if found is not None:
         return found
 
-    doc = docs.create_document(name=entry.designation, owner_id=owner_id,
-                               resolution=96)
-    doc.feature_tree = entry.build()
-    doc.catalog_ref = entry.key
+    doc = docs.create_document(
+        name=parts_catalog.designation_of(entry, resolved), owner_id=owner_id,
+        resolution=96)
+    doc.feature_tree = parts_catalog.build_tree(entry, resolved)
+    doc.catalog_ref = ref
     doc.material_id = entry.material
     # Provenance is "imported" in the sense that matters here: nobody in this
     # account modelled it. It is not `manual`, and calling it `text_to_cad`
@@ -161,7 +195,5 @@ def published_mass_kg(catalog_ref: Optional[str]) -> Optional[float]:
     ref = (catalog_ref or "").strip()
     if not ref or ref.startswith(supplier_parts.PREFIX):
         return None
-    entry = parts_catalog.by_key(ref)
-    if entry is None or entry.typical_mass_g is None:
-        return None
-    return float(entry.typical_mass_g) / 1000.0
+    grams = parts_catalog.published_mass_g(ref)
+    return None if grams is None else float(grams) / 1000.0

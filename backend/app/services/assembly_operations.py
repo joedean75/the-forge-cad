@@ -172,17 +172,38 @@ def _insert_part(asm_id, args):
 
 
 @operation("insert_standard_part", "mutate",
-           "Place a standard purchased part — a screw, nut, washer, dowel pin, "
-           "ball bearing, stepper motor or T-slot extrusion — without modelling "
-           "it. Generated from the published dimensional standard (ISO 4762, "
-           "ISO 4032, ISO 7089, ISO 2338, ISO 15, the NEMA frames), so it is an "
-           "ordinary editable part, not an imported blob. Browse the keys with "
-           "list_standard_parts. Inserting the same key twice reuses one part "
-           "document, so the BOM says qty 2 rather than listing it twice.",
+           "Place a purchased part without modelling it — a screw, nut, washer, "
+           "dowel pin, bearing, stepper or T-slot extrusion from the published "
+           "dimensional standards, or a brushless motor, flight controller, "
+           "4-in-1 ESC, RC servo, hex standoff, propeller, carbon plate or tube "
+           "or LiPo pack from the settled conventions of RC, drone and robotics "
+           "work. Every one arrives as an ordinary editable part, not an "
+           "imported blob. Browse the keys with list_standard_parts. Inserting "
+           "the same key twice reuses one part document, so the BOM says qty 2 "
+           "rather than listing it twice. Where a dimension varies by "
+           "manufacturer it is a parameter rather than a table row — pass those "
+           "in `params`; a row's listing says which it takes and what they "
+           "default to.",
            {"key": {"type": "string", "required": True,
-                    "description": "catalog key, e.g. iso4762-m4-16 or bearing-608"},
+                    "description": "catalog key, e.g. iso4762-m4-16, bearing-608 "
+                                   "or bldc-2207"},
             "quantity": {"type": "integer", "default": 1,
-                         "description": "how many to place"}},
+                         "description": "how many to place"},
+            # Deliberately an opaque object: which names are valid depends on
+            # the value of `key`, which a static JSON Schema cannot say. The
+            # handler checks them against that row's declared parameters, which
+            # is exact where a schema here could only be a weaker second
+            # definition — and an unknown name is refused rather than dropped,
+            # which is the same rule `additionalProperties: false` enforces
+            # everywhere else on this surface.
+            "params": {"type": "object",
+                       "description": "values for the parameters this catalog "
+                                      "row declares, in the units its names "
+                                      "carry (…_mm millimetres, …_in inches, "
+                                      "mass_g grams). Omitted parameters take "
+                                      "the row's default. A row placed with "
+                                      "different parameters is a different "
+                                      "part and gets its own BOM line"}},
            subject="assembly")
 def _insert_standard_part(asm_id, args):
     from app.services import parts_catalog, standard_parts, supplier_parts
@@ -192,6 +213,10 @@ def _insert_standard_part(asm_id, args):
     quantity = int(args.get("quantity", 1) or 1)
     if not 1 <= quantity <= 64:
         raise BadArgument("quantity must be between 1 and 64", arg="quantity")
+    params = args.get("params")
+    if params is not None and not isinstance(params, dict):
+        raise BadArgument("params must be an object of parameter values",
+                          arg="params")
 
     # One `key` covers both halves of the catalog. A supplier part is resolved
     # against the *assembly owner's* imports, not the caller's, for the same
@@ -210,9 +235,19 @@ def _insert_standard_part(asm_id, args):
             raise BadArgument(
                 f"no catalog part {key!r}; browse them with list_standard_parts",
                 arg="key")
-        designation = entry.designation
+        try:
+            designation = parts_catalog.designation_of(entry, params)
+        except ValueError as exc:
+            raise BadArgument(str(exc), arg="params") from exc
 
-    part_id = standard_parts.document_for_key(key, owner_id=asm.owner_id)
+    try:
+        part_id = standard_parts.document_for_key(key, owner_id=asm.owner_id,
+                                                  params=params)
+    except ValueError as exc:
+        # An unknown parameter name, a value outside the row's range, or a pair
+        # that cannot both be true (a tube bored wider than itself). All three
+        # are the caller's arguments rather than the catalog's state.
+        raise BadArgument(str(exc), arg="params") from exc
     if part_id is None:
         raise BadArgument(f"catalog part {key!r} has no document", arg="key")
     placed = []

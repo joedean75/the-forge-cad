@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Plus, Search, ExternalLink, Upload, Trash2, X } from 'lucide-react'
+import { Loader2, Plus, Search, ExternalLink, Upload, Trash2, X, SlidersHorizontal } from 'lucide-react'
 import { api } from '../../api/client'
 import { useAssemblyStore } from '../../store/useAssemblyStore'
 import type { PartSource, StandardPart } from '../../../../shared/types'
@@ -34,11 +34,17 @@ const CATEGORIES: { id: string; label: string }[] = [
   { id: 'fastener', label: 'Fasteners' },
   { id: 'bearing', label: 'Bearings' },
   { id: 'motor', label: 'Motors' },
+  { id: 'electronics', label: 'Electronics' },
+  { id: 'battery', label: 'Batteries' },
+  { id: 'propeller', label: 'Props' },
+  { id: 'stock', label: 'Stock' },
   { id: 'extrusion', label: 'Extrusion' },
+  { id: 'hardware', label: 'Hardware' },
 ]
 
 const IMPORT_CATEGORIES = ['fastener', 'bearing', 'motor', 'extrusion',
-                           'electronics', 'pneumatic', 'hardware', 'other']
+                           'electronics', 'battery', 'propeller', 'stock',
+                           'pneumatic', 'hardware', 'other']
 
 export function StandardPartsPicker() {
   const { busy, insertStandardPart } = useAssemblyStore()
@@ -52,6 +58,11 @@ export function StandardPartsPicker() {
   const [quantity, setQuantity] = useState(1)
   const [importing, setImporting] = useState(false)
   const [reload, setReload] = useState(0)
+  // What the user has typed into a parameterised row, by key. Empty until they
+  // open one: a row placed with nothing typed goes in at its listed defaults,
+  // which is the configuration the row's `size_mm` and mass describe.
+  const [tuned, setTuned] = useState<Record<string, Record<string, number>>>({})
+  const [open, setOpen] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -166,8 +177,25 @@ export function StandardPartsPicker() {
                   <Trash2 size={11} />
                 </button>
               )}
+              {/* A row whose dimensions vary by manufacturer says so by
+                  carrying `params`, and this is where they get typed. Without
+                  it the picker would place a default LiPo — a confident,
+                  specific, wrong 165 g — which is the exact failure the
+                  parameters exist to prevent. */}
+              {part.params && (
+                <button
+                  onClick={() => setOpen(open === part.key ? null : part.key)}
+                  title="Set the dimensions this part does not have a standard for"
+                  className={`px-1 py-0.5 rounded-sm border text-[10px] transition ${
+                    open === part.key
+                      ? 'border-cad-accent/50 text-cad-accent-hot'
+                      : 'border-cad-border text-cad-text hover:text-cad-accent-hot'}`}
+                >
+                  <SlidersHorizontal size={10} />
+                </button>
+              )}
               <button
-                onClick={() => insertStandardPart(part.key, quantity)}
+                onClick={() => insertStandardPart(part.key, quantity, tuned[part.key])}
                 disabled={busy}
                 title={`Place ${quantity} × ${part.designation}`}
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm border border-cad-accent/50 text-cad-accent-hot hover:bg-cad-accent/10 text-[10px] font-medium transition disabled:opacity-40"
@@ -192,7 +220,35 @@ export function StandardPartsPicker() {
                   mesh
                 </span>
               )}
+              {part.params && (
+                <span className="text-cad-accent/70" title="Some dimensions vary by manufacturer and are set here, not tabled">
+                  parameterised
+                </span>
+              )}
             </div>
+            {open === part.key && part.params && (
+              <div className="mt-1.5 grid grid-cols-2 gap-1 border-t border-cad-border pt-1.5">
+                {Object.entries(part.params).map(([name, spec]) => (
+                  <label key={name} className="flex items-center gap-1 text-[9px] text-cad-text/70"
+                         title={spec.description}>
+                    <span className="flex-1 truncate">{name}</span>
+                    <input
+                      type="number" step="any"
+                      min={spec.min ?? undefined} max={spec.max ?? undefined}
+                      value={tuned[part.key]?.[name] ?? spec.default}
+                      onChange={(e) => {
+                        const value = Number(e.target.value)
+                        setTuned((prev) => ({
+                          ...prev,
+                          [part.key]: { ...(prev[part.key] ?? {}), [name]: value },
+                        }))
+                      }}
+                      className="tabular w-14 bg-cad-bg border border-cad-border rounded-sm px-1 py-0.5 text-[9px] text-cad-text-heading"
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>
