@@ -228,25 +228,38 @@ export function StandardPartsPicker() {
             </div>
             {open === part.key && part.params && (
               <div className="mt-1.5 grid grid-cols-2 gap-1 border-t border-cad-border pt-1.5">
-                {Object.entries(part.params).map(([name, spec]) => (
-                  <label key={name} className="flex items-center gap-1 text-[9px] text-cad-text/70"
-                         title={spec.description}>
-                    <span className="flex-1 truncate">{name}</span>
-                    <input
-                      type="number" step="any"
-                      min={spec.min ?? undefined} max={spec.max ?? undefined}
-                      value={tuned[part.key]?.[name] ?? spec.default}
-                      onChange={(e) => {
-                        const value = Number(e.target.value)
-                        setTuned((prev) => ({
-                          ...prev,
-                          [part.key]: { ...(prev[part.key] ?? {}), [name]: value },
-                        }))
-                      }}
-                      className="tabular w-14 bg-cad-bg border border-cad-border rounded-sm px-1 py-0.5 text-[9px] text-cad-text-heading"
-                    />
-                  </label>
-                ))}
+                {Object.entries(part.params).map(([name, spec]) => {
+                  const set = (value: number) =>
+                    setTuned((prev) => ({
+                      ...prev,
+                      [part.key]: { ...(prev[part.key] ?? {}), [name]: value },
+                    }))
+                  const value = tuned[part.key]?.[name] ?? spec.default
+                  return (
+                    <label key={name} className="flex items-center gap-1 text-[9px] text-cad-text/70"
+                           title={spec.description}>
+                      <span className="flex-1 truncate">{name}</span>
+                      {/* A choice gets a checkbox, not a number field: two
+                          answers in a box that accepts any number is a way to
+                          ask for a third and be refused after the fact. */}
+                      {spec.choices ? (
+                        <input
+                          type="checkbox" checked={value !== 0}
+                          onChange={(e) => set(e.target.checked ? 1 : 0)}
+                          className="accent-cad-accent"
+                        />
+                      ) : (
+                        <input
+                          type="number" step="any"
+                          min={spec.min ?? undefined} max={spec.max ?? undefined}
+                          value={value}
+                          onChange={(e) => set(Number(e.target.value))}
+                          className="tabular w-14 bg-cad-bg border border-cad-border rounded-sm px-1 py-0.5 text-[9px] text-cad-text-heading"
+                        />
+                      )}
+                    </label>
+                  )
+                })}
               </div>
             )}
           </div>

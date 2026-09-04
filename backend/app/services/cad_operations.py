@@ -1384,6 +1384,99 @@ def _list_mate_connectors(doc_id, args):
     return {"connectors": out}
 
 
+@operation("add_thread", "mutate",
+           "Cut a real ISO 68-1 metric thread — the helix, not a callout. The "
+           "body it builds is a **threaded cylinder**, so `union` gives a stud "
+           "or a threaded boss and `subtract` gives a tapped hole: an internal "
+           "thread is the negative of an external one, and a tap is a screw. "
+           "Give a designation (`thread: M8`) for the coarse-pitch form, or a "
+           "`diameter` and a `pitch` for anything else. add_hole's `tapped` is "
+           "the other answer to the same question and remains the right one "
+           "most of the time — it drills the tap-drill size and records the "
+           "thread as a note, which is what an assembly model and a drawing "
+           "want. Use this when the helix itself has to be there. Requires the "
+           "exact kernel.",
+           {"thread": {"enum": list(_METRIC_SIZES),
+                       "description": "metric designation, e.g. M8 — takes the "
+                                      "ISO 261 coarse pitch for that size"},
+            "diameter": {"type": "number",
+                         "description": "nominal major diameter, in place of "
+                                        "`thread`. A thread is named by its "
+                                        "major diameter, which is why this is "
+                                        "not a radius like everything else here"},
+            "pitch": {"type": "number",
+                      "description": "rise per turn, with `diameter`; or "
+                                     "override the designation's coarse pitch"},
+            "length": {"type": "number", "required": True,
+                       "description": "how far along the axis the thread runs"},
+            "center": {**_VEC, "description": "where the thread starts"},
+            "axis": {**_VEC, "description": "which way it runs; +Z by default"},
+            "right_handed": {"type": "boolean", "default": True,
+                             "description": "a left-hand thread winds the other "
+                                            "way and will not take a right-hand "
+                                            "fastener"},
+            "operation": {"enum": ["union", "subtract"], "default": "union",
+                          "description": "union for a stud or a threaded boss, "
+                                         "subtract to tap a hole"},
+            "target": _COMBINE_TARGET})
+def _add_thread(doc_id, args):
+    from app.services import parts_catalog
+
+    doc = _get(doc_id)
+    _one_of(args, ["thread", "diameter"], op="add_thread",
+            what="a thread to cut")
+    designation = args.get("thread")
+    if designation:
+        metric = parts_catalog.METRIC.get(str(designation))
+        if metric is None:
+            raise BadArgument(f"unknown thread: {designation}", arg="thread")
+        diameter = float(str(designation)[1:]) / 1000.0
+        pitch = float(args.get("pitch") or metric.pitch / 1000.0)
+    else:
+        diameter = float(args["diameter"])
+        pitch = args.get("pitch")
+        if pitch is None:
+            raise MissingArgument(
+                "a thread given by 'diameter' needs its 'pitch' too — there is "
+                "no pitch to assume for a diameter that is not a designation.",
+                arg="pitch")
+        pitch = float(pitch)
+    length = float(require(args, "length"))
+    if diameter <= 0 or pitch <= 0 or length <= 0:
+        raise BadArgument(
+            "a thread needs a positive diameter, pitch and length",
+            arg="length" if length <= 0 else "pitch")
+
+    node = {"type": "ThreadFeature",
+            "name": f"{designation or f'{diameter * 1000:g} mm'} thread",
+            "params": {"diameter": diameter, "pitch": pitch, "length": length,
+                       "center": args.get("center") or {"x": 0.0, "y": 0.0, "z": 0.0},
+                       "axis": args.get("axis") or {"x": 0.0, "y": 0.0, "z": 1.0},
+                       "right_handed": bool(args.get("right_handed", True))}}
+    combine = str(args.get("operation", "union"))
+    tree = feature_ops.add_primitive(doc.feature_tree, node, combine,
+                                     target_id=args.get("target"))
+    _apply_exact(doc_id, doc.feature_tree, tree,
+                 f"a {length / pitch:.1f}-turn {designation or 'metric'} thread")
+    return {"message": f"cut a {designation or f'{diameter * 1000:g}x{pitch * 1000:g}'} "
+                       f"thread, {length * 1000:g} mm long",
+            "feature_id": node["id"], "operation": combine,
+            "diameter_mm": round(diameter * 1000, 4),
+            "pitch_mm": round(pitch * 1000, 4),
+            "turns": round(length / pitch, 3),
+            # The two diameters a fastener is actually checked against, from the
+            # ISO 68-1 triangle rather than a second table.
+            # d1 = D - (5*sqrt(3)/8) P and d2 = D - (3*sqrt(3)/8) P: the basic
+            # minor and pitch diameters, both `5H/8` and `3H/8` in from the
+            # major on each side of the ISO 68-1 triangle. Written from the
+            # triangle rather than from a table of 1.0825 and 0.6495, which are
+            # those two numbers rounded.
+            "minor_diameter_mm": round(
+                (diameter - 5 * math.sqrt(3.0) / 8 * pitch) * 1000, 4),
+            "pitch_diameter_mm": round(
+                (diameter - 3 * math.sqrt(3.0) / 8 * pitch) * 1000, 4)}
+
+
 @operation("add_helix", "mutate",
            "Wind a round wire into a helix — a coil spring, an auger flight, a "
            "coil. A true helix, not a polyline sweep: `add_sweep` is a union of "

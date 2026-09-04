@@ -966,6 +966,10 @@ export interface StandardPartParam {
   unit: string
   min: number | null
   max: number | null
+  /** Present when the parameter is a *choice* rather than a size — `threaded`
+   *  is 0 or 1. A range is no use to a caller whose only two answers are those,
+   *  and a number field would let them type a third. */
+  choices?: number[]
   description: string
 }
 

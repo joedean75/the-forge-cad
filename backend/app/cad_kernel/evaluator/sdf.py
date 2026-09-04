@@ -985,6 +985,9 @@ _SDF_BUILDERS = {
     # unwraps the point into helical coordinates and drops the tangential term,
     # which is an approximation that is worst exactly where the pitch matters.
     "HelixFeature": _sdf_needs_exact_kernel,
+    # A thread is a helical surface, and the field-side approximation drops the
+    # tangential term exactly where the pitch is the interesting part.
+    "ThreadFeature": _sdf_needs_exact_kernel,
     "FaceShellFeature": _sdf_needs_exact_kernel,
     "BrepBodyFeature": _sdf_needs_exact_kernel,
     "RuledLoftFeature": _sdf_needs_exact_kernel,

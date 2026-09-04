@@ -52,6 +52,10 @@ _UNIT_SUFFIX = {"m": "metres", "deg": "degrees", "mm": "millimetres"}
 UNIT_BY_NAME: Dict[str, str] = {
     # lengths, metres
     "radius": "m", "base_radius": "m", "bend_radius": "m", "depth": "m",
+    # A thread is named by its major *diameter* — M8 is 8 mm across, not 8 mm
+    # of radius — so `add_thread` takes the number everybody already knows
+    # rather than renaming it to match the primitives next door.
+    "diameter": "m",
     "height": "m", "thickness": "m", "size": "m", "width": "m", "length": "m",
     "offset": "m", "offset_a": "m", "offset_b": "m", "spacing": "m",
     "center": "m", "distance": "m", "translate": "m", "path": "m",

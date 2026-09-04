@@ -229,6 +229,7 @@ def _insert_standard_part(asm_id, args):
                 f"no imported part {key!r} on this account; list them with "
                 f"list_standard_parts", arg="key")
         designation = row["designation"]
+        fidelity = "supplier"
     else:
         entry = parts_catalog.by_key(key)
         if entry is None:
@@ -237,6 +238,10 @@ def _insert_standard_part(asm_id, args):
                 arg="key")
         try:
             designation = parts_catalog.designation_of(entry, params)
+            # The *configuration's* fidelity, not the row's: a screw asked for
+            # threaded is every dimension the standard gives, and the caller
+            # placing one is who needs to be told which body they got.
+            fidelity = parts_catalog.fidelity_of(entry, params)
         except ValueError as exc:
             raise BadArgument(str(exc), arg="params") from exc
 
@@ -256,7 +261,7 @@ def _insert_standard_part(asm_id, args):
         placed.append(updated.components[-1].id)
     return {"message": f"placed {quantity} × {designation}",
             "part_id": part_id, "component_ids": placed,
-            "designation": designation,
+            "designation": designation, "fidelity": fidelity,
             "component_count": len(updated.components)}
 
 

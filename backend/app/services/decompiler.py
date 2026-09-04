@@ -54,6 +54,8 @@ _BUILDERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
                           ("thickness", "length", "width", "bend_radius", "k_factor", "flanges")),
     "HelixFeature": ("add_helix", ("helix_radius", "wire_radius", "pitch", "turns",
                                    "center", "axis", "right_handed")),
+    "ThreadFeature": ("add_thread", ("diameter", "pitch", "length", "center",
+                                     "axis", "right_handed")),
 }
 
 # Features that wrap a body and are created by a first-class operation rather

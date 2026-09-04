@@ -172,7 +172,11 @@ def test_the_listing_publishes_the_parameters_a_row_takes():
     assert row["params"]["bell_dia_mm"]["unit"] == "mm"
     assert row["params"]["mass_g"]["unit"] == "g"
     # A row with one configuration says nothing rather than an empty object.
-    assert "params" not in pc.describe(pc.by_key("iso4762-m4-16"))
+    assert "params" not in pc.describe(pc.by_key("iso4032-m4"))
+    # And a parameter that is a choice publishes what it will take, because a
+    # range is no use to a caller whose only two answers are 0 and 1.
+    assert pc.describe(pc.by_key("iso4762-m4-16"))["params"]["threaded"][
+        "choices"] == [0.0, 1.0]
 
 
 # ============================================= mass, which is the whole point ==

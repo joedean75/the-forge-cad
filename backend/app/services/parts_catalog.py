@@ -498,15 +498,43 @@ def _hex_prism(across_flats_mm: float, height_mm: float, z_mm: float,
                        "envelope_mm": [across_corners, across_flats_mm, height_mm]}}
 
 
-def socket_head_screw(size: str, length_mm: float) -> dict:
-    """ISO 4762 socket head cap screw. Shank is plain — see `fidelity`."""
+def socket_head_screw(size: str, length_mm: float,
+                      threaded: float = 0.0) -> dict:
+    """ISO 4762 socket head cap screw, plain-shanked or with its real thread.
+
+    **Plain by default, and that is not laziness.** A plain shank at the
+    nominal major diameter is the right body for clearance, interference and
+    mass, it is what assembly models normally carry, and — the reason it is the
+    *default* — every screw already stored in this datastore is that body. A
+    document that changes shape because the catalog learned something new is a
+    document that stopped meaning what it said.
+
+    `threaded` builds the helix instead, over the standard's own thread length
+    `b = 2d + 6` measured from the tip, or the whole shank when the screw is
+    shorter than that. Which is also what keeps every row inside the sweep's
+    turn limit: an M2x16 threads 10 mm at 0.4 pitch and an M12x80 threads 30 mm
+    at 1.75, and neither is close to the point where OCC starts losing material.
+    """
     m = METRIC[size]
     shank = float(size[1:])
-    return _tree(_subtract([
-        _union([
+    body = [
+        _cyl(m.head_dia / 2, m.head_height, m.head_height / 2, name="Head"),
+        _cyl(shank / 2, length_mm, -length_mm / 2, name="Shank"),
+    ]
+    if threaded:
+        # ISO 4762 threads `b = 2d + 6` up from the tip for the lengths this
+        # catalog stocks, and the whole shank when the screw is shorter.
+        run = min(2.0 * shank + 6.0, length_mm)
+        body = [
             _cyl(m.head_dia / 2, m.head_height, m.head_height / 2, name="Head"),
-            _cyl(shank / 2, length_mm, -length_mm / 2, name="Shank"),
-        ], name="Screw"),
+            _cyl(shank / 2, length_mm - run, -(length_mm - run) / 2, name="Shank"),
+            {"type": "ThreadFeature", "name": f"{size} thread", "params": {
+                "diameter": shank * MM, "pitch": m.pitch * MM, "length": run * MM,
+                "center": {"x": 0.0, "y": 0.0, "z": -length_mm * MM},
+                "axis": {"x": 0.0, "y": 0.0, "z": 1.0}, "right_handed": True}},
+        ]
+    return _tree(_subtract([
+        _union(body, name="Screw"),
         # The hex socket, sunk to 60% of the head — the standard's key
         # engagement depth, and the feature that makes it recognisable.
         _hex_prism(m.socket, m.head_height * 0.6,
@@ -885,7 +913,15 @@ def catalog() -> List[Entry]:
                 designation=f"ISO 4762 {size}×{length:g}",
                 standard="ISO 4762", material="steel-4140", fidelity="envelope",
                 notes=_UNTHREADED,
-                build=(lambda s=size, l=length: socket_head_screw(s, l))))
+                build=(lambda s=size, l=length, threaded=0.0:
+                       socket_head_screw(s, l, threaded)),
+                params={"threaded": _choice(
+                    0.0, "cut the real ISO 68-1 helix over the standard's "
+                         "thread length instead of a plain shank. Slower to "
+                         "build and it needs the exact kernel; the plain shank "
+                         "is the right body for clearance, interference and "
+                         "mass, and it is what every screw already saved is",
+                    {0.0: "", 1.0: "threaded"})}))
         out.append(Entry(
             key=f"iso4032-{size.lower()}", category="fastener",
             designation=f"ISO 4032 hex nut {size}", standard="ISO 4032",
@@ -1175,6 +1211,22 @@ def _p(default: float, description: str, lo: float = 0.0,
             "min": float(lo), "max": None if hi is None else float(hi)}
 
 
+def _choice(default: float, description: str,
+            labels: Dict[float, str]) -> Dict[str, Any]:
+    """A parameter that is a *choice* rather than a size.
+
+    One parameter needs it — `threaded` — and it is here rather than as a
+    boolean because the channel carries numbers: `insert_standard_part`'s
+    `params` is validated against these descriptors and a second accepted type
+    is a second way for a value to be wrong. `labels` is what the designation
+    prints, so a threaded screw reads "ISO 4762 M4x16 (threaded)" rather than
+    "(threaded 1)".
+    """
+    return {"default": float(default), "description": description,
+            "choices": tuple(sorted(labels)), "labels": dict(labels),
+            "min": None, "max": None}
+
+
 def _split_unit(name: str):
     for suffix, unit in _UNIT_BY_SUFFIX:
         if name.endswith(suffix):
@@ -1222,6 +1274,16 @@ def resolve_params(entry: "Entry", given: Optional[Dict[str, Any]] = None
             value = float(raw)
         except (TypeError, ValueError):
             raise ValueError(f"{name} must be a number, not {raw!r}") from None
+        choices = spec.get("choices")
+        if choices is not None:
+            # A choice's zero is a real answer — "not threaded" — where every
+            # other parameter here is a length and a zero is a mistake.
+            if value not in choices:
+                raise ValueError(
+                    f"{name} must be one of "
+                    f"{', '.join(f'{c:g}' for c in choices)} — got {value:g}")
+            out[name] = value
+            continue
         lo, hi = float(spec.get("min") or 0.0), spec.get("max")
         if not (value > 0 and value >= lo and (hi is None or value <= hi)):
             bound = f"over {lo:g}" if hi is None else f"between {lo:g} and {hi:g}"
@@ -1254,10 +1316,30 @@ def designation_of(entry: "Entry", params: Optional[Dict[str, Any]] = None) -> s
     for name, value in resolved.items():
         if abs(value - float(declared[name]["default"])) < 1e-9:
             continue
+        labels = declared[name].get("labels")
+        if labels is not None:
+            word = labels.get(value)
+            if word:
+                changed.append(word)
+            continue
         label, unit = _split_unit(name)
         changed.append(f"{label} {value:g}{' ' + unit if unit else ''}")
     return f"{entry.designation} ({', '.join(changed)})" if changed \
         else entry.designation
+
+
+def fidelity_of(entry: "Entry", params: Optional[Dict[str, Any]] = None) -> str:
+    """How this *configuration* relates to the real part.
+
+    `Entry.fidelity` describes the row, which is the default configuration and
+    what the listing shows. A screw asked for `threaded: 1` is a different
+    answer to the same question — every dimension the standard gives, helix
+    included — so the configuration is what a caller placing one is told.
+    """
+    resolved = resolve_params(entry, params)
+    if resolved.get("threaded"):
+        return "as-standard"
+    return entry.fidelity
 
 
 def make_ref(key: str, params: Optional[Dict[str, Any]] = None) -> str:
@@ -1366,6 +1448,11 @@ def describe(entry: Entry) -> Dict[str, Any]:
         **({"params": {name: {"default": spec["default"],
                               "unit": param_unit(name),
                               "min": spec.get("min"), "max": spec.get("max"),
+                              # A parameter that is a choice publishes what it
+                              # will take: a range is no use to a caller whose
+                              # only two answers are 0 and 1.
+                              **({"choices": list(spec["choices"])}
+                                 if spec.get("choices") else {}),
                               "description": spec["description"]}
                        for name, spec in entry.params.items()}}
            if entry.params else {}),

@@ -57,7 +57,7 @@ It stays on the list. It is no longer near the top of it.
 | **R2** | **Domain parts catalog** ✅ | Brushless motors, ESCs, FCs, servos, props, LiPos, standoffs, carbon plate and tube. Same generator pattern as `parts_catalog` — built from published dimensions, not scraped. |
 | **R3** | **Mounting-pattern features** ✅ | 30.5×30.5 and 20×20 FC patterns, NEMA faces, servo horns, GoPro-style mounts, bearing seats. Parametric features rather than hand-drilled holes, so a swap re-drills. |
 | **R4** | **Prop/rotor clearance and arm layout** ✅ | An interference check that knows a prop is a *swept disc*, not the two blades modelled. The one geometric check this domain has that general CAD does not. |
-| R5 | Thread (deferred from S3) | Real fastener geometry and a third `parts_catalog` fidelity. Everything is bolted together here. |
+| **R5** | **Thread (deferred from S3)** ✅ | Real fastener geometry and a third `parts_catalog` fidelity. Everything is bolted together here. |
 | R6 | Surfacing | Still the largest capability gap; no longer the most valuable one. |
 | R7 | In-context / top-down design | Mating halves of a printed enclosure. Real, and after the above. |
 
@@ -247,3 +247,78 @@ The layout arithmetic — `2 R sin(pi/N) - D` — is stated as the closed form f
 N evenly spaced rotors and says so, because the measured pair gaps beside it owe
 nothing to that assumption. The two have to agree: re-place a striking quad at
 the arm the layout asks for and the tip gap lands on the clearance requested.
+
+
+## R5 — Thread (shipped, deferred from S3)
+
+`ThreadFeature` + `add_thread`: a real ISO 68-1 metric thread, the helix rather
+than a callout. The body is a **threaded cylinder**, so `union` gives a stud or
+a threaded boss and `subtract` gives a tapped hole — an internal thread is the
+negative of an external one, and a tap is a screw, so one body answers both and
+neither needs a flag saying which it is.
+
+**Why S3 could not do it, and what the answer was.** S3 built the ISO 261 groove
+tool correctly and cutting it from the core left a body still measuring the full
+major cylinder. The construction is the other way round: **fuse a helical rib
+outward onto a minor-diameter core**, never cut a groove inward from a
+major-diameter one. Two details decide whether that works at all, and both were
+found by measurement:
+
+- **The rib is sunk a twentieth of its own depth into the core, along its own
+  flanks.** A rib whose inner face sits exactly *on* the core surface is a
+  coincident-face boolean: OCC returns an empty result for an M4 built that way
+  — zero solids, no error — and takes six times as long on the sizes it does
+  manage. Extending the trapezoid inward along its 30° flanks, rather than
+  sliding the inner edge in at a fixed width, leaves everything outside the core
+  exactly the ISO form, which is why the volume comes out **exact** rather than
+  one percent light.
+- **It is built in millimetres and scaled down.** This is the one place in the
+  kernel that departs from metres. OCC's sweep and boolean tolerances are
+  absolute: an M8's crest flat is 78 µm and its root flats are tens of µm, and
+  in metres those are close enough to the 1e-7 the shapes carry that the pipe
+  shell and the fuse lose them. The identical construction returns a solid of
+  **zero volume** at metre scale and the exact 827.1935 mm³ at millimetre scale.
+
+The ends are trimmed against a **box**, never a cylinder: a cylinder of the
+major diameter would put a coincident boolean face along every crest.
+
+**The limit is on turns, and it is the sweep's, not the fuse's.** Past about 32
+swept turns `BRepOffsetAPI_MakePipeShell` returns a rib that is quietly short of
+material — 4% at 36 turns, 43% at 60 — rather than failing. The rib is already
+wrong when measured on its own, so no boolean strategy rescues it, and chunking
+the spine into short segments was tried and is worse: it trades an exact result
+for a 0.1% one, takes four times as long, and still degrades. So the feature
+refuses beyond that and names the turn count, because a body that is silently
+43% light is exactly what this action space must not return as `ok`.
+
+Verified by **volume against the closed form** — the minor cylinder plus the ISO
+trapezoid carried round by Pappus — exact to 2e-4 across M2, M3, M4, M6, M8 and
+M12. That is the reading that would have caught S3's failure in a minute: a body
+that still measures the full major cylinder has no thread on it. S3's two
+warnings still hold and are why it is checked that way rather than with
+`Bnd_Box`: that box bounds a swept BSpline's control points, and only Frenet
+mode places a profile on a helical spine.
+
+**`parts_catalog`'s third fidelity.** Every ISO 4762 row takes `threaded`, and a
+screw asked for it carries the real helix over the standard's own thread length
+`b = 2d + 6` from the tip — which is also what keeps every row in the catalog
+inside the turn limit: an M2×16 threads 10 mm at 0.4 pitch, an M12×80 threads
+30 mm at 1.75. It is **off by default and that is load-bearing**: a plain shank
+is the right body for clearance, interference and mass, and it is what every
+screw already in the datastore is. The configuration carries its own fidelity —
+`as-standard` when threaded, `envelope` when not — because the row describes the
+default and the caller placing one needs to know which body they got.
+
+This is also the first parameter in the catalog that is a *choice* rather than a
+size, so `_choice` was added beside `_p`: a zero here is a real answer where
+every other parameter is a length and a zero is a mistake. The picker renders it
+as a checkbox — two answers in a box that accepts any number is a way to ask for
+a third and be refused after the fact.
+
+**One thing fixed on the way.** `_boolean` routed its children through
+`brep_from_feature`, which swallows a child's real reason so the SDF can take
+the whole body over. That is right for something the field kernel *can* build
+and wrong for something only the exact one can: a 60-turn thread came back as
+"boolean child has no exact form" instead of the turn count. An exact-only child
+is now rebuilt so what it actually said escapes — which fixes the same swallow
+for `HelixFeature`, where it had been latent since S3.

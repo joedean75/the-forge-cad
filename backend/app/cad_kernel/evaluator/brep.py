@@ -411,7 +411,19 @@ def _cone(f):
 # --------------------------------------------------------------- booleans --
 
 def _boolean(f):
-    children = [brep_from_feature(c) for c in f.children]
+    children = []
+    for child in f.children:
+        shape = brep_from_feature(child)
+        if shape is None and requires_exact(child):
+            # `brep_from_feature` swallows a child's real reason so the SDF can
+            # take the whole body over — which is right for something the field
+            # kernel *can* build, and wrong for something only this one can. A
+            # 60-turn thread came back as "boolean child has no exact form"
+            # instead of "60 turns is more helical sweep than OCC builds
+            # reliably", and the second is the one a caller can act on.
+            # Rebuilding the child here lets what it actually said escape.
+            _build(child)
+        children.append(shape)
     if not children or any(c is None for c in children):
         raise BrepUnsupported("boolean child has no exact form")
 
@@ -1061,6 +1073,171 @@ def _helix(f):
     return builder.Shape()
 
 
+#: How many turns of helical sweep `BRepOffsetAPI_MakePipeShell` builds before
+#: it starts losing material. Measured, not guessed: an M8x1.25 rib is exact
+#: against the closed form at 30 and 34 turns, 4% light at 38 and 2% at 42, and
+#: an M3x0.5 rib is 43% light at 62 turns and fails outright past 92. The
+#: failure is in the *sweep*, not in the fuse after it — the rib is already
+#: wrong when it is measured on its own — so no boolean strategy rescues it, and
+#: chunking the spine into short segments was tried and is worse: it trades an
+#: exact result for a 0.1% one, takes four times as long, and still degrades.
+#: 32 keeps a comfortable margin under the first measured loss.
+_MAX_THREAD_TURNS = 32.0
+
+#: The ISO 68-1 fundamental triangle is `H = P sqrt(3)/2` tall, and the external
+#: thread's basic minor diameter sits `5H/8` inside the major one on each side.
+_ISO_H = math.sqrt(3.0) / 2.0
+_ROOT3 = math.sqrt(3.0)
+
+
+def _thread(f):
+    """An ISO 68-1 metric thread, as a threaded cylinder.
+
+    **Built as a rib fused onto a minor-diameter core, not as a groove cut from
+    a major-diameter one.** That is the whole finding. Cutting the groove is the
+    obvious construction and it is what S3 tried; it leaves a body that still
+    measures the full major cylinder. Fusing outward gives a solid that matches
+    the closed form to 0.000% across M2 to M12.
+
+    Three details, each of which was wrong first:
+
+    * **The rib is buried a twentieth of its own depth into the core, along its
+      own flanks.** A rib whose inner face sits exactly *on* the core surface is
+      a coincident-face boolean, and OCC returns an empty result for an M4 built
+      that way — zero solids, no error — while taking six times as long on the
+      sizes it does manage. Extending the trapezoid inward along its 30 degree
+      flanks (rather than sliding the inner edge in at a fixed width) leaves
+      everything outside the core exactly the ISO form, which is why the volume
+      comes out exact rather than one percent light.
+    * **The profile is given in the axial plane**, which is where ISO 68-1
+      defines it and what makes the sweep a screw motion of the stated section.
+    * **The ends are trimmed against a box, never against a cylinder.** A
+      cylinder of the major diameter would put a coincident boolean face along
+      every crest; a box only meets the body at the two end planes.
+
+    **And it is built in millimetres and scaled down, which is the one place in
+    this kernel that departs from metres.** OCC's sweep and boolean tolerances
+    are absolute, not relative: an M8's crest flat is 78 microns and its root
+    flats tens of microns, and expressed in metres those are 7.8e-5 and 3e-5 —
+    close enough to the 1e-7 the shapes carry that the pipe shell and the fuse
+    lose them. The identical construction returns a solid of **zero volume** at
+    metre scale and the exact 827.1935 mm3 at millimetre scale. Scaling at the
+    end takes the tolerances down with the geometry, so what the rest of the
+    tree booleans against is an ordinary metre-scale body.
+
+    S3's two warnings still apply and are why this is verified by volume rather
+    than by `Bnd_Box`: that box bounds a swept BSpline's control points, not its
+    surface, and only Frenet mode places a profile correctly on a helical spine.
+    """
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Fuse
+    from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeWire,
+                                    BRepBuilderAPI_MakePolygon)
+    from OCP.BRepLib import BRepLib
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
+    from OCP.GCE2d import GCE2d_MakeSegment
+    from OCP.Geom import Geom_CylindricalSurface
+    from OCP.gp import gp_Ax3, gp_Pnt2d
+
+    diameter = float(f.diameter)
+    pitch = float(f.pitch)
+    length = float(f.length)
+    if diameter <= 0 or pitch <= 0 or length <= 0:
+        raise BrepUnsupported(
+            "a thread needs a positive diameter, pitch and length")
+
+    # Millimetres from here to the final transform — see the docstring. Every
+    # figure below is in them, including the messages, which is why they read in
+    # millimetres without a conversion.
+    scale = 1000.0
+    diameter *= scale
+    pitch *= scale
+    length *= scale
+
+    major_r = diameter / 2.0
+    height = pitch * _ISO_H                      # H, the fundamental triangle
+    minor_r = major_r - 5.0 * height / 8.0       # d1/2, the basic flat root
+    if minor_r <= 0:
+        raise BrepUnsupported(
+            f"a pitch of {pitch:g} mm on a {diameter:g} mm thread cuts past the "
+            f"axis — the root would be inside out. ISO coarse pitch for this "
+            f"diameter is far smaller")
+
+    # Two turns of overshoot, half trimmed off each end, so the thread runs out
+    # at the ends of the stated length rather than starting mid-flank.
+    turns = length / pitch + 2.0
+    if turns > _MAX_THREAD_TURNS:
+        raise BrepUnsupported(
+            f"{length / pitch:.1f} turns of {pitch:g} mm pitch is more "
+            f"helical sweep than OCC builds reliably: past about "
+            f"{_MAX_THREAD_TURNS - 2:.0f} turns the rib comes back quietly short "
+            f"of material — 4% at 36 turns and 43% at 60 — rather than failing. "
+            f"Shorten the threaded length, or use a coarser pitch")
+
+    origin = gp_Pnt(float(f.center.get("x", 0.0)), float(f.center.get("y", 0.0)),
+                    float(f.center.get("z", 0.0)))
+    axis_vec = (float(f.axis.get("x", 0.0)), float(f.axis.get("y", 0.0)),
+                float(f.axis.get("z", 1.0)))
+    if math.sqrt(sum(c * c for c in axis_vec)) < 1e-12:
+        raise BrepUnsupported("the thread axis has no length")
+    direction = gp_Dir(*axis_vec)
+
+    # Everything is built about +Z at the origin and moved onto the axis at the
+    # end: the spine, the profile and the trim box all have to agree about which
+    # way is up, and one placement is one chance to get that wrong instead of
+    # three.
+    base = gp_Ax3(gp_Pnt(0.0, 0.0, -pitch), gp_Dir(0.0, 0.0, 1.0))
+    surface = Geom_CylindricalSurface(base, minor_r)
+    sweep = 2.0 * math.pi * turns * (1.0 if f.right_handed else -1.0)
+    segment = GCE2d_MakeSegment(gp_Pnt2d(0.0, 0.0),
+                                gp_Pnt2d(sweep, pitch * turns)).Value()
+    edge = BRepBuilderAPI_MakeEdge(segment, surface).Edge()
+    BRepLib.BuildCurves3d_s(edge)
+    spine = BRepBuilderAPI_MakeWire(edge).Wire()
+
+    sink = (major_r - minor_r) * 0.05
+    inner_r = minor_r - sink
+    inner_w = 0.75 * pitch + 2.0 * sink / _ROOT3   # along the flanks, not across
+    profile = BRepBuilderAPI_MakePolygon()
+    for radius, rise in ((inner_r, -inner_w / 2.0), (major_r, -pitch / 16.0),
+                         (major_r, pitch / 16.0), (inner_r, inner_w / 2.0)):
+        profile.Add(gp_Pnt(radius, 0.0, -pitch + rise))
+    profile.Close()
+
+    builder = BRepOffsetAPI_MakePipeShell(spine)
+    builder.SetMode(True)                          # Frenet — see `_helix`
+    builder.Add(profile.Wire(), False, False)
+    builder.Build()
+    if not builder.IsDone() or not builder.MakeSolid():
+        raise BrepUnsupported(
+            f"OCC could not wind a {length / pitch:.1f}-turn thread of "
+            f"{pitch:g} mm pitch on a {diameter:g} mm diameter")
+
+    core = BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0.0, 0.0, -2.0 * pitch), gp_Dir(0.0, 0.0, 1.0)),
+        minor_r, length + 4.0 * pitch).Shape()
+    fused = BRepAlgoAPI_Fuse(core, builder.Shape())
+    if not fused.IsDone():
+        raise BrepUnsupported("OCC could not fuse the thread to its core")
+
+    reach = diameter * 2.0
+    box = BRepPrimAPI_MakeBox(gp_Pnt(-reach, -reach, 0.0),
+                              gp_Pnt(reach, reach, length)).Shape()
+    trimmed = BRepAlgoAPI_Common(fused.Shape(), box)
+    if not trimmed.IsDone():
+        raise BrepUnsupported("OCC could not trim the thread to length")
+
+    # One transform, always: back to metres, and onto the axis the caller asked
+    # for. Two would be two chances to get the order wrong, and the order
+    # matters — the shape is built about +Z at the origin, so it has to shrink
+    # about that origin before it is placed anywhere else.
+    shrink = gp_Trsf()
+    shrink.SetScale(gp_Pnt(0.0, 0.0, 0.0), 1.0 / scale)
+    placement = gp_Trsf()
+    placement.SetTransformation(gp_Ax3(origin, direction), gp_Ax3())
+    return _transformed(trimmed.Shape(), placement.Multiplied(shrink))
+
+
 def _draft(f):
     """Taper named faces away from a pull direction (`BRepOffsetAPI_DraftAngle`).
 
@@ -1453,6 +1630,7 @@ _BUILDERS = {
     "RibFeature": _rib,
     "DraftFeature": _draft,
     "HelixFeature": _helix,
+    "ThreadFeature": _thread,
     "TransformFeature": _transform,
     "MirrorFeature": _mirror,
     "PatternFeature": _pattern,
@@ -1466,7 +1644,7 @@ _BUILDERS = {
 # for that edge"), replacing it with a generic "needs the exact kernel".
 EXACT_ONLY = {"EdgeFilletFeature", "EdgeChamferFeature", "FaceShellFeature",
               "BrepBodyFeature", "RuledLoftFeature", "DraftFeature",
-              "HelixFeature"}
+              "HelixFeature", "ThreadFeature"}
 
 
 def requires_exact(feature) -> bool:

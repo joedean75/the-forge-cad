@@ -288,6 +288,62 @@ class HelixFeature(Feature):
 
 @register_feature
 @dataclass
+class ThreadFeature(Feature):
+    """An ISO 68-1 metric thread, as the threaded cylinder it makes.
+
+    A *threaded cylinder*, deliberately, rather than a groove or a ridge: union
+    it and you have a stud, subtract it and you have a tapped hole, because an
+    internal thread is the negative of an external one and a tap is a screw.
+    One body answers both, and neither needs a flag saying which it is.
+
+    Exact-only, like the helix it is built on. A distance field has no closed
+    form for a helical surface and the field-side approximation drops the
+    tangential term exactly where the pitch is the interesting part.
+
+    **The profile is the ISO basic triangle, truncated, and given in the axial
+    plane.** Over one pitch the form is a crest flat of `P/8` at the major
+    diameter, two flanks at 30 degrees to the radius, and a root flat of `P/4`
+    at `d1 = D - 1.0825 P`. So the material standing above the minor cylinder is
+    a trapezoid `0.75 P` wide at the root narrowing to `P/8` at the crest over a
+    radial depth of `5H/8`, and `(0.75P - 0.125P)/2 / (5H/8) = tan 30` — which
+    is how you know the numbers are one profile rather than four.
+
+    `length` is the threaded length, not the turn count: a thread is specified
+    by how far along the shank it runs. `pitch` is the coarse pitch for the
+    designation unless something else is asked for.
+    """
+
+    diameter: float = 0.008        # D, the nominal major diameter
+    pitch: float = 0.00125         # rise per turn
+    length: float = 0.02           # how far the thread runs
+    center: Dict[str, float] = field(
+        default_factory=lambda: {"x": 0.0, "y": 0.0, "z": 0.0})
+    axis: Dict[str, float] = field(
+        default_factory=lambda: {"x": 0.0, "y": 0.0, "z": 1.0})
+    right_handed: bool = True
+
+    def evaluate(self) -> Solid:
+        return _evaluate_exact(self)
+
+    def _serialize_params(self) -> Dict[str, Any]:
+        return {"diameter": self.diameter, "pitch": self.pitch,
+                "length": self.length, "center": self.center,
+                "axis": self.axis, "right_handed": self.right_handed}
+
+    @classmethod
+    def _from_dict(cls, data: Dict[str, Any]) -> "ThreadFeature":
+        p = data["params"]
+        return cls(id=data.get("id"), name=data.get("name", "Thread"),
+                   diameter=float(p.get("diameter", 0.008)),
+                   pitch=float(p.get("pitch", 0.00125)),
+                   length=float(p.get("length", 0.02)),
+                   center=p.get("center") or {"x": 0.0, "y": 0.0, "z": 0.0},
+                   axis=p.get("axis") or {"x": 0.0, "y": 0.0, "z": 1.0},
+                   right_handed=bool(p.get("right_handed", True)))
+
+
+@register_feature
+@dataclass
 class BrepBodyFeature(Feature):
     """An imported B-rep solid, carried as serialized OpenCascade geometry.
 
