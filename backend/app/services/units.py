@@ -135,6 +135,9 @@ UNITLESS = frozenset({
     # `mounting_pattern`: which named bolt pattern to drill. A name, like
     # `template` and `kind` above — the dimensions behind it are the catalog's.
     "pattern",
+    # `prop_clearance`: component ids to treat as rotors. A list of ids, like
+    # `edges` and `faces` — what it names carries the dimension, not this.
+    "props",
 })
 
 

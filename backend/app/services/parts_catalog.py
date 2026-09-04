@@ -1301,6 +1301,24 @@ def parse_ref(ref: Optional[str]):
     return key, params
 
 
+def published_param(ref: Optional[str], name: str) -> Optional[float]:
+    """One resolved parameter of a reference, or `None` if it declares no such one.
+
+    The way anything outside this module reads a configured dimension back off a
+    document: `catalog_ref` names the row and the configuration, and this
+    resolves the pair. `published_mass_g` is the same lookup specialised to the
+    one parameter the roll-ups care about.
+    """
+    key, given = parse_ref(ref)
+    entry = by_key(key)
+    if entry is None or not entry.params or name not in entry.params:
+        return None
+    try:
+        return float(resolve_params(entry, given)[name])
+    except ValueError:
+        return float(entry.params[name]["default"])
+
+
 def published_mass_g(ref: Optional[str]) -> Optional[float]:
     """The mass this catalog publishes for a reference, or `None`.
 

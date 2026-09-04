@@ -446,6 +446,54 @@ def _check_interference(asm_id, args):
         asm_id, clearance_mm=float(args.get("clearance_mm", 1.0)))
 
 
+@operation("prop_clearance", "query",
+           "Rotor clearance, which is not the same question as interference. A "
+           "propeller is reduced to the **disc it sweeps** — tip radius measured "
+           "across the body, so a two-bladed model and a swept-disc one read "
+           "identically — and then: do two discs overlap, is anything standing "
+           "inside one, and how long do the arms have to be. Blades frozen at "
+           "one azimuth clash or clear depending on where the modeller left "
+           "them, which is not a property of the aircraft, and that is why "
+           "check_interference is the wrong tool here. Stacked coaxial rotors "
+           "are reported as stacked, with the axial separation that makes them "
+           "fine, rather than as a clash. Rotors are found by catalog category "
+           "unless `props` names them.",
+           {"clearance_mm": {"type": "number", "default": 5.0, "unit": "mm",
+                             "description": "gaps below this are reported as "
+                                            "warnings; below zero is a strike"},
+            "props": {"type": "array", "items": {"type": "string"},
+                      "description": "component ids to treat as rotors, for a "
+                                     "propeller you modelled or imported rather "
+                                     "than placed from the catalog"},
+            "hub_mm": {"type": "number", "unit": "mm",
+                       "description": "hub diameter, which does not sweep and "
+                                      "is where the shaft belongs. Taken from "
+                                      "the catalog row when the rotor came from "
+                                      "one; set it for a rotor you modelled, or "
+                                      "the shaft it is bolted to reads as an "
+                                      "obstruction"}},
+           subject="assembly")
+def _prop_clearance(asm_id, args):
+    from app.services import interference
+
+    _assembly(asm_id)
+    declared = args.get("props")
+    if declared is not None and not isinstance(declared, list):
+        raise BadArgument("props must be a list of component ids", arg="props")
+    try:
+        hub = args.get("hub_mm")
+        return interference.check_prop_clearance(
+            asm_id, clearance_mm=float(args.get("clearance_mm", 5.0)),
+            props=declared,
+            hub_mm=None if hub is None else float(hub))
+    except ValueError as exc:
+        # Nothing to measure. A `PRECONDITION` rather than a report saying
+        # `clear`, because the fix is an earlier step — place a rotor, or say
+        # which components are rotors — and a clearance report that means "I
+        # found nothing to check" is the one thing this must not be read as.
+        raise PreconditionFailed(str(exc)) from exc
+
+
 @operation("bill_of_materials", "query",
            "The parts list: one line per distinct part with quantity, material, "
            "mass and material cost. Cost is mass x price per kilo — it is not a quote.",

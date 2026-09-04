@@ -163,6 +163,28 @@ def document_for(entry, owner_id: Optional[str] = None,
     return doc.id
 
 
+def category_of(catalog_ref: Optional[str],
+                owner_id: Optional[str] = None) -> Optional[str]:
+    """The catalog category a document came from, or `None` if it came from none.
+
+    One entry point across both halves for the same reason `document_for_key`
+    is: a caller asking "is this a propeller?" must not have to know whether the
+    row was generated here or imported by its owner. A supplier row is
+    owner-scoped, so the owner has to be passed — the assembly's, which is the
+    account whose parts an assembly can hold at all.
+    """
+    from app.services import parts_catalog, supplier_parts
+
+    ref = (catalog_ref or "").strip()
+    if not ref:
+        return None
+    if ref.startswith(supplier_parts.PREFIX):
+        row = supplier_parts.by_key(ref, owner_id)
+        return row.get("category") if row else None
+    entry = parts_catalog.by_key(parts_catalog.parse_ref(ref)[0])
+    return entry.category if entry else None
+
+
 def published_mass_kg(catalog_ref: Optional[str]) -> Optional[float]:
     """The mass the catalog *publishes* for a document, where its own is wrong.
 

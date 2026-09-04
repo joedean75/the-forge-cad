@@ -56,7 +56,7 @@ It stays on the list. It is no longer near the top of it.
 | **R1** | **Mass budget and URDF** ✅ | AUW and CG are checked before every flight; the inertia tensor is what a controller is tuned against. URDF makes the CAD drive the simulator. Both were unlocked by S5's mate connectors. |
 | **R2** | **Domain parts catalog** ✅ | Brushless motors, ESCs, FCs, servos, props, LiPos, standoffs, carbon plate and tube. Same generator pattern as `parts_catalog` — built from published dimensions, not scraped. |
 | **R3** | **Mounting-pattern features** ✅ | 30.5×30.5 and 20×20 FC patterns, NEMA faces, servo horns, GoPro-style mounts, bearing seats. Parametric features rather than hand-drilled holes, so a swap re-drills. |
-| R4 | Prop/rotor clearance and arm layout | An interference check that knows a prop is a *swept disc*, not the two blades modelled. The one geometric check this domain has that general CAD does not. |
+| **R4** | **Prop/rotor clearance and arm layout** ✅ | An interference check that knows a prop is a *swept disc*, not the two blades modelled. The one geometric check this domain has that general CAD does not. |
 | R5 | Thread (deferred from S3) | Real fastener geometry and a third `parts_catalog` fidelity. Everything is bolted together here. |
 | R6 | Surfacing | Still the largest capability gap; no longer the most valuable one. |
 | R7 | In-context / top-down design | Mating halves of a printed enclosure. Real, and after the above. |
@@ -195,3 +195,55 @@ Three details:
   the pattern's *first child* — so it would replay as one counterbore rather
   than four, and the mesh comparison would report `geometry_mismatch` for every
   document containing one. `add_hole` counterbores a single hole.
+
+
+## R4 — Rotor clearance (shipped)
+
+**`prop_clearance`** on an assembly. Every rotor is reduced to the **disc it
+sweeps** — tip radius measured across the body, whatever the body is — and then
+three questions: do two discs overlap, is anything standing inside one, and how
+long do the arms have to be.
+
+**Why not `check_interference`.** Two blades frozen at one azimuth clash or
+clear depending on where the modeller left them, and where the modeller left
+them is not a property of the aircraft. The test that justifies the operation
+is two bladed props a quarter turn apart whose bodies genuinely miss each other
+and whose discs overlap by 17 mm: general interference says clear, and the
+aircraft still eats its own propellers.
+
+Five things are load-bearing, and each was wrong first:
+
+- **The gap reported is the dimension you would change.** The true signed
+  distance between two overlapping coplanar discs is to whichever surface is
+  nearest, and that is the flat face — so a quad whose arms were 14 mm short
+  reported a 4 mm overlap, 4 mm being the blade's own thickness and a number
+  about nothing. Rotors in parallel planes are resolved into a plan gap and an
+  axial gap; the radial one is reported when they interpenetrate. Rim sampling
+  stays for axes that are not parallel, where no single dimension is the fix.
+- **Stacked coaxial rotors are not a clash.** An X8 overlaps in plan by design,
+  and calling that a failure trains a reader to ignore the check. A stack too
+  tight to be safe is still reported.
+- **The swept region is an annulus.** The hub does not sweep: it is bolted to a
+  shaft and that shaft reaches into it by design. Left as a disc, every
+  correctly built quadcopter reported four obstructions reading "your propeller
+  is mounted on its motor". The hub comes from the catalog row, or from
+  `hub_mm` for a rotor somebody modelled, and each rotor reports which it used.
+- **The near-miss band starts a clearance outboard of the hub.** Anything that
+  has to reach the hub is within a clearance of the annulus's inner edge by
+  construction, so asking for margin closer in is asking for the rotor not to
+  be mounted. Material actually inside the annulus is a strike wherever it is.
+- **The obstruction test samples the disc, not only the obstruction.** A 6 mm
+  mast standing through an 8 mm disc has no vertex and no facet centroid inside
+  that band, so the strike read as a clearance — the same bug `_surface_samples`
+  was written for, one level up. The disc's own polar grid is evaluated against
+  the part's exact field, and the surface pass stays beside it for bodies large
+  enough that the grid only grazes them.
+
+An assembly with no rotor this can identify **refuses** rather than answering
+`clear`: a clearance report that means "I found nothing to check" is the one
+thing it must not be mistaken for.
+
+The layout arithmetic — `2 R sin(pi/N) - D` — is stated as the closed form for
+N evenly spaced rotors and says so, because the measured pair gaps beside it owe
+nothing to that assumption. The two have to agree: re-place a striking quad at
+the arm the layout asks for and the tip gap lands on the clearance requested.
