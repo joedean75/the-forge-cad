@@ -56,7 +56,9 @@ _BUILDERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
                                    "center", "axis", "right_handed")),
     "ThreadFeature": ("add_thread", ("diameter", "pitch", "length", "center",
                                      "axis", "right_handed")),
-    "SurfaceFeature": ("add_surface", ("profile", "plane", "offset", "depth")),
+    "SurfaceFeature": ("add_surface", ("kind", "profile", "profile_b", "plane",
+                                       "offset", "offset_b", "depth", "axis",
+                                       "center", "angle", "ruled")),
 }
 
 # Features that wrap a body and are created by a first-class operation rather
@@ -65,6 +67,12 @@ _BUILDERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
 # only purpose is to be decompiled into.
 _WRAPPERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "RibFeature": ("add_rib", ("start", "end", "up", "thickness", "height", "draft")),
+    # The surface modifiers. Each takes its own arguments, so routing them
+    # through the `add_modifier` table would need an entry there whose only
+    # purpose is to be decompiled into — the same reason a rib is here.
+    "KnitFeature": ("knit", ("tolerance",)),
+    "ThickenFeature": ("thicken", ("thickness",)),
+    "TrimFeature": ("trim", ("plane", "offset", "keep")),
 }
 
 # Feature type -> (modifier name, its params) for add_modifier.

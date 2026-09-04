@@ -992,6 +992,12 @@ _SDF_BUILDERS = {
     # signed distance field has a sign everywhere, so it always bounds a volume;
     # a surface with no inside is exactly what it cannot describe.
     "SurfaceFeature": _sdf_needs_exact_kernel,
+    # Sewing, offsetting and trimming a surface are all questions about faces
+    # and edges, which a sampled field does not have — the same reason the edge
+    # treatments are here.
+    "KnitFeature": _sdf_needs_exact_kernel,
+    "ThickenFeature": _sdf_needs_exact_kernel,
+    "TrimFeature": _sdf_needs_exact_kernel,
     "FaceShellFeature": _sdf_needs_exact_kernel,
     "BrepBodyFeature": _sdf_needs_exact_kernel,
     "RuledLoftFeature": _sdf_needs_exact_kernel,

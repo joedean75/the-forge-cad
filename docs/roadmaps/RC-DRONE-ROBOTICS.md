@@ -58,7 +58,7 @@ It stays on the list. It is no longer near the top of it.
 | **R3** | **Mounting-pattern features** ✅ | 30.5×30.5 and 20×20 FC patterns, NEMA faces, servo horns, GoPro-style mounts, bearing seats. Parametric features rather than hand-drilled holes, so a swap re-drills. |
 | **R4** | **Prop/rotor clearance and arm layout** ✅ | An interference check that knows a prop is a *swept disc*, not the two blades modelled. The one geometric check this domain has that general CAD does not. |
 | **R5** | **Thread (deferred from S3)** ✅ | Real fastener geometry and a third `parts_catalog` fidelity. Everything is bolted together here. |
-| R6 | Surfacing | Still the largest capability gap; no longer the most valuable one. |
+| **R6** | **Surfacing** ✅ | Still the largest capability gap; no longer the most valuable one. |
 | R7 | In-context / top-down design | Mating halves of a printed enclosure. Real, and after the above. |
 
 R2 and R3 together are worth more than anything else on the list: most of the
@@ -322,3 +322,75 @@ and wrong for something only the exact one can: a 60-turn thread came back as
 "boolean child has no exact form" instead of the turn count. An exact-only child
 is now rebuilt so what it actually said escapes — which fixes the same swallow
 for `HelixFeature`, where it had been latent since S3.
+
+
+## R6 — Surfacing (shipped)
+
+A contract change before it is a feature, and it was done in that order because
+the risk is not that surfaces are hard to build — it is **quiet breakage**: a
+sheet leaking into a path that assumes volume gives a plausible wrong number
+rather than an error.
+
+### Phase 1 — the kind, threaded first
+
+`brep.body_kind` asks OCC rather than guessing from a mesh: an open shell and a
+closed one are the same triangle soup, and "is it watertight" conflates a sheet
+with a solid whose skin has a hole in it — one is the intent and the other is a
+defect. `Solid.attrs` and `DerivedCache.body_kind` carry it, always set and
+defaulted to `solid` so every stored document reads correctly.
+
+Then every consumer was made to state its assumption:
+
+- **A sheet has no volume, and that is not a measurement of zero.** The triangle
+  integral would return whatever the mesh's arbitrary closure implies.
+- **`mass_properties` measures a sheet rather than refusing or weighing it** —
+  area and the centroid of that area, with the volume-derived keys *absent*
+  rather than zero. A zero mass reads as "no material assigned", and no material
+  gives a surface a weight.
+- **`geometry_check` stops calling an open shell a defect.** Area and open edges
+  in place of volume and watertight — counted as *edges*, because
+  `facets_boundary` groups by coplanar facet and calls a four-sided tube's two
+  rims four.
+- **A mass or volume requirement on a sheet fails loudly.** `mass <= 50 g`
+  against a zero *passes*, and a spec scoring 1.0 because half of it was
+  measured against nothing is the worst thing a reward function can do.
+- **A `watertight` requirement still answers**, reading the row its body has —
+  a verdict on a solid, a measurement on a sheet — rather than "the check did
+  not run", which says nothing about the part.
+- **The field path declines outright.** A signed distance field has a sign
+  everywhere, so it always bounds a volume.
+
+### Phase 2 — the features
+
+`SurfaceFeature` builds four kinds, each the sheet form of a solid feature that
+already existed, using the profile's **wire** where the solid form uses its
+face: `extrude`, `revolve`, `loft` (`ThruSections` asked for a shell rather than
+a solid) and `fill` (the flat cap a closed outline bounds). `knit` sews,
+`thicken` offsets to one side, `trim` cuts back to one side of a plane.
+
+**Becoming a solid is the point of knitting, not a side effect.** A shell with
+no open edges *is* a boundary representation of a volume, so the moment the caps
+go on, mass, inertia and a volume requirement all start answering — which phase
+1 is what makes observable.
+
+Three findings, each of which was wrong first:
+
+- **`BRepBuilderAPI_MakeSolid` succeeds on an unclosed shell.** A cone missing
+  its top cap came back `solid`, with a volume it does not enclose — precisely
+  the quietly wrong number the kind distinction exists to stop.
+  `ShapeAnalysis_Shell.HasFreeEdges` does not answer it either without its own
+  check run first, so `brep.free_edges` counts edges belonging to one face,
+  directly. Degenerate edges are skipped: a cone's apex seam bounds nothing, and
+  counting it would make every revolved surface look open and no cap ever close
+  one.
+- **`trim` cuts against a box, not a half-space.** A half-space is unbounded and
+  leaves the result's extent to tolerances; the box is sized from the child's
+  own **tessellation**, because `Bnd_Box` on a swept BSpline bounds the control
+  points and would size the box from a body six times too big.
+- **`thicken` offsets to one side rather than splitting about the surface**, so
+  the original sheet stays one face of the result and a datum on it still means
+  something.
+
+The exit gate is one assertion: a loft between two circles, capped at both ends
+and sewn, whose volume matches the conical frustum formula to 1e-6. It is the
+only reading that can tell a closed shell from one that merely looks closed.

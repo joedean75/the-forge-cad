@@ -20,7 +20,7 @@ and says so plainly rather than quietly evaluating to something else.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.cad_kernel.core.feature_tree import Feature, register_feature
 from app.cad_kernel.core.topology import Solid
@@ -297,10 +297,20 @@ class SurfaceFeature(Feature):
     is the exception those had to be taught about before it could exist, which
     is why `derived.body_kind` came first and this came second.
 
-    The profile's *wire* is swept, not its face, so a closed profile gives an
-    open tube rather than a solid prism — which is the useful thing: it is the
-    body you cap, knit and thicken. `add_extrude` next door is the solid form of
-    the same sweep and is unchanged.
+    Four kinds, and each one is the *sheet* version of a solid feature that
+    already exists — the profile's **wire** is used where the solid form uses
+    its face:
+
+    * `extrude` sweeps the outline along the plane normal: a closed profile
+      gives an open tube rather than a solid prism, which is the body you cap,
+      knit and thicken.
+    * `revolve` sweeps it about an axis.
+    * `loft` runs a ruled or smooth surface between two outlines.
+    * `fill` is the flat cap: the planar face a closed outline bounds, which is
+      what closes the two ends of the tube.
+
+    `kind` defaults to `extrude` so every document stored before the other
+    three existed goes on meaning what it meant.
 
     Exact-only, and not because of a missing builder. A signed distance field
     has a sign everywhere, so it always bounds a volume; there is no field that
@@ -309,28 +319,149 @@ class SurfaceFeature(Feature):
     prevent.
     """
 
+    kind: str = "extrude"                          # extrude | revolve | loft | fill
     profile: Dict[str, Any] = field(
         default_factory=lambda: {"type": "rect", "width": 0.05, "height": 0.03})
+    #: `loft` only: the far section. The near one is `profile` at `offset`.
+    profile_b: Optional[Dict[str, Any]] = None
     plane: str = "xy"
     offset: float = 0.0
-    depth: float = 0.02
+    offset_b: float = 0.02
+    depth: float = 0.02                            # `extrude`
+    axis: Dict[str, float] = field(                # `revolve`
+        default_factory=lambda: {"x": 0.0, "y": 1.0, "z": 0.0})
+    center: Dict[str, float] = field(
+        default_factory=lambda: {"x": 0.0, "y": 0.0, "z": 0.0})
+    angle: float = 360.0                           # `revolve`, degrees
+    ruled: bool = True                             # `loft`
 
     def evaluate(self) -> Solid:
         return _evaluate_exact(self)
 
     def _serialize_params(self) -> Dict[str, Any]:
-        return {"profile": self.profile, "plane": self.plane,
-                "offset": self.offset, "depth": self.depth}
+        return {"kind": self.kind, "profile": self.profile,
+                "profile_b": self.profile_b, "plane": self.plane,
+                "offset": self.offset, "offset_b": self.offset_b,
+                "depth": self.depth, "axis": self.axis, "center": self.center,
+                "angle": self.angle, "ruled": self.ruled}
 
     @classmethod
     def _from_dict(cls, data: Dict[str, Any]) -> "SurfaceFeature":
         p = data["params"]
         return cls(id=data.get("id"), name=data.get("name", "Surface"),
+                   kind=str(p.get("kind", "extrude")),
                    profile=p.get("profile") or {"type": "rect", "width": 0.05,
                                                 "height": 0.03},
+                   profile_b=p.get("profile_b"),
                    plane=str(p.get("plane", "xy")),
                    offset=float(p.get("offset", 0.0)),
-                   depth=float(p.get("depth", 0.02)))
+                   offset_b=float(p.get("offset_b", 0.02)),
+                   depth=float(p.get("depth", 0.02)),
+                   axis=p.get("axis") or {"x": 0.0, "y": 1.0, "z": 0.0},
+                   center=p.get("center") or {"x": 0.0, "y": 0.0, "z": 0.0},
+                   angle=float(p.get("angle", 360.0)),
+                   ruled=bool(p.get("ruled", True)))
+
+
+@register_feature
+@dataclass
+class KnitFeature(Feature):
+    """Sew the sheets in its child into one shell — and into a solid if closed.
+
+    **Becoming a solid is the point, not a side effect.** Knitting is how a set
+    of surfaces stops being a set: sew the walls to the caps and what you have
+    is a shell with no open edges, which is a boundary representation of a
+    volume and is reported as `solid` from that moment. A caller who knits two
+    walls of three gets a sheet back and can see, from `body_kind` and the open
+    edge count, exactly what is still missing.
+
+    `tolerance` is how far apart two edges may be and still be considered the
+    same edge. It is a real number about the geometry rather than a fudge: the
+    default matches the sewing tolerance `import_service` uses on IGES, where
+    the same question — are these two edges the same edge — decides whether a
+    plate keeps its bore.
+    """
+
+    tolerance: float = 1e-5
+    children: List[Feature] = field(default_factory=list)
+
+    def evaluate(self) -> Solid:
+        return _evaluate_exact(self)
+
+    def _serialize_params(self) -> Dict[str, Any]:
+        return {"tolerance": self.tolerance,
+                "children": [c.to_dict() for c in self.children]}
+
+    @classmethod
+    def _from_dict(cls, data: Dict[str, Any]) -> "KnitFeature":
+        p = data["params"]
+        return cls(id=data.get("id"), name=data.get("name", "Knit"),
+                   tolerance=float(p.get("tolerance", 1e-5)),
+                   children=_children_from(data))
+
+
+@register_feature
+@dataclass
+class ThickenFeature(Feature):
+    """Give a sheet a thickness, which turns it into a solid.
+
+    The other way a surface becomes material, and the one for a sheet that is
+    *not* closed: a lofted canopy, a swept wall, a plate traced from an image.
+    The result is offset to one side rather than split about the surface, so the
+    original sheet is one face of the solid and a datum taken on it still means
+    something. A negative thickness offsets the other way.
+    """
+
+    thickness: float = 0.002
+    children: List[Feature] = field(default_factory=list)
+
+    def evaluate(self) -> Solid:
+        return _evaluate_exact(self)
+
+    def _serialize_params(self) -> Dict[str, Any]:
+        return {"thickness": self.thickness,
+                "children": [c.to_dict() for c in self.children]}
+
+    @classmethod
+    def _from_dict(cls, data: Dict[str, Any]) -> "ThickenFeature":
+        p = data["params"]
+        return cls(id=data.get("id"), name=data.get("name", "Thicken"),
+                   thickness=float(p.get("thickness", 0.002)),
+                   children=_children_from(data))
+
+
+@register_feature
+@dataclass
+class TrimFeature(Feature):
+    """Cut a sheet back to one side of a plane.
+
+    A surface is built oversized and trimmed — that is the whole working method,
+    because a lofted or swept surface is easy to make big and hard to make land
+    exactly on a boundary. `keep` says which side survives, and it is named
+    rather than signed: "above" and "below" are what somebody means, and a sign
+    convention is a thing to get backwards.
+    """
+
+    plane: str = "xy"
+    offset: float = 0.0
+    keep: str = "below"                            # below | above
+    children: List[Feature] = field(default_factory=list)
+
+    def evaluate(self) -> Solid:
+        return _evaluate_exact(self)
+
+    def _serialize_params(self) -> Dict[str, Any]:
+        return {"plane": self.plane, "offset": self.offset, "keep": self.keep,
+                "children": [c.to_dict() for c in self.children]}
+
+    @classmethod
+    def _from_dict(cls, data: Dict[str, Any]) -> "TrimFeature":
+        p = data["params"]
+        return cls(id=data.get("id"), name=data.get("name", "Trim"),
+                   plane=str(p.get("plane", "xy")),
+                   offset=float(p.get("offset", 0.0)),
+                   keep=str(p.get("keep", "below")),
+                   children=_children_from(data))
 
 
 @register_feature

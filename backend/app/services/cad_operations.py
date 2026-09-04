@@ -363,45 +363,174 @@ def _add_primitive(doc_id, args):
            "by name rather than measuring a zero. Requires the exact kernel: a "
            "distance field has a sign everywhere, so it always bounds a volume "
            "and cannot describe a surface.",
-           {"profile": {"type": "object",
+           {"kind": {"enum": ["extrude", "revolve", "loft", "fill"],
+                     "default": "extrude",
+                     "description": "extrude sweeps the outline along the plane "
+                                    "normal; revolve sweeps it about an axis; "
+                                    "loft runs a surface to a second outline; "
+                                    "fill is the flat cap a closed outline "
+                                    "bounds, which is what closes a tube"},
+            "profile": {"type": "object",
                         "description": "{type:rect|circle|polygon|loops, ...} in "
                                        "metres — the same profile add_extrude "
                                        "takes"},
+            "profile_b": {"type": "object",
+                          "description": "loft only: the far section"},
             "sketch": {"type": "string",
                        "description": "a SketchFeature id from create_sketch, "
                                       "in place of 'profile'"},
             "plane": {"enum": ["xy", "xz", "yz"], "default": "xy",
                       "description": "the base plane the 2D profile is drawn on"},
             "offset": {"type": "number",
-                       "description": "where the sweep is centred along the "
-                                      "plane normal"},
+                       "description": "where the outline sits along the plane "
+                                      "normal — for an extrude, where the sweep "
+                                      "is centred"},
+            "offset_b": {"type": "number", "default": 0.02,
+                         "description": "loft only: where the far section sits"},
             "depth": {"type": "number", "default": 0.02,
-                      "description": "how far the outline is swept"},
+                      "description": "extrude only: how far the outline is swept"},
+            "axis": {**_VEC, "description": "revolve only: what it turns about"},
+            "center": {**_VEC, "description": "revolve only: a point on the axis"},
+            "angle": {"type": "number", "default": 360.0,
+                      "description": "revolve only: how far round"},
+            "ruled": {"type": "boolean", "default": True,
+                      "description": "loft only: straight between the sections, "
+                                     "or a smooth surface through them"},
             "target": _COMBINE_TARGET})
 def _add_surface(doc_id, args):
     doc = _get(doc_id)
     _one_of(args, ["profile", "sketch"], op="add_surface",
             what="a 2D outline to sweep")
+    kind = str(args.get("kind", "extrude"))
+    if kind == "loft" and args.get("profile_b") is None:
+        # A `required` list cannot say "only when kind is loft", so this is a
+        # handler check — and it has to be one, because the alternative is
+        # lofting to a section nobody named.
+        raise MissingArgument(
+            "a lofted surface needs a second section: pass 'profile_b'.",
+            arg="profile_b")
     params = {
+        "kind": kind,
         "profile": args.get("profile", {"type": "rect", "width": 0.05,
                                         "height": 0.03, "cx": 0.0, "cy": 0.0}),
+        "profile_b": args.get("profile_b"),
         "plane": args.get("plane", "xy"),
         "offset": float(args.get("offset") or 0.0),
+        "offset_b": float(args.get("offset_b") or 0.02),
         "depth": float(args.get("depth") or 0.02),
+        "axis": args.get("axis") or {"x": 0.0, "y": 1.0, "z": 0.0},
+        "center": args.get("center") or {"x": 0.0, "y": 0.0, "z": 0.0},
+        "angle": float(args.get("angle") or 360.0),
+        "ruled": bool(args.get("ruled", True)),
     }
     _sketch_reference(doc_id, args, params, "sketch_ref")
-    node = {"type": "SurfaceFeature", "name": "Surface", "params": params}
+    node = {"type": "SurfaceFeature", "name": f"Surface ({kind})",
+            "params": params}
     # Union, always: a sheet has no inside, so subtracting one removes nothing
     # and intersecting with one keeps nothing. Offering either would be offering
     # an operation whose only outcome is a no-op reported as a success.
     tree = feature_ops.add_primitive(doc.feature_tree, node, "union",
                                      target_id=args.get("target"))
-    _apply_exact(doc_id, doc.feature_tree, tree, "a surface")
+    _apply_exact(doc_id, doc.feature_tree, tree, f"a {kind} surface")
+    return {"message": f"added a {kind} surface", "feature_id": node["id"],
+            **_body_state(doc_id)}
+
+
+def _body_state(doc_id: str) -> dict:
+    """What the body is now — the two numbers a surface operation moves.
+
+    Reported on every one of them, because the whole point of the sheet/solid
+    distinction is that a caller can see which it is holding, and knitting the
+    last cap on is exactly the moment it changes.
+    """
     updated = document_service.get_document(doc_id)
-    return {"message": f"swept a sheet {params['depth'] * 1000:g} mm deep",
-            "feature_id": node["id"],
-            "body_kind": updated.derived.body_kind,
-            "area_mm2": round(float(updated.derived.area) * 1e6, 3)}
+    return {"body_kind": updated.derived.body_kind,
+            "area_mm2": round(float(updated.derived.area) * 1e6, 3),
+            "volume_mm3": round(float(updated.derived.volume) * 1e9, 3)}
+
+
+@operation("knit", "mutate",
+           "Sew the body's sheets into one shell — and into a **solid** the "
+           "moment that shell has no open edges, because a closed shell is a "
+           "boundary representation of a volume. That is the point rather than "
+           "a side effect: knit the walls to the caps and mass, inertia and a "
+           "volume requirement all start answering. Knitting two walls of three "
+           "returns the sheet it is; check_geometry's open edge count says how "
+           "far off it is. Requires the exact kernel.",
+           {"tolerance": {"type": "number", "default": 1e-5, "unit": "m",
+                          "description": "how far apart two edges may be and "
+                                         "still be treated as the same edge"},
+            "target": _MODIFIER_TARGET})
+def _knit(doc_id, args):
+    doc = _get(doc_id)
+    tolerance = float(args.get("tolerance") or 1e-5)
+    if tolerance <= 0:
+        raise BadArgument("a knit tolerance must be positive", arg="tolerance")
+    node = {"type": "KnitFeature", "name": "Knit",
+            "params": {"tolerance": tolerance}}
+    tree = feature_ops.add_modifier(doc.feature_tree, node,
+                                    target_id=args.get("target"))
+    _apply_exact(doc_id, doc.feature_tree, tree, "a knit")
+    state = _body_state(doc_id)
+    return {"message": "sewn into a solid" if state["body_kind"] == "solid"
+                       else "sewn — still open, so still a sheet",
+            "feature_id": node["id"], **state}
+
+
+@operation("thicken", "mutate",
+           "Give a sheet a thickness, which turns it into a solid. The other "
+           "way a surface becomes material, and the one for a sheet that is not "
+           "closed: a lofted canopy, a swept wall, a traced plate. Offset to "
+           "one side rather than split about the surface, so the original sheet "
+           "is one face of the result and a datum on it still means something. "
+           "shell_faces is the opposite operation — it hollows a solid. "
+           "Requires the exact kernel.",
+           {"thickness": {"type": "number", "default": 0.002, "required": True,
+                          "description": "how thick; negative offsets the other "
+                                         "way"},
+            "target": _MODIFIER_TARGET})
+def _thicken(doc_id, args):
+    doc = _get(doc_id)
+    thickness = float(require(args, "thickness"))
+    if abs(thickness) < 1e-12:
+        raise BadArgument("a thickness of zero leaves the sheet a sheet",
+                          arg="thickness")
+    node = {"type": "ThickenFeature", "name": "Thicken",
+            "params": {"thickness": thickness}}
+    tree = feature_ops.add_modifier(doc.feature_tree, node,
+                                    target_id=args.get("target"))
+    _apply_exact(doc_id, doc.feature_tree, tree,
+                 f"a {abs(thickness) * 1000:g} mm thicken")
+    return {"message": f"thickened by {abs(thickness) * 1000:g} mm",
+            "feature_id": node["id"], **_body_state(doc_id)}
+
+
+@operation("trim", "mutate",
+           "Cut the body back to one side of a plane. A surface is built "
+           "oversized and trimmed — that is the working method, because a "
+           "lofted or swept surface is easy to make big and hard to land "
+           "exactly on a boundary. `keep` is named rather than signed: 'above' "
+           "and 'below' are what somebody means, and a sign convention is a "
+           "thing to get backwards. Requires the exact kernel.",
+           {"plane": {"enum": ["xy", "xz", "yz"], "default": "xy",
+                      "description": "the cutting plane's orientation"},
+            "offset": {"type": "number", "default": 0.0,
+                       "description": "where it sits along its own normal"},
+            "keep": {"enum": ["below", "above"], "default": "below",
+                     "description": "which side survives"},
+            "target": _MODIFIER_TARGET})
+def _trim(doc_id, args):
+    doc = _get(doc_id)
+    node = {"type": "TrimFeature", "name": "Trim", "params": {
+        "plane": str(args.get("plane", "xy")),
+        "offset": float(args.get("offset") or 0.0),
+        "keep": str(args.get("keep", "below"))}}
+    tree = feature_ops.add_modifier(doc.feature_tree, node,
+                                    target_id=args.get("target"))
+    _apply_exact(doc_id, doc.feature_tree, tree, "a trim")
+    return {"message": f"trimmed to the {node['params']['keep']} of "
+                       f"{node['params']['offset'] * 1000:g} mm",
+            "feature_id": node["id"], **_body_state(doc_id)}
 
 
 _SKETCH_REF = {"type": "string",

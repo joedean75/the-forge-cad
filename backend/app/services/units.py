@@ -69,6 +69,8 @@ UNIT_BY_NAME: Dict[str, str] = {
     "radius_end": "m", "neutral_offset": "m",
     # helices: the coil, the wire wound on it, and the rise per turn
     "helix_radius": "m", "wire_radius": "m", "pitch": "m",
+    # knit: how far apart two edges may be and still be the same edge
+    "tolerance": "m",
     # a mate connector's frame origin, in part space
     "origin": "m",
     # angles
@@ -142,6 +144,9 @@ UNITLESS = frozenset({
     # `prop_clearance`: component ids to treat as rotors. A list of ids, like
     # `edges` and `faces` — what it names carries the dimension, not this.
     "props",
+    # `trim`: which side of the plane survives. A name, and deliberately not a
+    # sign — see the operation.
+    "keep",
 })
 
 
