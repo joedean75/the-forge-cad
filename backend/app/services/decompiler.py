@@ -56,6 +56,7 @@ _BUILDERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
                                    "center", "axis", "right_handed")),
     "ThreadFeature": ("add_thread", ("diameter", "pitch", "length", "center",
                                      "axis", "right_handed")),
+    "SurfaceFeature": ("add_surface", ("profile", "plane", "offset", "depth")),
 }
 
 # Features that wrap a body and are created by a first-class operation rather

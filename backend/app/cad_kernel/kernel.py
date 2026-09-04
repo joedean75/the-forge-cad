@@ -36,7 +36,7 @@ class Kernel:
 
     @staticmethod
     def from_mesh(vertices: np.ndarray, faces: np.ndarray, id: Optional[str] = None,
-                  owners=None, face_ids=None) -> Solid:
+                  owners=None, face_ids=None, body_kind: str = "solid") -> Solid:
         """Wrap an arbitrary triangle mesh as a single-faced solid.
 
         ``owners`` is one feature id per triangle and ``face_ids`` one face id,
@@ -53,6 +53,11 @@ class Kernel:
         mesh = FaceMesh(np.array(vertices, dtype=float), np.array(faces, dtype=int))
         face = Face(surface=None, mesh=mesh, id=str(uuid.uuid4()))
         solid = Solid(Shell([face]), id=id or str(uuid.uuid4()))
+        # Always set, never inferred later. A mesh cannot answer this — an open
+        # shell and a closed one are the same triangle soup — so it has to be
+        # carried from whatever built the body, and it has to be carried on
+        # *every* body or a reader will eventually take its absence for "solid".
+        solid.attrs["body_kind"] = body_kind
         if owners is not None:
             solid.attrs["triangle_owners"] = list(owners)
         if face_ids is not None:
@@ -73,6 +78,10 @@ class Kernel:
         3. The **numpy SDF**, which handles everything else — smooth blends,
            shells, sheet metal, imported and optimised voxel bodies.
 
+        The result carries `attrs["body_kind"]`. Only the exact path can produce
+        a `sheet`: a signed distance field has a sign everywhere, so it always
+        bounds a volume, and there is no field form of a surface with no inside.
+
         A tree containing anything the exact kernel cannot represent falls back
         wholesale rather than mixing the two, because half a body built exactly
         and half approximated is worse than either on its own.
@@ -89,7 +98,8 @@ class Kernel:
                 shape, (recorded or {}).get("entities"), resolution=resolution)
             if len(faces):
                 return Kernel.from_mesh(vertices, faces, owners=owners,
-                                        face_ids=face_ids)
+                                        face_ids=face_ids,
+                                        body_kind=brep.body_kind(shape))
 
         if brep.requires_exact(feature):
             # There is no SDF form of an edge fillet or a face shell, so falling

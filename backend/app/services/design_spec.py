@@ -101,13 +101,31 @@ def _c_bbox(req, ctx) -> Tuple[str, str, float]:
     return status, detail, actual
 
 
+def _needs_a_solid(ctx, what: str) -> None:
+    """Refuse a requirement the body cannot answer, rather than scoring the zero.
+
+    A sheet's mass and volume are zero because it has neither. Fed to a range
+    check that is the most dangerous shape of wrong answer this file can
+    produce: `mass <= 50 g` **passes** on a surface, and a spec that scores 1.0
+    because half of it was measured against nothing is exactly what the module
+    exists to prevent.
+    """
+    if str(ctx.get("body_kind", "solid")) == "sheet":
+        raise SpecError(
+            f"this body is a sheet — surface with no enclosed volume — so it "
+            f"has no {what} to check. Thicken it to a solid, or drop the "
+            f"requirement")
+
+
 def _c_mass(req, ctx) -> Tuple[str, str, float]:
+    _needs_a_solid(ctx, "mass")
     actual = ctx["mass_kg"] * 1000.0
     status, detail = _range_check("Mass", actual, req, "g")
     return status, detail, actual
 
 
 def _c_volume(req, ctx) -> Tuple[str, str, float]:
+    _needs_a_solid(ctx, "volume")
     actual = ctx["volume_m3"] * 1e9 / 1000.0        # mm³ -> cm³
     status, detail = _range_check("Volume", actual, req, "cm³")
     return status, detail, actual
@@ -123,11 +141,30 @@ def _c_material(req, ctx) -> Tuple[str, str, Optional[float]]:
 
 
 def _c_watertight(req, ctx) -> Tuple[str, str, Optional[float]]:
+    """Is the body closed?
+
+    Two rows answer that and they are not interchangeable. On a solid,
+    `watertight` is a **verdict** — a hole in the skin is a defect. On a sheet
+    it is a **measurement**, `open_edges`, because being open is what a sheet is
+    and `check_solid` must not report every surface ever made as broken. But a
+    caller who writes a `watertight` requirement is asking the same question of
+    either, and the honest answer for an open sheet is no — so this reads the
+    row its body actually has rather than failing with "the check did not run",
+    which says nothing about the part.
+    """
     rows = {c.id: c for c in ctx["geometry"]}
     row = rows.get("watertight")
-    if row is None:
+    if row is not None:
+        return row.status, row.detail, row.value
+    open_row = rows.get("open_edges")
+    if open_row is None:
         return "fail", "geometry check did not run", None
-    return row.status, row.detail, row.value
+    open_edges = float(open_row.value or 0.0)
+    return ("pass" if not open_edges else "fail",
+            "closed shell" if not open_edges
+            else f"{open_edges:g} open edges — a sheet is not closed until "
+                 f"something knits onto it",
+            1.0 if not open_edges else 0.0)
 
 
 def _c_bodies(req, ctx) -> Tuple[str, str, float]:
@@ -251,6 +288,9 @@ def _context(doc) -> Dict[str, Any]:
         "size_mm": size_mm,
         "mass_kg": float(derived.mass or 0.0),
         "volume_m3": float(derived.volume or 0.0),
+        # What the body *is*, so a check that needs an enclosed volume can
+        # refuse rather than measure a zero and pass.
+        "body_kind": str(getattr(derived, "body_kind", "solid")),
         "material_id": doc.material_id,
         "nodes": list(walk_nodes(doc.feature_tree)),
         "geometry": geometry_check.check_solid(document_service.get_solid(doc.id)),

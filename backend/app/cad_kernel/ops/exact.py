@@ -288,6 +288,53 @@ class HelixFeature(Feature):
 
 @register_feature
 @dataclass
+class SurfaceFeature(Feature):
+    """A **sheet** — surface with no inside.
+
+    Every body in this kernel had been a closed solid from the first operation
+    to the last, and that assumption is baked into `mass_properties`,
+    `geometry_check`, `design_spec` and the whole distance-field path. A sheet
+    is the exception those had to be taught about before it could exist, which
+    is why `derived.body_kind` came first and this came second.
+
+    The profile's *wire* is swept, not its face, so a closed profile gives an
+    open tube rather than a solid prism — which is the useful thing: it is the
+    body you cap, knit and thicken. `add_extrude` next door is the solid form of
+    the same sweep and is unchanged.
+
+    Exact-only, and not because of a missing builder. A signed distance field
+    has a sign everywhere, so it always bounds a volume; there is no field that
+    describes a surface with no inside, and one that pretended to would be a
+    body the two kernels disagree about — which is the thing the split exists to
+    prevent.
+    """
+
+    profile: Dict[str, Any] = field(
+        default_factory=lambda: {"type": "rect", "width": 0.05, "height": 0.03})
+    plane: str = "xy"
+    offset: float = 0.0
+    depth: float = 0.02
+
+    def evaluate(self) -> Solid:
+        return _evaluate_exact(self)
+
+    def _serialize_params(self) -> Dict[str, Any]:
+        return {"profile": self.profile, "plane": self.plane,
+                "offset": self.offset, "depth": self.depth}
+
+    @classmethod
+    def _from_dict(cls, data: Dict[str, Any]) -> "SurfaceFeature":
+        p = data["params"]
+        return cls(id=data.get("id"), name=data.get("name", "Surface"),
+                   profile=p.get("profile") or {"type": "rect", "width": 0.05,
+                                                "height": 0.03},
+                   plane=str(p.get("plane", "xy")),
+                   offset=float(p.get("offset", 0.0)),
+                   depth=float(p.get("depth", 0.02)))
+
+
+@register_feature
+@dataclass
 class ThreadFeature(Feature):
     """An ISO 68-1 metric thread, as the threaded cylinder it makes.
 

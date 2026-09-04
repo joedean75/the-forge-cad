@@ -195,6 +195,16 @@ class DerivedCache(BaseModel):
     # "brep" is exact OpenCascade geometry; "native"/"numpy" are the two
     # signed-distance-field samplers.
     sampler: Optional[Literal["brep", "native", "numpy"]] = None
+    # What kind of body this is. A `solid` bounds a volume; a `sheet` is surface
+    # with no inside, which is the point of it rather than a defect. Defaulted
+    # rather than optional, deliberately: every document stored before surfaces
+    # existed holds a solid, and a reader that takes `None` for "unknown" would
+    # have to decide what to do about it on every path.
+    body_kind: Literal["solid", "sheet"] = "solid"
+    # Surface area of the tessellation, m². The number that stands in for volume
+    # on a sheet, and worth having on a solid too — it is what a coating, a
+    # finish or a heat-transfer estimate is quoted against.
+    area: float = 0.0
     mesh_hash: Optional[str] = None
     # The feature tree with its parameter *expressions* substituted — the same
     # nodes and the same ids, but every `"=length/2"` replaced by the number it

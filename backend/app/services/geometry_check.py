@@ -42,6 +42,20 @@ def _as_trimesh(solid) -> trimesh.Trimesh:
     )
 
 
+def _open_edges(tm: trimesh.Trimesh) -> int:
+    """Edges used by exactly one triangle — the true open boundary.
+
+    Not `facets_boundary`, which groups by coplanar facet and counts a
+    four-sided tube's two rims as four. The question a sheet is asked is how
+    much edge is unattached, and that is an edge count.
+    """
+    from trimesh.grouping import group_rows
+
+    if not len(tm.faces):
+        return 0
+    return int(len(group_rows(tm.edges_sorted, require_count=1)))
+
+
 def bodies_of(solid) -> List[dict]:
     """Every disconnected solid in the body, measured separately.
 
@@ -81,8 +95,9 @@ def bodies_of(solid) -> List[dict]:
     return out
 
 
-def check_solid(solid, expect_bodies: int | None = None) -> List[DfmCheck]:
-    """Structural validity of an evaluated solid, as DfmCheck rows.
+def check_solid(solid, expect_bodies: int | None = None,
+                body_kind: str | None = None) -> List[DfmCheck]:
+    """Structural validity of an evaluated body, as DfmCheck rows.
 
     ``expect_bodies`` is how many disjoint solids the part is *supposed* to have.
     Without it, more than one is a warning — the usual cause is a cut that went
@@ -90,8 +105,19 @@ def check_solid(solid, expect_bodies: int | None = None) -> List[DfmCheck]:
     deliberately two-piece part stops being reported as damage. The spec is where
     that intent already lives (`design_spec`'s ``bodies`` requirement), and
     `check_document` reads it from there.
+
+    ``body_kind`` decides which questions are even askable. **On a sheet, "not
+    watertight" and "encloses no volume" are the definition, not defects** —
+    reporting them as failures would mean every surface body scored zero on a
+    check that had understood it perfectly. What a sheet is still checked for is
+    everything that is a defect on any body: emptiness, consistent winding, and
+    how many disconnected pieces it is in. Taken from the body itself when the
+    caller does not say, because `Solid.attrs` is where the evaluator recorded
+    it and a second guess here would be a second answer.
     """
     tm = _as_trimesh(solid)
+    kind = str(body_kind or getattr(solid, "attrs", {}).get("body_kind", "solid"))
+    sheet = kind == "sheet"
     checks: List[DfmCheck] = []
 
     triangles = int(len(tm.faces))
@@ -107,24 +133,44 @@ def check_solid(solid, expect_bodies: int | None = None) -> List[DfmCheck]:
         # reports confusing values for one (euler_number of 0, "watertight").
         return checks
 
-    volume = float(abs(tm.volume))
-    checks.append(DfmCheck(
-        id="volume",
-        label="Enclosed volume",
-        status="pass" if volume > _MIN_VOLUME_M3 else "fail",
-        detail=f"{volume * 1e9:.3f} mm³",
-        value=volume,
-    ))
+    if sheet:
+        # The two readings a surface body genuinely has, in place of the two it
+        # cannot: how much surface, and how much edge is left open. An open edge
+        # is not a fault — it is where the next sheet knits on — so it is
+        # reported as a measurement rather than judged.
+        area = float(tm.area)
+        checks.append(DfmCheck(
+            id="area", label="Surface area", status="pass",
+            detail=f"{area * 1e6:.3f} mm²", value=area,
+        ))
+        open_edges = _open_edges(tm)
+        checks.append(DfmCheck(
+            id="open_edges", label="Open boundary", status="pass",
+            detail=("closed shell — nothing is open, so this sheet could be "
+                    "made solid" if not open_edges
+                    else f"{open_edges} open edges, which is what a sheet has "
+                         f"until something knits onto it"),
+            value=float(open_edges),
+        ))
+    else:
+        volume = float(abs(tm.volume))
+        checks.append(DfmCheck(
+            id="volume",
+            label="Enclosed volume",
+            status="pass" if volume > _MIN_VOLUME_M3 else "fail",
+            detail=f"{volume * 1e9:.3f} mm³",
+            value=volume,
+        ))
 
-    watertight = bool(tm.is_watertight)
-    checks.append(DfmCheck(
-        id="watertight",
-        label="Watertight",
-        status="pass" if watertight else "fail",
-        detail="closed surface" if watertight
-               else f"{len(tm.facets_boundary)} boundary loop(s) — the body has holes in its skin",
-        value=1.0 if watertight else 0.0,
-    ))
+        watertight = bool(tm.is_watertight)
+        checks.append(DfmCheck(
+            id="watertight",
+            label="Watertight",
+            status="pass" if watertight else "fail",
+            detail="closed surface" if watertight
+                   else f"{len(tm.facets_boundary)} boundary loop(s) — the body has holes in its skin",
+            value=1.0 if watertight else 0.0,
+        ))
 
     winding = bool(tm.is_winding_consistent)
     checks.append(DfmCheck(
@@ -138,13 +184,17 @@ def check_solid(solid, expect_bodies: int | None = None) -> List[DfmCheck]:
     # Euler characteristic 2 == a single closed surface of genus 0. Anything else
     # is not wrong per se (a torus is genus 1, legitimately) but it tells a caller
     # the topology is not a simple blob, which is worth surfacing rather than
-    # failing on.
+    # failing on. An open sheet is *never* 2, so the reading is reported without
+    # a verdict rather than warning about every surface ever made.
     euler = int(tm.euler_number)
     checks.append(DfmCheck(
         id="topology",
         label="Topology",
-        status="pass" if euler == 2 else "warn",
-        detail=f"Euler characteristic {euler}" + ("" if euler == 2 else " (genus > 0 or split shell)"),
+        status="pass" if (sheet or euler == 2) else "warn",
+        detail=f"Euler characteristic {euler}"
+               + ("" if euler == 2 else
+                  " (an open sheet, so not 2)" if sheet else
+                  " (genus > 0 or split shell)"),
         value=float(euler),
     ))
 
@@ -187,9 +237,12 @@ def check_document(doc_id: str, resolution: int = 128) -> dict:
                            status="fail", detail=str(exc))]
         return _report(checks)
 
+    kind = str(getattr(solid, "attrs", {}).get("body_kind", "solid"))
     checks = [DfmCheck(id="evaluates", label="Evaluates to geometry",
-                       status="pass", detail="body evaluated")]
-    checks.extend(check_solid(solid, expect_bodies=_expected_bodies(doc_id)))
+                       status="pass",
+                       detail=f"body evaluated ({kind})")]
+    checks.extend(check_solid(solid, expect_bodies=_expected_bodies(doc_id),
+                              body_kind=kind))
     return _report(checks)
 
 

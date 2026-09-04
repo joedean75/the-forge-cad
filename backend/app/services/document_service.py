@@ -362,7 +362,16 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
         solid = Kernel.evaluate_tree(tree, resolution=resolution)
         mesh = Kernel.tessellate(solid)
 
-        volume = abs(float(mesh_volume(mesh.vertices, mesh.faces))) if len(mesh.faces) else 0.0
+        # **A sheet has no volume, and that is not a measurement of zero.** The
+        # triangle integral would happily return one — a number the mesh's own
+        # arbitrary closure implies rather than anything the body has — so it is
+        # not taken at all, and `body_kind` is what every reader downstream
+        # branches on instead of guessing from a suspicious figure.
+        kind = str(solid.attrs.get("body_kind", "solid"))
+        area = float(_mesh_area(mesh)) if len(mesh.faces) else 0.0
+        volume = 0.0
+        if kind == "solid" and len(mesh.faces):
+            volume = abs(float(mesh_volume(mesh.vertices, mesh.faces)))
         bbox = None
         if mesh.vertices is not None and len(mesh.vertices):
             mn = mesh.vertices.min(axis=0)
@@ -397,6 +406,8 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
             # plate reported as 76000.
             mass=round(volume * density, 12),
             volume=round(volume, 15),
+            body_kind=kind,
+            area=round(area, 15),
             resolution=resolution,
             sampler=sampler,
             mesh_hash=digest,
@@ -413,6 +424,23 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
     if persist:
         _persist(doc)
     return doc
+
+
+def _mesh_area(mesh) -> float:
+    """Surface area of a tessellation, m².
+
+    The number that stands in for volume on a sheet — and the one an open body
+    still has, which is why it is recorded for solids too rather than appearing
+    only where it is the only answer.
+    """
+    import numpy as _np
+
+    verts = _np.asarray(mesh.vertices, dtype=float)
+    faces = _np.asarray(mesh.faces, dtype=int)
+    if not len(faces):
+        return 0.0
+    a, b, c = verts[faces[:, 0]], verts[faces[:, 1]], verts[faces[:, 2]]
+    return float(0.5 * _np.linalg.norm(_np.cross(b - a, c - a), axis=1).sum())
 
 
 def resolved_tree(doc: DesignDocument) -> dict:

@@ -796,6 +796,60 @@ def _profile_wire(profile: dict, normal: str, w: float, u0: float, v0: float):
     return polygon.Wire()
 
 
+def _surface(f):
+    """A sheet: the profile's **wire** swept, not its face.
+
+    One line different from `_extrude` and a different kind of body. Prisming
+    the face gives a solid prism; prisming the wire gives the walls without the
+    caps — an open tube, which is the body you cap, knit and thicken. A closed
+    profile therefore yields an open sheet, and that is the point rather than an
+    omission: the caps are a separate decision and a separate feature.
+
+    `body_kind` is not set here. It is read back off the shape by
+    `brep.body_kind`, because OCC already knows — a shape with no `TopAbs_SOLID`
+    in it is a sheet — and a second declaration here would be a second answer
+    that could disagree with the geometry.
+    """
+    from app.cad_kernel.core.planes import plane_normal
+    from app.cad_kernel.geom import profile2d
+
+    normal = plane_normal(getattr(f, "plane", "xy"))
+    depth = float(f.depth)
+    if abs(depth) < 1e-12:
+        raise BrepUnsupported("a surface needs a non-zero depth to sweep")
+
+    base_w = float(f.offset) - depth / 2.0
+    iu, iv, iw = _EXTRUDE_AXES[normal]
+    direction = [0.0, 0.0, 0.0]
+    direction[iw] = depth
+
+    profile = f.profile or {}
+    if profile2d.is_loops(profile):
+        place, axis_dir = _extrude_place(normal, base_w, 0.0, 0.0)
+        wires = [_loop_wire(loop, place) for loop in profile2d.loops_of(profile)]
+    else:
+        wires = [_profile_wire(profile, normal, base_w, 0.0, 0.0)]
+    if not wires:
+        raise BrepUnsupported("the profile has no curves to sweep")
+
+    parts = [BRepPrimAPI_MakePrism(wire, gp_Vec(*direction)).Shape()
+             for wire in wires]
+    if len(parts) == 1:
+        return parts[0]
+    # Several loops make several sheets. Compounded rather than fused: fusing
+    # sheets is what `KnitFeature` is for, and doing it silently here would knit
+    # two disjoint outlines that were never meant to meet.
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    compound = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(compound)
+    for part in parts:
+        builder.Add(compound, part)
+    return compound
+
+
 def _extrude(f):
     """A profile extruded symmetrically about `offset`, matching ExtrudeSDF."""
     from app.cad_kernel.core.planes import plane_normal
@@ -1631,6 +1685,7 @@ _BUILDERS = {
     "DraftFeature": _draft,
     "HelixFeature": _helix,
     "ThreadFeature": _thread,
+    "SurfaceFeature": _surface,
     "TransformFeature": _transform,
     "MirrorFeature": _mirror,
     "PatternFeature": _pattern,
@@ -1644,7 +1699,7 @@ _BUILDERS = {
 # for that edge"), replacing it with a generic "needs the exact kernel".
 EXACT_ONLY = {"EdgeFilletFeature", "EdgeChamferFeature", "FaceShellFeature",
               "BrepBodyFeature", "RuledLoftFeature", "DraftFeature",
-              "HelixFeature", "ThreadFeature"}
+              "HelixFeature", "ThreadFeature", "SurfaceFeature"}
 
 
 def requires_exact(feature) -> bool:
@@ -2003,6 +2058,33 @@ def _weld(vertices: np.ndarray, faces: np.ndarray, decimals: int = 9):
     # carrying anything per-triangle can drop the same rows.
     keep = (faces[:, 0] != faces[:, 1]) & (faces[:, 1] != faces[:, 2]) & (faces[:, 0] != faces[:, 2])
     return merged, faces[keep], keep
+
+
+#: What kind of body a shape is. A `solid` bounds a volume; a `sheet` is
+#: surface with no inside, and that is the point of it rather than a defect.
+#: Every consumer that divides by, integrates over or reasons about a volume has
+#: to know which it is holding — a sheet leaking into one of those paths gives a
+#: plausible wrong number rather than an error, which is the risk this whole
+#: distinction exists to close.
+BODY_KINDS = ("solid", "sheet")
+
+
+def body_kind(shape) -> str:
+    """`solid` or `sheet`, asked of OCC rather than inferred from a mesh.
+
+    Read from the topology, because a *mesh* cannot answer it: an open shell and
+    a closed one are both triangle soup, and "is it watertight" conflates a
+    sheet body with a solid whose skin has a hole in it — one is the intent and
+    the other is a defect. A shape containing at least one `TopAbs_SOLID` is a
+    solid; anything made only of faces and shells is a sheet.
+    """
+    from OCP.TopAbs import TopAbs_ShapeEnum
+    from OCP.TopExp import TopExp_Explorer
+
+    if shape is None:
+        return "solid"
+    explorer = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_SOLID)
+    return "solid" if explorer.More() else "sheet"
 
 
 def volume(shape) -> float:

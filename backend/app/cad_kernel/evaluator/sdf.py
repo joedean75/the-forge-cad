@@ -988,6 +988,10 @@ _SDF_BUILDERS = {
     # A thread is a helical surface, and the field-side approximation drops the
     # tangential term exactly where the pitch is the interesting part.
     "ThreadFeature": _sdf_needs_exact_kernel,
+    # A sheet has no field form at all, and that is not a gap in this table. A
+    # signed distance field has a sign everywhere, so it always bounds a volume;
+    # a surface with no inside is exactly what it cannot describe.
+    "SurfaceFeature": _sdf_needs_exact_kernel,
     "FaceShellFeature": _sdf_needs_exact_kernel,
     "BrepBodyFeature": _sdf_needs_exact_kernel,
     "RuledLoftFeature": _sdf_needs_exact_kernel,

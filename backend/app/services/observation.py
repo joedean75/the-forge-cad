@@ -91,6 +91,14 @@ def summarize(doc) -> dict:
         "material_id": doc.material_id,
         "error": d.error,
     }
+    # A sheet's mass and volume are zero because it has neither, not because
+    # nothing is assigned — so it says what it is and reports the number it does
+    # have. Stated rather than inferred from the zero, for the same reason
+    # `summarize_assembly` states its `kind`: an agent that reads a missing
+    # figure as an unset one will try to fix it by assigning a material.
+    if str(getattr(d, "body_kind", "solid")) == "sheet":
+        out["body_kind"] = "sheet"
+        out["area_mm2"] = round(float(getattr(d, "area", 0.0)) * 1e6, 3)
     # What the part is *for*, when a spec was set. The requirement count and the
     # score are left out on purpose: scoring means meshing the body, and this
     # runs on every operation. Call verify_against_spec for the number.

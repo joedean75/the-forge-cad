@@ -37,6 +37,16 @@ def mass_properties(doc_id: str) -> Dict:
     if len(faces) == 0:
         raise ValueError("The part has no solid geometry to measure.")
 
+    # **A sheet is measured, not refused, and not weighed.** Every figure below
+    # this line integrates over an enclosed volume, and a surface has none — the
+    # signed-tetrahedron sum would return whatever the mesh's arbitrary closure
+    # implies, which is a number about the triangulation rather than about the
+    # part. So the sheet answers with what it does have (area, and the centroid
+    # of that area) and says `kind` rather than reporting a mass of zero, which
+    # reads as "no material assigned" and is the wrong thing to conclude.
+    if str(doc.derived.body_kind) == "sheet":
+        return _sheet_properties(doc, verts, faces)
+
     a = verts[faces[:, 0]]
     b = verts[faces[:, 1]]
     c = verts[faces[:, 2]]
@@ -115,6 +125,11 @@ def mass_properties(doc_id: str) -> Dict:
 
     mat = materials.get_material(doc.material_id)
     return {
+        # Stated rather than inferred, for the same reason
+        # `observation.summarize_assembly` states its own: a caller that decides
+        # which shape it is holding from the presence of `volume_cm3` will
+        # eventually decide wrong.
+        "kind": "solid",
         "material": {"id": mat.id, "name": mat.name, "density": mat.density},
         "volume_cm3": round(volume * 1e6, 6),
         "mass_kg": round(mass, 9),
@@ -125,6 +140,33 @@ def mass_properties(doc_id: str) -> Dict:
         "bbox_mm": _bbox_mm(verts),
         # Whether these came from exact geometry or from a triangulation of it.
         "exact": exact is not None,
+    }
+
+
+def _sheet_properties(doc, verts: np.ndarray, faces: np.ndarray) -> Dict:
+    """Area, area centroid and extent for a body that bounds no volume.
+
+    The same shape the solid answer has, so a caller reads one dictionary either
+    way, with `kind` saying which and the volume-derived keys absent rather than
+    zero. Absent is the honest form: a zero mass invites "assign a material",
+    and there is no material that gives a surface a weight.
+    """
+    mat = materials.get_material(doc.material_id)
+    a, b, c = verts[faces[:, 0]], verts[faces[:, 1]], verts[faces[:, 2]]
+    areas = 0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1)
+    total = float(areas.sum())
+    centroid = (((a + b + c) / 3.0) * areas[:, None]).sum(axis=0) / (total or 1.0)
+    return {
+        "kind": "sheet",
+        "material": {"id": mat.id, "name": mat.name, "density": mat.density},
+        "surface_area_cm2": round(total * 1e4, 5),
+        # Of the *area*, not of a mass: a sheet has no mass to have a centre of.
+        "centroid_mm": [round(float(v) * 1000, 5) for v in centroid],
+        "bbox_mm": _bbox_mm(verts),
+        "exact": False,
+        "note": ("this body is surface with no enclosed volume, so it has no "
+                 "volume, no mass and no inertia tensor. Thicken it to a solid "
+                 "if you need those"),
     }
 
 

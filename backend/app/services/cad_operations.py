@@ -353,6 +353,57 @@ def _add_primitive(doc_id, args):
     return _combined(doc_id, prim, args, str(args["shape"]))
 
 
+@operation("add_surface", "mutate",
+           "Sweep a profile's outline into a **sheet** — surface with no "
+           "inside. add_extrude sweeps the profile's *face* and gives a solid "
+           "prism; this sweeps its *wire* and gives the walls without the caps, "
+           "which is the body you cap, knit and thicken. A document holding one "
+           "reports `body_kind: sheet`, and everything that needs an enclosed "
+           "volume — mass, inertia, a volume requirement in a spec — refuses it "
+           "by name rather than measuring a zero. Requires the exact kernel: a "
+           "distance field has a sign everywhere, so it always bounds a volume "
+           "and cannot describe a surface.",
+           {"profile": {"type": "object",
+                        "description": "{type:rect|circle|polygon|loops, ...} in "
+                                       "metres — the same profile add_extrude "
+                                       "takes"},
+            "sketch": {"type": "string",
+                       "description": "a SketchFeature id from create_sketch, "
+                                      "in place of 'profile'"},
+            "plane": {"enum": ["xy", "xz", "yz"], "default": "xy",
+                      "description": "the base plane the 2D profile is drawn on"},
+            "offset": {"type": "number",
+                       "description": "where the sweep is centred along the "
+                                      "plane normal"},
+            "depth": {"type": "number", "default": 0.02,
+                      "description": "how far the outline is swept"},
+            "target": _COMBINE_TARGET})
+def _add_surface(doc_id, args):
+    doc = _get(doc_id)
+    _one_of(args, ["profile", "sketch"], op="add_surface",
+            what="a 2D outline to sweep")
+    params = {
+        "profile": args.get("profile", {"type": "rect", "width": 0.05,
+                                        "height": 0.03, "cx": 0.0, "cy": 0.0}),
+        "plane": args.get("plane", "xy"),
+        "offset": float(args.get("offset") or 0.0),
+        "depth": float(args.get("depth") or 0.02),
+    }
+    _sketch_reference(doc_id, args, params, "sketch_ref")
+    node = {"type": "SurfaceFeature", "name": "Surface", "params": params}
+    # Union, always: a sheet has no inside, so subtracting one removes nothing
+    # and intersecting with one keeps nothing. Offering either would be offering
+    # an operation whose only outcome is a no-op reported as a success.
+    tree = feature_ops.add_primitive(doc.feature_tree, node, "union",
+                                     target_id=args.get("target"))
+    _apply_exact(doc_id, doc.feature_tree, tree, "a surface")
+    updated = document_service.get_document(doc_id)
+    return {"message": f"swept a sheet {params['depth'] * 1000:g} mm deep",
+            "feature_id": node["id"],
+            "body_kind": updated.derived.body_kind,
+            "area_mm2": round(float(updated.derived.area) * 1e6, 3)}
+
+
 _SKETCH_REF = {"type": "string",
                "description": "a SketchFeature id from create_sketch, in place of 'profile'. "
                               "Several features can read one sketch; editing it moves all of them"}

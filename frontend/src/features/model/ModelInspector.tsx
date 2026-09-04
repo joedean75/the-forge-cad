@@ -4,7 +4,7 @@ import { useDocumentStore } from '../../store/useDocumentStore'
 import { findNode, isBoolean } from '../../util/featureTree'
 import { api } from '../../api/client'
 import { TopologyPicker } from './TopologyPicker'
-import type { CatalogMaterial, DocumentParameter, MassProperties, MaterialCategory } from '../../../../shared/types'
+import type { CatalogMaterial, DocumentParameter, MassProperties, MaterialCategory, SheetProperties } from '../../../../shared/types'
 
 type Vec = { x: number; y: number; z: number }
 
@@ -240,7 +240,7 @@ function ParametersEditor() {
 
 function MassPropertiesPanel() {
   const { doc } = useDocumentStore()
-  const [mp, setMp] = useState<MassProperties | null>(null)
+  const [mp, setMp] = useState<MassProperties | SheetProperties | null>(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   // Re-fetch is manual — the button avoids a tessellation on every edit.
@@ -263,7 +263,19 @@ function MassPropertiesPanel() {
         </button>
       </div>
       {err && <p className="text-[10px] text-cad-danger">{err}</p>}
-      {mp && (
+      {/* Switched on `kind`, never on whether `mass_kg` is there. A sheet has
+          no volume, no mass and no centre of mass — printing zeros for them
+          reads as "no material assigned", which is the wrong thing to
+          conclude and the reason those keys are absent rather than zero. */}
+      {mp?.kind === 'sheet' && (
+        <dl className="space-y-1 text-[10px] text-cad-text">
+          <Row label="Body" value="sheet — no enclosed volume" />
+          <Row label="Surface" value={`${mp.surface_area_cm2.toFixed(1)} cm²`} />
+          <Row label="Centroid" value={mp.centroid_mm.map((v) => v.toFixed(1)).join(', ') + ' mm'} />
+          <p className="text-[9px] text-cad-text/50 leading-snug pt-1">{mp.note}</p>
+        </dl>
+      )}
+      {mp?.kind === 'solid' && (
         <dl className="space-y-1 text-[10px] text-cad-text">
           <Row label="Mass" value={`${mp.mass_kg.toFixed(4)} kg`} />
           <Row label="Volume" value={`${mp.volume_cm3.toFixed(2)} cm³`} />

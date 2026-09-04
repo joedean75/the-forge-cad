@@ -194,6 +194,15 @@ export interface DerivedCache {
   bbox?: BBox
   mass: number
   volume: number
+  /** What kind of body this is. A sheet's `mass` and `volume` are zero because
+   *  it has neither, not because nothing is assigned — read this before either.
+   *  Defaulted rather than optional: every document stored before surfaces
+   *  existed holds a solid, and a reader taking `undefined` for "unknown" would
+   *  have to decide what to do about it on every path. */
+  body_kind: BodyKind
+  /** Surface area of the tessellation, m². The number that stands in for volume
+   *  on a sheet, and worth having on a solid too. */
+  area: number
   /** The conditions the geometry was produced under. Two meshes are only
    *  comparable when these match. */
   resolution?: number
@@ -595,7 +604,16 @@ export interface MaterialCategory {
   count: number
 }
 
+/** What a body is. A `solid` bounds a volume; a `sheet` is surface with no
+ *  inside, which is the point of it rather than a defect. Stated on every body
+ *  rather than inferred: an open shell and a closed one are the same triangles,
+ *  and reading a zero mass as "no material assigned" is the wrong conclusion. */
+export type BodyKind = 'solid' | 'sheet'
+
+/** Mass properties of a solid. A sheet answers with `SheetProperties` instead —
+ *  switch on `kind`, never on whether `mass_kg` is present. */
 export interface MassProperties {
+  kind: 'solid'
   material: { id: string; name: string; density: number }
   volume_cm3: number
   mass_kg: number
@@ -603,6 +621,20 @@ export interface MassProperties {
   center_of_mass_mm: number[]
   inertia_kg_mm2: number[][]
   bbox_mm: { min: number[]; max: number[]; size: number[] }
+}
+
+/** A body with no enclosed volume has no volume, no mass and no inertia tensor.
+ *  Those keys are absent rather than zero — a zero mass invites "assign a
+ *  material", and there is no material that gives a surface a weight. */
+export interface SheetProperties {
+  kind: 'sheet'
+  material: { id: string; name: string; density: number }
+  surface_area_cm2: number
+  /** Of the *area*: a sheet has no mass to have a centre of. */
+  centroid_mm: number[]
+  bbox_mm: { min: number[]; max: number[]; size: number[] }
+  exact: boolean
+  note: string
 }
 
 export interface DocumentSummary {
