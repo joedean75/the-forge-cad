@@ -96,6 +96,17 @@ _MODIFIER_TARGET = {"type": "string",
 #: The recess a hole has at its mouth. `simple` is a plain bore.
 _HOLE_TYPES = ("simple", "counterbore", "countersink")
 
+#: Named bolt patterns `mounting_pattern` can drill. Listed rather than derived
+#: from `parts_catalog` for the same reason `_METRIC_SIZES` is: the enum reaches
+#: the JSON Schema a constrained decoder is pointed at, and a schema that
+#: depends on an import cycle is a schema that is sometimes empty.
+#: `test_mounting_pattern` asserts the two lists still agree.
+_BOLT_PATTERN_NAMES = ("fc-30.5", "fc-20", "fc-16",
+                       "motor-12", "motor-16", "motor-19", "motor-25",
+                       "nema8", "nema11", "nema14", "nema17", "nema23",
+                       "nema34",
+                       "servo-standard", "servo-mini", "servo-micro")
+
 #: How a pattern places its copies. Imported rather than restated so the enum a
 #: constrained decoder reads and the kernel's own table cannot drift apart.
 from app.cad_kernel.geom.patterns import PATTERN_KINDS as _PATTERN_KINDS  # noqa: E402
@@ -2283,6 +2294,171 @@ def _clearance_hole(doc_id, args):
     return {"message": f"cut a {hole['diameter_mm']} mm clearance hole for {screw}",
             "feature_id": node["id"], **hole,
             "counterbored": counterbored}
+
+
+def _bolt_transforms(name: str, axis: Dict[str, float]):
+    """A named pattern's holes, as offsets in millimetres and as table entries.
+
+    `table`, and the list is complete: there is no implicit copy at the origin,
+    so four entries are four holes and the seed is not a fifth.
+    """
+    from app.services import parts_catalog
+
+    offsets = parts_catalog.pattern_placements(
+        name, (float(axis.get("x", 0.0)), float(axis.get("y", 0.0)),
+               float(axis.get("z", 1.0))))
+    return offsets, [{"translate": {"x": ox / 1000.0, "y": oy / 1000.0,
+                                    "z": oz / 1000.0}} for ox, oy, oz in offsets]
+
+
+def _positive_depth(value) -> float:
+    """`args.get("depth") or default` would swallow an explicit zero, which has
+    to be refused by name rather than quietly become a hole through the body."""
+    depth = float(value)
+    if depth <= 0:
+        raise BadArgument("hole depth must be positive", arg="depth")
+    return depth
+
+
+def _pattern_result(name: str, screw: str, hole: dict, offsets) -> dict:
+    return {"pattern": name, "screw": screw, "holes": len(offsets),
+            "diameter_mm": hole["diameter_mm"], "fit": hole["fit"],
+            "offsets_mm": [[round(c, 4) for c in o] for o in offsets]}
+
+
+@operation("mounting_pattern", "mutate",
+           "Drill a named bolt pattern as **one** feature — the holes a flight "
+           "controller, a 4-in-1 ESC, a brushless motor, a NEMA stepper or an "
+           "RC servo bolts through. The placements come from the same tables "
+           "the catalog builds those parts from, so a bracket drilled for a "
+           "NEMA 17 and a NEMA 17 agree by construction rather than because "
+           "somebody typed 31 mm twice. Bores are ISO 273 clearance for the "
+           "pattern's own screw unless `screw` says otherwise. Being one "
+           "feature is the point: swapping a 30.5 board for a 20 one is this "
+           "operation again with `feature` and the new `pattern`, and all four "
+           "holes move — where four add_hole calls are four holes to find and "
+           "move by hand. Plain bores; for a counterbore or a countersink on a "
+           "single hole use add_hole.",
+           {"pattern": {"enum": list(_BOLT_PATTERN_NAMES), "required": True,
+                        "description": "which pattern to drill"},
+            "center": {**_VEC,
+                       "description": "centre of the pattern. Defaults to the "
+                                      "body's centre with the bores mouthed on "
+                                      "its face along `axis`"},
+            "axis": _AXIS,
+            "screw": {"enum": list(_METRIC_SIZES),
+                      "description": "the screw the holes are for; defaults to "
+                                     "the pattern's own"},
+            "fit": {"enum": ["fine", "medium", "coarse"], "default": "medium",
+                    "description": "ISO 273 series; medium is the "
+                                   "general-assembly one"},
+            "depth": {"type": "number",
+                      "description": "how deep to cut. Defaults to through the body."},
+            "feature": {"type": "string",
+                        "description": "re-drill this mounting pattern in place "
+                                       "instead of adding another — from "
+                                       "list_features, or the feature_id this "
+                                       "operation returned"},
+            "target": _MODIFIER_TARGET})
+def _mounting_pattern(doc_id, args):
+    from app.services import parts_catalog
+
+    doc = _get(doc_id)
+    name = require(args, "pattern")
+    bolts = parts_catalog.bolt_patterns().get(name)
+    if bolts is None:
+        raise BadArgument(
+            f"unknown bolt pattern {name!r}; the catalog knows "
+            f"{', '.join(sorted(parts_catalog.bolt_patterns()))}", arg="pattern")
+    screw = args.get("screw") or bolts.screw
+    try:
+        hole = parts_catalog.clearance_hole(screw, str(args.get("fit", "medium")))
+    except KeyError as exc:
+        raise BadArgument(f"unknown screw or fit: {exc}", arg="screw") from exc
+
+    existing = args.get("feature")
+    if existing is not None:
+        tree = copy.deepcopy(doc.feature_tree)
+        node = feature_ops.find_node(tree, existing)
+        if node is None:
+            raise NoSuchFeature(f"no feature {existing!r} in this document",
+                                arg="feature")
+        seed = (node.get("params") or {}).get("children") or [None]
+        seed = seed[0]
+        if node.get("type") != "PatternFeature" or \
+                (seed or {}).get("type") != "CylinderFeature":
+            raise BadArgument(
+                f"{existing} is a {node.get('type')}, not a mounting pattern — "
+                f"re-drilling rewrites a pattern of bores, and there is nothing "
+                f"here to rewrite", arg="feature")
+        # **The axis a re-drill keeps is the one the pattern was placed on.**
+        # Falling back to `_AXIS`'s +Z here instead would swing a pattern
+        # drilled along +X into the XY plane the moment somebody swapped the
+        # board on it — a re-drill that silently moves the holes somewhere
+        # nobody asked for, which is the failure this operation exists to end.
+        axis = args.get("axis") or dict(
+            seed["params"].get("axis") or {"x": 0.0, "y": 0.0, "z": 1.0})
+        offsets, transforms = _bolt_transforms(name, axis)
+
+        node["name"] = f"{bolts.label} pattern"
+        node["params"].update({"kind": "table", "count": len(transforms),
+                               "transforms": transforms, "axis": dict(axis)})
+        seed["name"] = f"{screw} clearance"
+        seed["params"]["radius"] = hole["radius_m"]
+        seed["params"]["axis"] = dict(axis)
+        # Everything else about the placement is kept unless it was named. A
+        # re-drill changes which holes and how wide; where the pattern sits and
+        # how deep it cuts were decided when it was drilled.
+        if args.get("center") is not None:
+            seed["params"]["center"] = dict(args["center"])
+            node["params"]["center"] = dict(args["center"])
+        if args.get("depth") is not None:
+            seed["params"]["height"] = _positive_depth(args["depth"])
+        document_service.update_document(doc_id, feature_tree=tree)
+        return {"message": f"re-drilled {existing} as {bolts.label} — "
+                           f"{len(transforms)} × {hole['diameter_mm']} mm "
+                           f"for {screw}",
+                "feature_id": existing, "redrilled": True,
+                **_pattern_result(name, screw, hole, offsets)}
+
+    axis = args.get("axis") or {"x": 0.0, "y": 0.0, "z": 1.0}
+    offsets, transforms = _bolt_transforms(name, axis)
+    bbox = doc.derived.bbox
+    if bbox is not None:
+        body_centre, unit, half = _axis_extent(bbox, axis)
+    else:
+        body_centre, unit, half = (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 0.05
+    depth = (2.0 * half if args.get("depth") is None
+             else _positive_depth(args["depth"]))
+    if args.get("center") is not None:
+        centre = dict(args["center"])
+    else:
+        centre = {k: body_centre[i] + unit[i] * (half - depth / 2.0)
+                  for i, k in enumerate("xyz")}
+
+    seed = {"type": "CylinderFeature", "name": f"{screw} clearance",
+            "params": {"radius": hole["radius_m"], "height": depth,
+                       "center": dict(centre), "axis": dict(axis)}}
+    node = {"type": "PatternFeature", "name": f"{bolts.label} pattern",
+            "params": {"kind": "table", "count": len(transforms),
+                       "transforms": transforms, "axis": dict(axis),
+                       "center": dict(centre), "children": [seed]}}
+    # A pattern is a *union* of its copies, so it goes in as the tool of a
+    # subtract rather than wrapping the body: wrapping would union four copies
+    # of a drilled body, which fills every hole back in. `add_primitive` also
+    # refuses a subtract into a document with no material, which is where the
+    # "there is nothing to drill" answer comes from.
+    tree = feature_ops.add_primitive(doc.feature_tree, node, "subtract",
+                                     target_id=args.get("target"))
+    # The seed lives inside the node and `add_primitive`'s allocator only ever
+    # sees the node itself, so the id comes from here — after the pattern is in
+    # the tree, or the two could be handed the same number.
+    tree = feature_ops.ensure_ids(tree)
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": f"drilled the {bolts.label} pattern — "
+                       f"{len(transforms)} × {hole['diameter_mm']} mm for {screw}",
+            "feature_id": node["id"], "redrilled": False,
+            **_pattern_result(name, screw, hole, offsets)}
 
 
 @operation("export", "query",

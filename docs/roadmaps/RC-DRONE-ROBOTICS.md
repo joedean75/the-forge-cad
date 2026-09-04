@@ -54,8 +54,8 @@ It stays on the list. It is no longer near the top of it.
 | # | Sprint | Why here |
 |---|---|---|
 | **R1** | **Mass budget and URDF** ✅ | AUW and CG are checked before every flight; the inertia tensor is what a controller is tuned against. URDF makes the CAD drive the simulator. Both were unlocked by S5's mate connectors. |
-| R2 | Domain parts catalog | Brushless motors, ESCs, FCs, servos, props, LiPos, standoffs, carbon plate and tube. Same generator pattern as `parts_catalog` — built from published dimensions, not scraped. |
-| R3 | Mounting-pattern features | 30.5×30.5 and 20×20 FC patterns, NEMA faces, servo horns, GoPro-style mounts, bearing seats. Parametric features rather than hand-drilled holes, so a swap re-drills. |
+| **R2** | **Domain parts catalog** ✅ | Brushless motors, ESCs, FCs, servos, props, LiPos, standoffs, carbon plate and tube. Same generator pattern as `parts_catalog` — built from published dimensions, not scraped. |
+| **R3** | **Mounting-pattern features** ✅ | 30.5×30.5 and 20×20 FC patterns, NEMA faces, servo horns, GoPro-style mounts, bearing seats. Parametric features rather than hand-drilled holes, so a swap re-drills. |
 | R4 | Prop/rotor clearance and arm layout | An interference check that knows a prop is a *swept disc*, not the two blades modelled. The one geometric check this domain has that general CAD does not. |
 | R5 | Thread (deferred from S3) | Real fastener geometry and a third `parts_catalog` fidelity. Everything is bolted together here. |
 | R6 | Surfacing | Still the largest capability gap; no longer the most valuable one. |
@@ -113,3 +113,85 @@ child link frame**, so the joint origin has to carry *both* connectors —
 child's origin on it, which is correct only when the moved connector happens to
 sit at the part origin. And `<axis>` is expressed in the joint frame, which
 reduces it to the moved connector's own z column.
+
+
+---
+
+## R2 — The domain parts catalog (shipped)
+
+Brushless motors, flight controllers, 4-in-1 ESCs, RC servos, hex standoffs,
+propellers, carbon plate and tube, and LiPo packs — 265 rows where there were
+210, and the new ones are the ones this domain is built from.
+
+**The sorting rule, because this domain has fewer published standards than the
+fastener one.** Every number is in one of three buckets and the row says which:
+
+- **Standardised, or a settled de-facto convention** — tabled, with the
+  convention named. The 30.5 / 20 / 16 stack patterns, the four-digit
+  brushless stator code (`2207` is a 22 mm stator, 7 mm tall), the three RC
+  servo classes, the hex across-flats a standoff takes from the nut table that
+  was already here.
+- **Varies by manufacturer** — a **parameter**, whose default is typical for
+  the class and whose description says so. A motor's bell diameter, a board's
+  outline, a propeller's bore.
+- **Neither** — not present. A LiPo pack is parameterised outright: two 4S
+  1300 mAh packs from different makers differ by ten millimetres and forty
+  grams, so a table keyed on capacity would be a table of invented numbers.
+
+**Parameters are a channel, not a special case.** `Entry.params` declares what
+a row takes, `insert_standard_part` accepts them, the listing publishes them.
+An unknown name is refused rather than dropped — a parameter silently ignored
+is a part built to a size nobody asked for and reported as a success. The reuse
+key is the *reference*: the bare key for the default configuration, so every
+document stored before parameters existed still resolves and four identical
+motors are still one BOM line; the key plus its changed parameters otherwise,
+so two differently sized packs are two parts with two names.
+
+**A propeller is the disc it sweeps.** The question anyone asks of a propeller
+in an assembly is whether anything is inside its arc, and two blades frozen at
+one azimuth answer that only for that azimuth. R4 is the clearance check; this
+is the body it will read.
+
+**Task 0, the prerequisite.** `typical_mass_g` was declared, populated and read
+by nothing: both roll-ups took the geometric mass of a solid envelope, so a
+NEMA 17 reported 672 g against a real 350 g and every mass budget containing a
+motor was nearly double. `standard_parts.published_mass_kg` resolves a
+document's `catalog_ref` back to its entry and `bom` and `assembly_mass` prefer
+the published figure, saying which they used in `mass_source`. The part
+document goes on reporting its own geometry, and the inertia tensor is **not**
+scaled by the ratio — a motor's mass is in its stator and magnets rather than
+spread through the bell, so the ratio is right for the mass and wrong for the
+second moment.
+
+The end-to-end check is a quadcopter: four motors, four props, an FC, a 4-in-1
+ESC, a pack and a frame plate come to **424 g**, against the **780 g** their
+envelopes weigh.
+
+## R3 — Mounting patterns (shipped)
+
+**`mounting_pattern`** drills a named bolt pattern as **one** `PatternFeature`
+of kind `table` — the FC stack patterns, the motor mounts, the six NEMA faces
+and the three servo ear patterns. Bores are ISO 273 clearance for the pattern's
+own screw, from `parts_catalog.clearance_hole`. Being one feature is the point:
+swapping a 30.5 board for a 20 one is the same operation again with `feature`
+and the new `pattern`, and all four holes move together — where four
+`add_hole` calls are four holes to find and move by hand, with nothing to say
+you missed one until the board does not bolt on.
+
+Three details:
+
+- **The placements are derived, not tabled a second time.**
+  `parts_catalog.bolt_patterns()` builds them from `MOUNT_PATTERNS`, `NEMA` and
+  `SERVOS` — the same tables the parts themselves are built from — and both
+  `pattern_holes` (which cuts them into the catalog's own parts) and this
+  operation read it. So a bracket drilled `nema17` and a NEMA 17 stepper agree
+  about where 31 mm is by construction. A bolt circle transcribed twice fits in
+  CAD right up until it is made.
+- **A pattern is a union of its copies**, so it goes in as the *tool* of a
+  subtract rather than wrapping the body. Wrapping would union four copies of a
+  drilled body, which fills every hole back in.
+- **Plain bores only.** A counterbore in the same feature would need a boolean
+  under the pattern, and the decompiler emits a targeted `add_modifier` against
+  the pattern's *first child* — so it would replay as one counterbore rather
+  than four, and the mesh comparison would report `geometry_mismatch` for every
+  document containing one. `add_hole` counterbores a single hole.

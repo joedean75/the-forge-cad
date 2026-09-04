@@ -87,11 +87,11 @@ def test_the_servo_classes_are_the_dimensions_a_servo_tray_is_cut_to():
     that has to come out of the body rather than out of an offset."""
     size, _ = _measure("servo-standard")
     assert size == pytest.approx([54.0, 20.0, 36.5], abs=0.1)
-    assert _hole_centres("servo-standard", "Mounting hole") == {
+    assert _hole_centres("servo-standard") == {
         (24.75, 5.0), (24.75, -5.0), (-24.75, 5.0), (-24.75, -5.0)}
     # A micro servo has one hole per ear, not two. Drilling four would put a
     # hole where the plastic is.
-    assert len(_hole_centres("servo-micro", "Mounting hole")) == 2
+    assert len(_hole_centres("servo-micro")) == 2
     micro, _ = _measure("servo-micro")
     assert micro == pytest.approx([32.2, 12.2, 28.5], abs=0.1)
 

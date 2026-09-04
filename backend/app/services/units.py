@@ -132,6 +132,9 @@ UNITLESS = frozenset({
     "template",
     # the purchased-parts listing: which portal an imported part came from
     "source",
+    # `mounting_pattern`: which named bolt pattern to drill. A name, like
+    # `template` and `kind` above — the dimensions behind it are the catalog's.
+    "pattern",
 })
 
 

@@ -317,6 +317,7 @@ class Servo(NamedTuple):
     shaft_x: float       # output shaft centre, from the front face
     shaft_dia: float
     shaft_h: float       # output boss above the case
+    screw: str           # what goes through the ears into your bracket
     mass_g: float
 
 
@@ -327,11 +328,11 @@ class Servo(NamedTuple):
 #: servo, which is the figure the class is quoted at.
 SERVOS: Dict[str, Servo] = {
     "standard": Servo(40.5, 20.0, 32.0, 54.0, 49.5, 10.0, 2.5, 24.0, 4.1,
-                      10.0, 5.8, 4.5, 40.0),
+                      10.0, 5.8, 4.5, "M3", 40.0),
     "mini": Servo(32.5, 16.8, 26.5, 45.0, 41.0, 8.0, 2.3, 19.0, 3.0,
-                  8.5, 4.6, 4.5, 22.0),
+                  8.5, 4.6, 4.5, "M2.5", 22.0),
     "micro": Servo(22.8, 12.2, 22.7, 32.2, 28.0, 0.0, 2.5, 15.5, 2.2,
-                   6.0, 4.6, 5.8, 9.0),
+                   6.0, 4.6, 5.8, "M2", 9.0),
 }
 
 
@@ -349,6 +350,90 @@ STANDOFF_LENGTHS = (5, 8, 10, 12, 15, 20, 25, 30, 35, 40)
 PROP_DIAMETERS_IN = (3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0)
 PROP_MASS_G = {3.0: 2.0, 4.0: 3.0, 5.0: 4.5, 6.0: 6.0,
                7.0: 8.0, 8.0: 10.0, 10.0: 14.0}
+
+
+# ------------------------------------------------------------ bolt patterns --
+
+class BoltPattern(NamedTuple):
+    """A named set of hole placements, and the screw they take."""
+    label: str
+    screw: str
+    holes: Tuple[Tuple[float, float], ...]   # mm, about the pattern's centre
+
+
+_BOLT_PATTERNS: Optional[Dict[str, BoltPattern]] = None
+
+
+def _corners(span_x: float, span_y: float) -> Tuple[Tuple[float, float], ...]:
+    """A rectangular pattern's holes — two of them when one span is zero."""
+    ys = (-span_y / 2, span_y / 2) if span_y else (0.0,)
+    return tuple((sx * span_x / 2, y) for sx in (-1, 1) for y in ys)
+
+
+def bolt_patterns() -> Dict[str, BoltPattern]:
+    """Every named bolt pattern here, derived from the tables it already has.
+
+    The stack and motor patterns come from `MOUNT_PATTERNS`, the stepper faces
+    from `NEMA` and the servo ears from `SERVOS` — the same tables the parts
+    themselves are built from. That is the whole reason this is a derivation
+    rather than a fourth table: `pattern_holes` cuts these into the catalog's
+    own parts and the `mounting_pattern` operation drills them into yours, so a
+    bracket made for a NEMA 17 and a NEMA 17 have their holes in the same place
+    by construction. A bolt circle transcribed twice is a bracket that does not
+    fit, and it fits in CAD right up until it is made.
+
+    A servo is why the placements are a *list* rather than two spans: its ears
+    are 49.5 by 10 and the micro class has one hole per ear, which is an
+    arrangement no pair of spans describes.
+    """
+    global _BOLT_PATTERNS
+    if _BOLT_PATTERNS is not None:
+        return _BOLT_PATTERNS
+    out: Dict[str, BoltPattern] = {}
+    for name, p in MOUNT_PATTERNS.items():
+        out[name] = BoltPattern(p.label, p.screw, _corners(p.span_x, p.span_y))
+    for frame, n in NEMA.items():
+        out[frame.lower().replace(" ", "")] = BoltPattern(
+            f"{frame} face ({n.bolt_circle:g} mm, {n.bolt})", n.bolt,
+            _corners(n.bolt_circle, n.bolt_circle))
+    for cls, s in SERVOS.items():
+        out[f"servo-{cls}"] = BoltPattern(
+            f"{cls} servo ears ({s.ear_span:g} mm)", s.screw,
+            _corners(s.ear_span, s.ear_cross))
+    _BOLT_PATTERNS = out
+    return out
+
+
+def _unit(v) -> Tuple[float, float, float]:
+    length = math.sqrt(sum(c * c for c in v)) or 1.0
+    return tuple(c / length for c in v)
+
+
+def _cross(a, b) -> Tuple[float, float, float]:
+    return (a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0])
+
+
+def pattern_placements(name: str, axis=(0.0, 0.0, 1.0)
+                       ) -> List[Tuple[float, float, float]]:
+    """Each hole of a named pattern as an x/y/z offset in millimetres.
+
+    The offsets lie in the plane perpendicular to `axis`, and **which way round
+    they lie has to be decided rather than left to whichever perpendicular came
+    out first**: a servo's ears are 49.5 mm by 10, so a pattern that lands a
+    quarter turn from where it did last time is a re-drill that moves the holes
+    — worse than no re-drill at all. The reference is the world axis this one is
+    least aligned with, which for +Z hands back x and y, and which changes
+    continuously rather than flipping when a nearly-aligned axis is nudged.
+    """
+    n = _unit(axis)
+    ref = [0.0, 0.0, 0.0]
+    ref[min(range(3), key=lambda i: abs(n[i]))] = 1.0
+    v = _unit(_cross(n, ref))
+    u = _cross(v, n)
+    return [tuple(u[i] * hx + v[i] * hy for i in range(3))
+            for hx, hy in bolt_patterns()[name].holes]
 
 
 # ------------------------------------------------------------- the geometry --
@@ -476,17 +561,10 @@ def stepper_motor(frame: str, body_mm: Optional[float] = None) -> dict:
     """
     n = NEMA[frame]
     body = float(body_mm if body_mm else n.body)
-    hole = METRIC[n.bolt].clearance / 2
-    offset = n.bolt_circle / 2
-
-    holes = []
-    for sx in (-1, 1):
-        for sy in (-1, 1):
-            holes.append({"type": "CylinderFeature", "name": "Mount hole", "params": {
-                "radius": hole * MM, "height": (body * 1.2) * MM,
-                "center": {"x": sx * offset * MM, "y": sy * offset * MM,
-                           "z": (-body / 2) * MM},
-                "axis": {"x": 0.0, "y": 0.0, "z": 1.0}}})
+    # Through `pattern_holes`, which reads the same `NEMA` row the frame does —
+    # so a bracket drilled `nema17` and this motor put their holes in the same
+    # place because it is one bolt circle, not two people typing 31 mm.
+    holes = pattern_holes(frame.lower().replace(" ", ""), body * 1.2, -body / 2)
 
     return _tree(_subtract([
         _union([
@@ -550,20 +628,25 @@ def _cyl_at(radius_mm: float, height_mm: float, at=(0.0, 0.0, 0.0),
 
 
 def pattern_holes(pattern: str, depth_mm: float, z_mm: float = 0.0,
-                  at=(0.0, 0.0), fit: str = "medium") -> List[dict]:
-    """The four clearance holes of a named mounting pattern, as cutting tools.
+                  at=(0.0, 0.0), *, diameter_mm: Optional[float] = None,
+                  fit: str = "medium") -> List[dict]:
+    """The holes of a named bolt pattern, as cutting tools down +Z.
 
-    The diameter comes from `clearance_hole`, which is the ISO 273 table — the
-    same one `add_hole` and the `mounting_pattern` operation read. Two
-    transcriptions of one clearance series agree on the day they are written,
-    and a bolt pattern is exactly the thing nobody re-measures afterwards.
+    Placements from `bolt_patterns`, which is the same derivation the
+    `mounting_pattern` operation drills from — so the holes in a part and the
+    holes in the bracket somebody makes for it come from one list.
+
+    The diameter comes from `clearance_hole`, the ISO 273 table `add_hole` and
+    `clearance_hole` already read, unless `diameter_mm` overrides it. A servo's
+    ears are the case for the override: 4.1 mm is the hole in the servo, and it
+    is not the clearance for anything.
     """
-    p = MOUNT_PATTERNS[pattern]
-    radius = clearance_hole(p.screw, fit)["diameter_mm"] / 2
-    return [_cyl_at(radius, depth_mm,
-                    (at[0] + sx * p.span_x / 2, at[1] + sy * p.span_y / 2, z_mm),
+    p = bolt_patterns()[pattern]
+    radius = (float(diameter_mm) / 2 if diameter_mm is not None
+              else clearance_hole(p.screw, fit)["diameter_mm"] / 2)
+    return [_cyl_at(radius, depth_mm, (at[0] + hx, at[1] + hy, z_mm),
                     name="Mount hole")
-            for sx in (-1, 1) for sy in (-1, 1)]
+            for hx, hy in p.holes]
 
 
 #: How deep a motor's mounting screws reach into its base, and how far its prop
@@ -654,14 +737,13 @@ def rc_servo(servo_class: str) -> dict:
                 name="Output boss"),
     ], name=f"{servo_class} servo")
 
-    # Four holes on the classes that have four, two on the ones that have one
-    # per ear. Drilling four into a two-hole ear would put a hole where the
-    # plastic is, which is exactly the sort of thing a mount is cut from.
-    crosses = (-s.ear_cross / 2, s.ear_cross / 2) if s.ear_cross else (0.0,)
-    holes = [_cyl_at(s.hole_dia / 2, s.ear_thk * 4,
-                     (sx * s.ear_span / 2, y, s.ear_z + s.ear_thk / 2),
-                     name="Mounting hole")
-             for sx in (-1, 1) for y in crosses]
+    # Four holes on the classes that have four, two on the class that has one
+    # per ear — and from `bolt_patterns`, so the ears and a bracket drilled
+    # `servo-standard` are the same four placements rather than two
+    # transcriptions of them. The diameter is the servo's own: 4.1 mm is the
+    # hole in the ear and it is not the clearance for anything.
+    holes = pattern_holes(f"servo-{servo_class}", s.ear_thk * 4,
+                          s.ear_z + s.ear_thk / 2, diameter_mm=s.hole_dia)
     return _tree(_subtract([body, *holes], name=f"{servo_class} servo"))
 
 
