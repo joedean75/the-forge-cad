@@ -545,15 +545,29 @@ def _sketch_reference(doc_id: str, args: dict, params: dict, ref_key: str,
     The profile is substituted at evaluation time (`feature_ops.resolve_sketches`)
     rather than copied here, which is what makes the sharing real: a copy would
     drift the moment the sketch was edited, and nothing would notice.
+
+    A `DerivedFeature` reading a sketch out of another document is accepted for
+    the same reason: it *becomes* a `SketchFeature` with this id before anything
+    evaluates, so the reference is to a sketch — one that happens to be
+    maintained elsewhere, which is the whole point of in-context design.
     """
     sketch_id = args.get(arg_key)
     if not sketch_id:
         return
     node = feature_ops.find_node(_get(doc_id).feature_tree, sketch_id)
-    if node is None or node.get("type") != feature_ops.SKETCH_TYPE:
-        raise NoSuchFeature(f"no sketch feature {sketch_id!r} — create_sketch makes one",
-                            arg=arg_key)
+    if node is None or not _is_sketch_source(node):
+        raise NoSuchFeature(f"no sketch feature {sketch_id!r} — create_sketch makes one, "
+                            f"or add_derived with kind='sketch' reads one from another "
+                            f"document", arg=arg_key)
     params[ref_key] = sketch_id
+
+
+def _is_sketch_source(node: dict) -> bool:
+    """Whether a node resolves to a sketch other features can consume."""
+    if node.get("type") == feature_ops.SKETCH_TYPE:
+        return True
+    return (node.get("type") == feature_ops.DERIVED_TYPE
+            and (node.get("params") or {}).get("kind") == "sketch")
 
 
 @operation("add_extrude", "mutate", "Sketch a 2D profile on a plane and extrude it into a solid (unioned or subtracted). "
@@ -1164,6 +1178,114 @@ def _set_feature_params(doc_id, args):
     tree = feature_ops.set_params(doc.feature_tree, require(args, "feature_id"), require(args, "params"))
     document_service.update_document(doc_id, feature_tree=tree)
     return {"message": f"updated feature {args['feature_id']}"}
+
+
+_DERIVED_KIND = {
+    "enum": ["body", "sketch"], "default": "body",
+    "description": "`body` splices the source's solid in as ordinary features; "
+                   "`sketch` brings across one of its sketches, so two parts "
+                   "can extrude the same outline to different thicknesses",
+}
+
+
+@operation("add_derived", "mutate",
+           "Read geometry from **another document**, live. This is the one way "
+           "a part can be built from another part rather than beside it: an "
+           "enclosure's top and bottom extruding the outline that lives in the "
+           "enclosure document, a bracket cut from the envelope of the thing it "
+           "carries. Nothing is copied — the reference is followed on every "
+           "evaluation, so the source's next edit is this document's next body. "
+           "`entities` narrows it to named features of the source (empty means "
+           "its whole body); `revision` pins it to a released snapshot, which "
+           "is the opt-out from all of the above. A reference that would close "
+           "a loop is refused, and so is one to a document this document's "
+           "owner cannot open — a derived reference reads the source's "
+           "geometry, so it is the same boundary a component in an assembly "
+           "crosses. Use list_derived to see what a document reads and what "
+           "reads it.",
+           {"document_id": {"type": "string", "required": True,
+                            "description": "the source document to read from"},
+            "kind": _DERIVED_KIND,
+            "entities": {"type": "array", "items": {"type": "string"},
+                         "description": "feature ids **in the source** (from "
+                                        "list_features on it). Empty takes its "
+                                        "whole body; for a sketch, names which "
+                                        "one"},
+            "revision": {"type": "string",
+                         "description": "a released revision letter of the "
+                                        "source, to pin this reference to a "
+                                        "snapshot instead of following it"},
+            "operation": {"enum": ["union", "subtract", "intersect"],
+                          "default": "union",
+                          "description": "how the derived body joins this part"},
+            "target": _COMBINE_TARGET})
+def _add_derived(doc_id, args):
+    from app.cad_kernel.ops.derived import KINDS
+    from app.services import derived_service
+
+    doc = _get(doc_id)
+    source_id = require(args, "document_id")
+    kind = args.get("kind", "body")
+    if kind not in KINDS:
+        raise BadArgument(f"kind must be one of {', '.join(KINDS)}", arg="kind")
+
+    source = document_service.get_document(source_id)
+    if source is None:
+        raise NoSuchDocument(f"no document {source_id!r} to derive from")
+    # Checked here as well as at resolution. Resolution is what makes a cycle
+    # impossible; this is what makes it *legible* — a reference refused now
+    # names the loop, where one refused later is a document that no longer
+    # opens and a user with no idea which edit did it.
+    loop = derived_service.path_back(doc_id, source_id)
+    if loop:
+        raise PreconditionFailed(
+            f"that would be circular: {' -> '.join(loop)}. A document cannot "
+            f"derive from one that derives from it, at any depth.")
+    if doc.owner_id and not document_service.can_access(source, doc.owner_id):
+        raise PreconditionFailed(
+            f"document {source_id!r} is not one this document's owner can open, "
+            f"and a derived reference reads its geometry")
+    revision = args.get("revision")
+    if revision and not any(r.letter == revision for r in source.revisions):
+        raise BadArgument(
+            f"document {source_id!r} has no revision {revision!r} — released "
+            f"revisions are " + (", ".join(r.letter for r in source.revisions)
+                                 or "none yet"),
+            arg="revision")
+
+    node = {"type": derived_service.DERIVED_TYPE,
+            "name": args.get("name") or f"Derived from {source.name}",
+            "params": {"document_id": source_id, "revision": revision or None,
+                       "entities": list(args.get("entities") or []),
+                       "kind": kind}}
+    # Resolved before it is written, not after: "the source has no such
+    # feature" is then a refusal at the call that made the mistake rather than
+    # a warning on the next evaluation of a document that already stored it —
+    # and there is nothing to roll back. The id is not assigned yet and the
+    # graft does not need one to fail.
+    try:
+        derived_service.graft(node, owner_id=doc.owner_id, chain=(doc_id,))
+    except derived_service.DerivedError as exc:
+        raise PreconditionFailed(str(exc)) from exc
+
+    result = _combined(doc_id, node, args, f"derived {kind}")
+    return {**result, "document_id": source_id, "kind": kind,
+            "revision": revision or None,
+            "source_name": source.name}
+
+
+@operation("list_derived", "query",
+           "What this document reads from other documents, and what reads it. "
+           "Each reference says whether it still resolves and why not — a "
+           "source that was deleted, a named feature that is gone, a document "
+           "that is no longer shared. A body built from a reference that stops "
+           "resolving is the one failure mode of top-down design, and this is "
+           "where it is visible.",
+           {})
+def _list_derived(doc_id, args):
+    from app.services import derived_service
+
+    return derived_service.status(_get(doc_id))
 
 
 @operation("delete_feature", "mutate", "Remove a feature by id.",

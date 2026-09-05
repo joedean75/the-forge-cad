@@ -134,7 +134,7 @@ def add_primitive(tree: Dict[str, Any], primitive: Dict[str, Any], operation: st
     # return the *tool* as a solid and report success. That is the failure this
     # action space exists to make impossible, so it is refused here, where every
     # caller passes, rather than at each handler.
-    if operation == "subtract" and not has_solid(t) and primitive.get("type") not in BODYLESS_TYPES:
+    if operation == "subtract" and not has_solid(t) and not is_bodyless(primitive):
         raise PreconditionFailed(
             "there is no material to cut — this document has no body yet. Add a "
             "solid first (add_primitive, add_extrude, add_revolve), then subtract "
@@ -379,6 +379,11 @@ _SKETCH_CONSUMERS: Dict[str, Dict[str, Dict[str, str]]] = {
 SKETCH_TYPE = "SketchFeature"
 DATUM_PLANE_TYPE = "DatumPlaneFeature"
 MATE_CONNECTOR_TYPE = "MateConnectorFeature"
+#: Geometry read from another document. Named here rather than imported from
+#: `cad_kernel.ops.derived` because that package self-registers on import and
+#: this module is reached long before any feature is deserialized — one string,
+#: one definition, and `services/derived_service` reads it back from here.
+DERIVED_TYPE = "DerivedFeature"
 
 #: Features that live in the tree and contribute no material. All are pruned
 #: before evaluation, because nothing downstream — booleans, the mesher, the
@@ -399,9 +404,26 @@ def has_solid(tree: Optional[Dict[str, Any]]) -> bool:
     of nothing must fall back to the icon rather than render the 1 mm stand-in
     as a cube — which is the very starting block this replaced.
     """
-    return any(node.get("type") not in BODYLESS_TYPES
-               and not is_boolean(node)
+    return any(not is_bodyless(node) and not is_boolean(node)
                for node in walk_nodes(tree or {}))
+
+
+def is_bodyless(node: Dict[str, Any]) -> bool:
+    """Whether a node contributes no material.
+
+    Type alone answers it for every feature but one. A `DerivedFeature` is
+    whichever its source is: ``kind: "sketch"`` brings across an outline, which
+    is as bodyless as the sketch it stands for, and ``kind: "body"`` brings
+    across a solid. Reading the kind rather than the type is what keeps a
+    document holding only a derived sketch reporting *no body* instead of the
+    1 mm stand-in the evaluator is handed when a tree prunes to nothing.
+    """
+    node_type = node.get("type")
+    if node_type in BODYLESS_TYPES:
+        return True
+    if node_type == DERIVED_TYPE:
+        return ((node.get("params") or {}).get("kind") or "body") == "sketch"
+    return False
 
 # Feature types that can carry an ``on_face`` datum. A SketchFeature is here
 # because that is where the placement belongs once the sketch is its own thing —
@@ -455,8 +477,7 @@ def _sketches(t: Dict[str, Any]) -> Dict[str, Any]:
     # The early return is an optimisation over the common case, so it has to
     # test for *anything* this function removes, not just sketches — a document
     # of three datum planes has no sketches and very much needs pruning.
-    if not sketches and not any(node.get("type") in BODYLESS_TYPES
-                                for node in walk_nodes(t)):
+    if not sketches and not any(is_bodyless(node) for node in walk_nodes(t)):
         return t
 
     for node in walk_nodes(t):
@@ -473,7 +494,7 @@ def _sketches(t: Dict[str, Any]) -> Dict[str, Any]:
                     params[to_key] = copy.deepcopy(source[from_key])
 
     def prune(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if node.get("type") in BODYLESS_TYPES:
+        if is_bodyless(node):
             return None
         kids = children_of(node)
         if kids:
@@ -570,20 +591,39 @@ def _datums(t: Dict[str, Any]) -> Dict[str, Any]:
     return t
 
 
-def resolve_for_evaluation(tree: Dict[str, Any]) -> Dict[str, Any]:
-    """Suppression, then sketches, then datums — on **one** copy of the tree.
+def resolve_for_evaluation(tree: Dict[str, Any], derive=None,
+                           for_graft: bool = False) -> Dict[str, Any]:
+    """Suppression, then derived references, then sketches, then datums — on
+    **one** copy of the tree.
 
-    Each of the three defends itself by deep-copying its input, which is right
-    for a caller holding a document's own tree and wasteful three times in a
-    row: the second and third were copying a tree nobody else could still reach.
-    The stages themselves are unchanged and still run in the order they must
-    (see `document_service.resolved_tree`); only the copying is shared.
+    Each stage defends itself by deep-copying its input, which is right for a
+    caller holding a document's own tree and wasteful four times in a row: the
+    later ones were copying a tree nobody else could still reach. The stages are
+    unchanged and still run in the order they must (see
+    `document_service.resolved_tree`); only the copying is shared.
+
+    ``derive`` is a callable rather than an import because resolving a derived
+    reference means *loading another document*, and making this module the place
+    that does that would hand a datastore dependency to every caller holding a
+    bare tree. `document_service` supplies it and keeps the lookup where it
+    already lives.
+
+    ``for_graft`` is the form another document reads when it derives from this
+    one: everything resolved **except** sketches. They have to survive the trip,
+    because a `kind: "sketch"` reference needs one to pick and a grafted extrude
+    still names the sketch it consumes — so the consuming document's own sketch
+    stage does the substituting, once, where the geometry ends up.
 
     Not exported as the general entry point: `document_service.resolved_tree` is
     still the one place a document's evaluation tree is derived, because it also
     applies parameters and the active configuration.
     """
-    return _datums(_sketches(_suppressed(copy.deepcopy(tree))))
+    t = _suppressed(copy.deepcopy(tree))
+    if derive is not None:
+        t = derive(t)
+    if not for_graft:
+        t = _sketches(t)
+    return _datums(t)
 
 
 def ensure_ids(tree: Dict[str, Any]) -> Dict[str, Any]:

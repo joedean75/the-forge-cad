@@ -233,7 +233,41 @@ def _persist(doc: DesignDocument) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _evaluation_key(doc: DesignDocument, resolution: int) -> str:
+def _source_keys(doc: DesignDocument, resolution: int, chain: tuple) -> str:
+    """The evaluation identity of everything this document derives from.
+
+    This is the answer to the risk in-context design was flagged with:
+    `_evaluation_key` hashes what is *in* a document, and a derived document's
+    geometry is not. Recursive, so a parameter changed three documents upstream
+    invalidates this one — and guarded by `chain`, because a cycle must not turn
+    a cache lookup into an infinite descent even though `resolve` refuses it.
+
+    A reference pinned to a **revision** contributes `{id}@{letter}` instead of
+    the source's key. A released revision is an immutable snapshot, so it is
+    right that the parent moving does not rebuild the child — and reading the
+    live key there would rebuild it on every unrelated edit.
+    """
+    from app.services import derived_service
+
+    pairs = derived_service.dependencies(doc.feature_tree)
+    if not pairs:
+        return ""
+    parts = []
+    for source_id, revision in pairs:
+        if revision:
+            parts.append(f"{source_id}@{revision}")
+        elif source_id in chain:
+            parts.append(f"{source_id}:cycle")
+        else:
+            source = get_document(source_id)
+            parts.append(f"{source_id}:missing" if source is None
+                         else f"{source_id}:"
+                              f"{_evaluation_key(source, resolution, chain)}")
+    return "|".join(parts)
+
+
+def _evaluation_key(doc: DesignDocument, resolution: int,
+                    chain: tuple = ()) -> str:
     """Everything that changes what `evaluate_document` would produce.
 
     Not just the feature tree: a parameter value, the active configuration and
@@ -259,6 +293,9 @@ def _evaluation_key(doc: DesignDocument, resolution: int) -> str:
         # the very evaluation that produced it.
         json.dumps(dumped(doc.parameters, drop=("value",)), sort_keys=True, default=str),
         json.dumps(dumped(doc.configurations), sort_keys=True, default=str),
+        # What this document reads from other documents. Empty for the common
+        # case, and costing one tree walk to find that out.
+        _source_keys(doc, resolution, chain + (doc.id,)),
     ]
     return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
@@ -443,19 +480,49 @@ def _mesh_area(mesh) -> float:
     return float(0.5 * _np.linalg.norm(_np.cross(b - a, c - a), axis=1).sum())
 
 
-def resolved_tree(doc: DesignDocument) -> dict:
-    """The tree as it will actually be evaluated: suppression, datums, parameters.
+def resolved_tree(doc: DesignDocument, chain: tuple = ()) -> dict:
+    """The tree as it will actually be evaluated: suppression, derived
+    references, sketches, datums, parameters.
 
     Extracted because three call sites had grown their own copy of this
     sequence, and a fourth would silently diverge from the body the rest of the
     system computes.
+
+    ``chain`` is the documents already being resolved, outermost first. It is
+    threaded rather than tracked in a global because resolution can recurse —
+    a derived reference resolves *another* document's tree — and it is the check
+    that makes a cycle impossible rather than merely unlikely. Callers pass
+    nothing; the recursion passes the path it came by.
     """
+    return _resolved(doc, chain, for_graft=False)
+
+
+def graft_tree(doc: DesignDocument, chain: tuple = ()) -> dict:
+    """The form another document reads when it derives from this one.
+
+    Everything `resolved_tree` does except the sketch stage: sketches have to
+    survive the trip, because a ``kind: "sketch"`` reference needs one to pick
+    and a grafted extrude still names the sketch it consumes. The consuming
+    document's own sketch stage substitutes them, once, where the geometry ends
+    up — so there is still exactly one place that decides what a sketch means.
+    """
+    return _resolved(doc, chain, for_graft=True)
+
+
+def _resolved(doc: DesignDocument, chain: tuple, for_graft: bool) -> dict:
     from app.services import feature_ops
+
+    def derive(tree: dict) -> dict:
+        from app.services import derived_service
+
+        return derived_service.resolve(tree, owner_id=doc.owner_id,
+                                       chain=chain or (doc.id,))
 
     # Sketches are substituted before datums, so an extrude that adopted its
     # sketch's `on_face` is resolved by the one datum path rather than a second
     # copy of it.
-    active = feature_ops.resolve_for_evaluation(doc.feature_tree)
+    active = feature_ops.resolve_for_evaluation(doc.feature_tree, derive=derive,
+                                                for_graft=for_graft)
     if doc.parameters:
         from app.services import parameters
 

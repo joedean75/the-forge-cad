@@ -181,7 +181,7 @@ def test_a_trajectory_that_fails_to_reproduce_is_discarded(monkeypatch):
     """A demonstration that rebuilds the wrong part teaches the wrong thing."""
     doc_id = _built(("add_primitive", {"shape": "box"}))
     hashes = iter(["expected", "something-else"])
-    monkeypatch.setattr(decompiler, "_hash_tree_geometry", lambda *a, **k: next(hashes))
+    monkeypatch.setattr(decompiler, "_hash_document_geometry", lambda *a, **k: next(hashes))
 
     before = {r["id"] for r in trajectories.list_all()}
     outcome = decompiler.decompile_document(doc_id, resolution=32, record=True)

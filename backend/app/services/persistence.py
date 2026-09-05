@@ -276,6 +276,33 @@ def _rows_by_json_field(kind: str, field: str, value: str) -> List[dict]:
     return [json.loads(r) for r in rows]
 
 
+def documents_mentioning(needle: str) -> List[dict]:
+    """Document rows whose stored JSON contains `needle` as a substring.
+
+    Deliberately coarse, and the *cheap* half of a two-stage search: it runs in
+    SQL, so no feature tree is deserialized for a row that cannot match, and the
+    caller confirms every survivor by actually reading it. Used to find what
+    derives from a document — the reference lives inside a feature tree, which
+    is not a top-level field `_rows_by_json_field` could index.
+
+    `needle` is **bound**, unlike that function's JSON path, which has to be
+    interpolated; the wildcards are added here so a caller cannot smuggle its
+    own, and the LIKE metacharacters inside the value are escaped.
+    """
+    from sqlalchemy import text
+
+    if not needle:
+        return []
+    escaped = (needle.replace("\\", "\\\\")
+                     .replace("%", "\\%").replace("_", "\\_"))
+    sql = text("SELECT data FROM records WHERE kind = :kind "
+               "AND data LIKE :pattern ESCAPE '\\'")
+    with SessionLocal() as s:
+        rows = s.execute(sql, {"kind": _DOCUMENT,
+                               "pattern": f"%{escaped}%"}).scalars().all()
+    return [json.loads(r) for r in rows]
+
+
 def list_orders_for_document(document_id: str) -> List[dict]:
     """Orders for one document, filtered in SQL rather than loading every row."""
     return _rows_by_json_field(_ORDER, "document_id", document_id)

@@ -893,6 +893,40 @@ export interface DofReport {
   grounded: string[]
 }
 
+/**
+ * One reference this document makes to another document's geometry, from
+ * `list_derived`. `resolves` is the interesting half: a reference that works is
+ * invisible — the body is simply right — but a source that was deleted, had the
+ * named feature removed, or was un-shared leaves a document that still opens
+ * and no longer means what it says.
+ */
+export interface DerivedReference {
+  feature_id: string
+  name?: string | null
+  document_id: string
+  /** A released revision letter, or null to follow the source as it stands. */
+  revision?: string | null
+  kind: 'body' | 'sketch'
+  /** Feature ids in the *source*. Empty means its whole body. */
+  entities: string[]
+  resolves: boolean
+  reason?: string | null
+  source_name?: string | null
+}
+
+/** A document that reads this one, from `list_derived`. */
+export interface DerivedDependent {
+  document_id: string
+  name?: string | null
+  owner_id?: string | null
+  references: { revision?: string | null }[]
+}
+
+export interface DerivedReport {
+  derives_from: DerivedReference[]
+  used_by: DerivedDependent[]
+}
+
 /** A named coordinate frame on a part, from `list_mate_connectors`. */
 export interface MateConnector {
   connector_id: string

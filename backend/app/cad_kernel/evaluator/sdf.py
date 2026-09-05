@@ -949,6 +949,15 @@ def _sdf_import(f):
 # Feature type name -> builder. Keyed by name rather than class so this table
 # needs no imports and cannot drift from the feature registry; adding a feature
 # means adding one line here.
+def _sdf_derived(f) -> SDF:
+    from app.cad_kernel.ops.derived import DerivedNotResolved
+
+    raise DerivedNotResolved(
+        f"derived feature {getattr(f, 'id', '?')} reached the evaluator — it "
+        f"names geometry in document {getattr(f, 'document_id', '?')!r} and is "
+        f"resolved into that document's own features before evaluation")
+
+
 _SDF_BUILDERS = {
     "BoxFeature": _sdf_box,
     "SphereFeature": _sdf_sphere,
@@ -1014,6 +1023,12 @@ _SDF_BUILDERS = {
     # Same contract: a coordinate frame, pruned before evaluation, and this
     # entry exists to name it if the pruning is ever missed.
     "MateConnectorFeature": _sdf_datum_plane,
+    # A derived reference names geometry in *another* document, which
+    # `services/derived_service.resolve` splices in as ordinary features before
+    # anything evaluates. Same reason as the three above: reaching here means
+    # the resolution was skipped, and a builder that invented a body would hide
+    # that behind a part which is quietly not the one that was asked for.
+    "DerivedFeature": _sdf_derived,
 }
 
 

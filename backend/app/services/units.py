@@ -138,6 +138,11 @@ UNITLESS = frozenset({
     "template",
     # the purchased-parts listing: which portal an imported part came from
     "source",
+    # in-context design: the document a reference reads, which of its features
+    # it names, and which released revision it is pinned to. Ids and a letter,
+    # like `part_id` and `revision` above — `entities` is a list of ids, not of
+    # lengths, which is why it belongs here and not in `COMPONENTS`.
+    "document_id", "entities",
     # `mounting_pattern`: which named bolt pattern to drill. A name, like
     # `template` and `kind` above — the dimensions behind it are the catalog's.
     "pattern",
