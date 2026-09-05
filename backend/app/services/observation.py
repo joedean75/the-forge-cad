@@ -138,8 +138,12 @@ def summarize_assembly(asm) -> dict:
         "kind": "assembly",
         "name": asm.name,
         "components": components,
+        # `angle_deg` is in here because it is a pose an agent can change and
+        # then has to be able to read back — a state an operation moves and the
+        # observation does not show is one nothing can be trained against.
         "mates": [{"id": m.id, "type": m.type, "base": m.base, "moved": m.moved,
-                   "axis": m.axis, "offset_mm": m.offset_mm}
+                   "axis": m.axis, "offset_mm": m.offset_mm,
+                   "angle_deg": getattr(m, "angle_deg", 0.0)}
                   for m in (getattr(asm, "mates", []) or [])],
         "bbox_size_mm": _bbox_mm(getattr(asm, "bbox", None)),
     }

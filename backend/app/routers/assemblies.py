@@ -180,6 +180,7 @@ class AddMateRequest(BaseModel):
     base_face: str = "max"
     moved_face: str = "min"
     offset_mm: float = 0.0
+    angle_deg: float = 0.0
 
 
 @router.post("/{assembly_id}/mates", response_model=AssemblyDoc)

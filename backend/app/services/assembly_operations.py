@@ -36,6 +36,7 @@ _COMPONENT = {"type": "string", "required": True,
 # be accepted by the schema and have no degrees of freedom defined for it.
 from app.services.assembly_mates import (  # noqa: E402
     CONNECTOR_TYPES as _CONNECTOR_TYPES,
+    DRIVEN_ROTATION as _DRIVEN_ROTATION,
     MATE_TYPES as _MATE_TYPES_TUPLE,
 )
 
@@ -334,8 +335,10 @@ def _list_mates(asm_id, args):
            "the mate aligns two frames that live *in* the parts, which is the "
            "only way a part gets rotated into place: `revolute` is a hinge, "
            "`slider` a rail, `cylindrical` a shaft in a bearing, plus `planar`, "
-           "`ball` and `parallel`. Those six need a connector on each side. Use "
-           "`dof` afterwards to see what is still free.",
+           "`ball` and `parallel`. Those six need a connector on each side. "
+           "`angle_deg` positions the mate inside the rotation it leaves free — "
+           "a hinge has an angle — and `drive_mate` changes it afterwards "
+           "without rebuilding the mate. Use `dof` to see what is still free.",
            {"type": {"enum": _MATE_TYPES, "required": True,
                      "description": "which constraint to apply"},
             "base": {"type": "string", "required": True,
@@ -351,6 +354,12 @@ def _list_mates(asm_id, args):
             "offset_mm": {"type": "number", "default": 0.0, "unit": "mm",
                           "description": "gap held between the two faces, or "
                                          "along the connectors' shared axis"},
+            "angle_deg": {"type": "number", "default": 0.0, "unit": "deg",
+                          "description": "where the mate sits in the rotation it "
+                                         "leaves free, about the connectors' "
+                                         "shared axis. Only for a type that "
+                                         "leaves one free: "
+                                         + ", ".join(sorted(_DRIVEN_ROTATION))},
             "base_connector": {"type": "string",
                                "description": "mate connector on the base part, "
                                               "from list_mate_connectors"},
@@ -387,6 +396,15 @@ def _add_mate(asm_id, args):
                 f"see list_mate_connectors on that document",
                 arg=f"{side}_connector")
 
+    angle_deg = float(args.get("angle_deg", 0.0))
+    if angle_deg and mate_type not in _DRIVEN_ROTATION:
+        raise BadArgument(
+            f"a {mate_type} mate leaves no rotation free about its axis, so "
+            f"there is no angle to place it at — driving one would break the "
+            f"constraint rather than position the part inside it. "
+            f"{', '.join(sorted(_DRIVEN_ROTATION))} take an angle.",
+            arg="angle_deg")
+
     before = next((c.transform.translate.model_dump()
                    for c in asm.components if c.id == moved), None)
     updated = assembly_service.add_mate(asm_id, {
@@ -395,6 +413,7 @@ def _add_mate(asm_id, args):
         "base_face": args.get("base_face", "max"),
         "moved_face": args.get("moved_face", "min"),
         "offset_mm": float(args.get("offset_mm", 0.0)),
+        "angle_deg": angle_deg,
         "base_connector": base_connector,
         "moved_connector": moved_connector,
     })
@@ -411,13 +430,83 @@ def _add_mate(asm_id, args):
                               "mate_count": len(updated.mates),
                               "removes_dof": assembly_mates.removed(mate.type),
                               "leaves_free": {"rotational": rotational,
-                                              "translational": translational}}
+                                              "translational": translational},
+                              "angle_deg": mate.angle_deg,
+                              "drivable": mate.type in _DRIVEN_ROTATION}
     # A mate that positions nothing differently is the assembly-side version of
     # an edit that reports success and changes nothing. Say so rather than
     # leaving the caller to diff two transforms.
     if before is not None and before == after:
         result["note"] = ("the mate is satisfied where the part already was — "
                           "nothing moved")
+    return result
+
+
+@operation("drive_mate", "mutate",
+           "Move a joint through the travel its mate leaves free, and re-solve "
+           "every placement downstream of it. `angle_deg` swings the moved part "
+           "about the connectors' shared axis — a hinge opening, a gear "
+           "indexing, a servo horn turning — and `offset_mm` slides it along "
+           "that axis. This is a **pose**, not a constraint: the mate keeps the "
+           "degrees of freedom it had, so `dof` reads the same before and after. "
+           "An angle is refused on a mate type with no rotation free about its "
+           "axis, because there it would break the constraint rather than "
+           "position the part inside it.",
+           {"mate_id": {"type": "string", "required": True,
+                        "description": "mate id, from list_mates"},
+            "angle_deg": {"type": "number", "unit": "deg",
+                          "description": "rotation about the connectors' shared "
+                                         "axis. Absolute, not a increment."},
+            "offset_mm": {"type": "number", "unit": "mm",
+                          "description": "translation along that axis, or the "
+                                         "gap a bounding-box mate holds"}},
+           subject="assembly")
+def _drive_mate(asm_id, args):
+    asm = _assembly(asm_id)
+    mate_id = require(args, "mate_id")
+    mate = next((m for m in asm.mates if m.id == mate_id), None)
+    if mate is None:
+        raise BadArgument(f"no mate {mate_id!r} in this assembly", arg="mate_id")
+
+    angle = args.get("angle_deg")
+    offset = args.get("offset_mm")
+    if angle is None and offset is None:
+        raise BadArgument(
+            "nothing to drive — give 'angle_deg', 'offset_mm', or both",
+            arg="angle_deg")
+    if angle is not None and float(angle) != mate.angle_deg \
+            and mate.type not in _DRIVEN_ROTATION:
+        raise BadArgument(
+            f"a {mate.type} mate leaves no rotation free about its axis, so "
+            f"there is no angle to drive it to. "
+            f"{', '.join(sorted(_DRIVEN_ROTATION))} take an angle.",
+            arg="angle_deg")
+
+    before = next((c.transform for c in asm.components if c.id == mate.moved), None)
+    updated = assembly_service.update_mate(
+        asm_id, mate_id, {"angle_deg": angle, "offset_mm": offset})
+    if updated is None:
+        raise NoSuchDocument(f"no assembly {asm_id!r}")
+    driven = next(m for m in updated.mates if m.id == mate_id)
+    after = next((c.transform for c in updated.components if c.id == driven.moved), None)
+
+    result: Dict[str, Any] = {
+        "message": f"drove {driven.type} mate {mate_id} to "
+                   f"{driven.angle_deg:g} deg, {driven.offset_mm:g} mm",
+        "mate_id": mate_id, "type": driven.type,
+        "angle_deg": driven.angle_deg, "offset_mm": driven.offset_mm,
+        "moved": driven.moved,
+        # Driving picks a value inside a free degree of freedom; it does not
+        # spend one. Said on the result because the opposite is the natural
+        # assumption and it would make an agent think it had constrained
+        # something.
+        "removes_dof": 0,
+    }
+    if before is not None and after is not None \
+            and before.model_dump() == after.model_dump():
+        result["note"] = ("the part did not move — a mate with no connectors "
+                          "has no axis to drive about, or the value was "
+                          "already what it is now")
     return result
 
 

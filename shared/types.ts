@@ -864,6 +864,14 @@ export interface AssemblyMate {
   base_face: 'min' | 'max' | 'center'
   moved_face: 'min' | 'max' | 'center'
   offset_mm: number
+  /**
+   * Where the mate sits inside the rotation it leaves free, about the
+   * connectors' shared axis. A hinge has an angle; without this one a door
+   * could be mated and never opened. Only for a type that leaves a rotation
+   * about that axis free (revolute, cylindrical, planar, ball, parallel), and
+   * driving it does not consume the degree of freedom.
+   */
+  angle_deg: number
   /** Feature ids of a MateConnectorFeature in each part. Both or neither. */
   base_connector?: string | null
   moved_connector?: string | null

@@ -493,6 +493,16 @@ class AssemblyMate(BaseModel):
     base_face: Literal["min", "max", "center"] = "max"
     moved_face: Literal["min", "max", "center"] = "min"
     offset_mm: float = 0.0
+    #: Where the mate sits inside the rotation it leaves free, in degrees about
+    #: the connectors' shared axis. A revolute mate is a hinge, and a hinge has
+    #: a position; without this it always landed at the connectors' own
+    #: alignment, so a door could be mated but never opened. Only meaningful
+    #: for a connector mate whose type leaves a rotation about that axis free
+    #: (`assembly_mates.DRIVEN_ROTATION`) — anywhere else it would be a
+    #: violation of the constraint rather than a pose within it, and `add_mate`
+    #: refuses it. Driving it does **not** consume the degree of freedom: it
+    #: picks a value inside one.
+    angle_deg: float = 0.0
     #: Feature ids of a `MateConnectorFeature` in each part. Both or neither:
     #: one alone has nothing to align against, so the mate falls back to the
     #: bounding-box path and the caller is told rather than left guessing.

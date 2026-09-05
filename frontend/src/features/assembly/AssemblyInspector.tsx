@@ -51,7 +51,7 @@ export function MatesPanel({ components }: { components: AssemblyComponent[] }) 
   const usable = components.filter((c) => !c.missing)
   const [draft, setDraft] = useState<Omit<AssemblyMate, 'id'>>({
     type: 'coincident', base: '', moved: '', axis: 'z',
-    base_face: 'max', moved_face: 'min', offset_mm: 0,
+    base_face: 'max', moved_face: 'min', offset_mm: 0, angle_deg: 0,
   })
 
   const mates = assembly?.mates ?? []
