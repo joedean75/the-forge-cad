@@ -7,7 +7,7 @@ import { DatumPlanes } from './DatumPlanes'
 import { EmptyDocumentGuide } from './EmptyDocumentGuide'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { MeshLoader } from './MeshLoader'
-import { MoveHandles } from './MoveHandles'
+import { MoveHandles, movableCenter } from './MoveHandles'
 import { collectSnapPoints, collectProxies, findNode, geometryTree, pickFeatureAt, type FeatureProxy } from '../util/featureTree'
 import type { BBox, Dimension, Vector3, FeatureNode } from '../../../shared/types'
 
@@ -395,6 +395,10 @@ export function DocumentViewport() {
     void runOp('set_feature_params', { feature_id: selectedFeatureId, params: { [key]: next } })
   }
 
+  // Which param holds the selected feature's position, and what it is now. A
+  // feature with neither `center` nor `translate` has nothing to drag along.
+  const movable = movableCenter(selectedNode)
+
   const toggleMeasure = () => {
     setMeasuring((v) => !v)
     setPending(null)
@@ -464,12 +468,17 @@ export function DocumentViewport() {
           {fit && selectedNode && (
             <SelectionHighlight node={selectedNode} fit={fit} offset={dragOffset} />
           )}
-          {fit && selectedNode && !measuring && !sketchPick && (
+          {/* The preview moves the *selection outline*, not the body: one
+              feature is moving and the union of it with everything else is not
+              that mesh translated. The outline the selection already draws is
+              that feature, so it moves and the body follows on release. An
+              assembly is the other case — see `AssemblyViewport`. */}
+          {fit && movable && !measuring && !sketchPick && (
             <MoveHandles
-              node={selectedNode}
+              at={movable.at}
               fit={fit}
               onPreview={setDragOffset}
-              onCommit={moveFeature}
+              onCommit={(next) => moveFeature(movable.key, next)}
               setControlsEnabled={setOrbit}
             />
           )}
