@@ -289,10 +289,13 @@ export const api = {
     id: string,
     revision?: string,
     onProgress?: (job: ReleasePackageJob) => void,
+    /** `standard`, or `printed` to add the printability report and a
+     *  slicer-oriented drawing. A preset only ever adds files. */
+    preset?: string,
   ): Promise<ReleasePackageJob> => {
     const started = await fetchJson<ReleasePackageJob>(`/documents/${id}/package`, {
       method: 'POST',
-      body: JSON.stringify({ revision: revision ?? null }),
+      body: JSON.stringify({ revision: revision ?? null, preset: preset ?? 'standard' }),
     })
     onProgress?.(started)
     if (started.status !== 'running') return started

@@ -108,6 +108,11 @@ UNITLESS = frozenset({
     # `wheelbase`, `kingpin_track` and `arm` are lengths and carry an explicit
     # `unit` on their descriptors.
     "group", "pinion_teeth", "spur_teeth",
+    # manufacturing intent and printability: a machine name, a list of screw
+    # designations, a percentage, a drawing style and a boolean. Every length
+    # among them (`nozzle_mm`, `layer_mm`, `bed_mm`, `clearance_mm`,
+    # `margin_mm`) names its own unit and carries it explicitly.
+    "printer", "screws", "infill_percent", "style", "mechanism", "preset",
     # assembly operations: ids, constraint kinds and bounding-box extremes
     "part_id", "component_id", "mate_id", "type", "base", "moved",
     "base_face", "moved_face",

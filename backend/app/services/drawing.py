@@ -877,9 +877,15 @@ def generate_drawing(doc_id: str, section: bool = True,
     document_service.ensure_derived(doc)
 
     drawing_spec = DrawingSpec.from_dict(spec)
+    # `section` is the legacy shorthand: it adds a mid-body section when the
+    # caller said nothing about sections. A spec that *names* `sections` has
+    # said something — including an empty list, which means none. Without that
+    # last clause a preset declaring no section still got one, and "no section"
+    # was a thing the spec could not express at all.
+    stated_sections = isinstance(spec, dict) and "sections" in spec
     if spec is None and not section:
         drawing_spec.sections = []
-    elif not drawing_spec.sections and section:
+    elif not drawing_spec.sections and section and not stated_sections:
         drawing_spec.sections = [{"plane": "xz", "label": "A-A"}]
 
     field, lo, cell = _field(doc)

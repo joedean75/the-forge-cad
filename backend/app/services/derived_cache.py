@@ -237,6 +237,25 @@ def _spec(doc) -> str:
     return json.dumps(doc.spec or {}, sort_keys=True, default=str)
 
 
+def _released(doc) -> str:
+    """The letter a package would be built from, and the tree behind it.
+
+    The letter alone is not enough: `release_revision` can be called twice and
+    a package built from B is not a package built from the B that came after an
+    amendment. The tree is what the archive actually contains.
+    """
+    revisions = getattr(doc, "revisions", None) or []
+    if not revisions:
+        return ""
+    latest = revisions[-1]
+    return f"{latest.letter}:{tree_hash(latest.feature_tree)}"
+
+
+def _manufacturing(doc) -> str:
+    return json.dumps(getattr(doc, "manufacturing", None) or {}, sort_keys=True,
+                      default=str)
+
+
 class Product:
     """One derived product, and the document state it is a reading of.
 
@@ -279,6 +298,22 @@ PRODUCTS: Dict[str, Product] = {
     "drawing": Product(
         "drawing", (), ("spec",),
         "the projected drawing sheet"),
+    # A package is built from a *revision*, so the released letter and the tree
+    # behind it are inputs. It still starts from the geometry fingerprint like
+    # everything else, which is deliberate: a document edited after a release
+    # has a package that no longer describes what is on screen, and that is
+    # exactly the thing somebody needs to be told before they send it.
+    #
+    # The **preset is not** an input, unlike `dfm`'s process. An additive DFM
+    # report genuinely does not answer the milling question — the measurements
+    # differ. A `printed` package only *adds files* to a `standard` one; the
+    # facts in both are the same facts about the same revision. So a standard
+    # package is still a current reading, and "do I have a printed one" is
+    # answered by `manifest.preset` in the result rather than by calling a
+    # perfectly good package stale.
+    "package": Product(
+        "package", (_material, _released, _manufacturing), (),
+        "the handover zip for a released revision"),
 }
 
 

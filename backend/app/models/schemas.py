@@ -364,6 +364,16 @@ class DesignDocument(BaseModel):
     # arrow retyped onto a sheet is one that disagrees with the model the first
     # time somebody mirrors the part. See `services/mechanism`.
     mechanism: List[Dict[str, Any]] = []
+    # How the part is meant to be made: the process, the machine's assumptions
+    # (bed, nozzle, layer), the hardware it is designed around and any notes for
+    # whoever makes it.
+    #
+    # An *intention*, not a measurement — which is exactly why it has to be
+    # written down. A release package that does not state the nozzle it was
+    # designed for is a package whose wall-thickness numbers cannot be checked
+    # by the person receiving it. See `set_manufacturing` and
+    # `services/printability`.
+    manufacturing: Optional[Dict[str, Any]] = None
     # Named driving parameters/equations (feature 03); resolved into feature
     # params at evaluation. Ordered so later entries may reference earlier ones.
     parameters: List["DocumentParameter"] = []

@@ -42,6 +42,84 @@ _LOGGER = logging.getLogger(__name__)
 #: one of five renderers tripped is worse than one that says which is missing.
 CONTENTS = ("step", "pdf", "dxf", "stl")
 
+#: What a preset changes, and nothing else. `standard` is the package as it has
+#: always been. `printed` adds the two things a printed part is handed over with
+#: and a machined one is not — the printability report against the recorded
+#: machine, and a hardware list — and lays the drawing out for a slicer rather
+#: than a shop. It adds files; it never removes one, because a preset that
+#: dropped the STEP would be a package the receiver cannot open in CAD.
+PRESETS = ("standard", "printed")
+
+
+def _manufacturing(doc) -> Dict[str, Any]:
+    """The intent, or an honest statement that nobody recorded one.
+
+    Stated either way. A package that simply omits the field reads as "no
+    special requirements" when what it means is "nobody said", and those are
+    different instructions to whoever is making the part.
+    """
+    stored = getattr(doc, "manufacturing", None)
+    if not stored:
+        return {"recorded": False,
+                "note": ("no manufacturing intent was recorded on this part — "
+                         "process, printer, nozzle and hardware are the "
+                         "receiver's assumptions, not the designer's. Record "
+                         "them with set_manufacturing.")}
+    return {"recorded": True, **stored}
+
+
+def _hardware(doc) -> List[Dict[str, Any]]:
+    """The fasteners and bearings this part is assembled with.
+
+    Read off the document's own mechanism notes rather than from a second list,
+    for the reason `mechanism` exists at all: a hardware line typed into a
+    package is one that disagrees with the drawing the first time a hole size
+    changes. A part with no notes yields no lines, which is honest — it is not
+    the same as a part with no hardware, and the manifest says which.
+    """
+    from app.services import mechanism
+
+    rows: List[Dict[str, Any]] = []
+    for entry in getattr(doc, "mechanism", None) or []:
+        if entry.get("kind") not in ("hardware", "bearing"):
+            continue
+        rows.append({"item": len(rows) + 1, "kind": entry["kind"],
+                     "label": entry.get("label", ""),
+                     "designation": entry.get("designation") or "",
+                     "note": mechanism.describe(entry)})
+    return rows
+
+
+def _hardware_csv(lines: List[Dict[str, Any]]) -> str:
+    import csv
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["Item", "Kind", "Label", "Designation", "Note"])
+    for line in lines:
+        writer.writerow([line["item"], line["kind"], line["label"],
+                         line["designation"], line["note"]])
+    return buf.getvalue()
+
+
+def _printability(scratch) -> Dict[str, Any]:
+    """The machine check, or the reason there is not one.
+
+    Recorded rather than fatal, for the same reason a format that will not
+    render is: a body the exact kernel cannot address still has a STEP file
+    worth sending.
+    """
+    from app.services import printability
+
+    try:
+        settings = printability.settings_from(scratch)
+        return printability.check(
+            scratch.id, bed_mm=settings["bed_mm"], nozzle_mm=settings["nozzle_mm"],
+            layer_mm=settings["layer_mm"], screws=settings["screws"],
+            clearance_mm=settings["clearance_mm"])
+    except Exception as exc:  # noqa: BLE001 — recorded, never fatal
+        return {"unavailable": str(exc)}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -156,10 +234,16 @@ def _bom_csv(lines: List[Dict[str, Any]]) -> str:
 
 
 def build(doc_id: str, *, revision: Optional[str] = None, resolution: int = 128,
-          drawing_spec: Optional[dict] = None) -> Dict[str, Any]:
+          drawing_spec: Optional[dict] = None,
+          preset: str = "standard") -> Dict[str, Any]:
     """Assemble the release package. Returns the stored artifact's descriptor."""
     from app.services import artifacts, document_service as docs
-    from app.services.op_errors import NoSuchDocument
+    from app.services.op_errors import BadArgument, NoSuchDocument
+
+    preset = str(preset or "standard").strip().lower()
+    if preset not in PRESETS:
+        raise BadArgument(f"no package preset {preset!r}; one of "
+                          f"{', '.join(PRESETS)}", arg="preset")
 
     doc = docs.get_document(doc_id)
     if doc is None:
@@ -167,6 +251,16 @@ def build(doc_id: str, *, revision: Optional[str] = None, resolution: int = 128,
     rev = _revision(doc, revision)
 
     with _Snapshot(doc, rev, resolution) as scratch:
+        if drawing_spec is None and preset == "printed":
+            # The sheet a slicer's operator reads: footprint and height, no
+            # section. Built from the *snapshot*, so the callouts are the
+            # revision's notes rather than whatever the document says now.
+            from app.services import drawing_presets
+
+            try:
+                drawing_spec = drawing_presets.spec_for(scratch, "print")
+            except drawing_presets.PresetError:
+                drawing_spec = None
         included: List[Dict[str, Any]] = []
         missing: List[Dict[str, str]] = []
         files: Dict[str, bytes] = {}
@@ -185,6 +279,8 @@ def build(doc_id: str, *, revision: Optional[str] = None, resolution: int = 128,
 
         report = _spec_report(scratch)
         bom_lines = _bom(scratch)
+        hardware = _hardware(scratch)
+        printable = _printability(scratch) if preset == "printed" else None
         bbox = scratch.derived.bbox
         manifest = {
             "document_id": doc.id,
@@ -210,6 +306,16 @@ def build(doc_id: str, *, revision: Optional[str] = None, resolution: int = 128,
                 "z": round((bbox.max.z - bbox.min.z) * 1000, 3),
             },
             "spec_score": report.get("score"),
+            "preset": preset,
+            # Stated on every package, not only the printed one: the intended
+            # process and the machine assumptions are what make the wall and
+            # bore figures checkable by whoever receives them.
+            "manufacturing": _manufacturing(scratch),
+            "hardware_lines": len(hardware),
+            **({k: v for k, v in
+                (("printability_score", printable.get("score")),
+                 ("printability_unavailable", printable.get("unavailable")))
+                if v is not None} if printable is not None else {}),
             "contents": included,
             "unavailable": missing,
             "units": "STEP and the drawing are in millimetres",
@@ -222,8 +328,46 @@ def build(doc_id: str, *, revision: Optional[str] = None, resolution: int = 128,
                 archive.writestr(filename, payload)
             archive.writestr("spec-report.json", json.dumps(report, indent=2))
             archive.writestr("bom.csv", _bom_csv(bom_lines))
+            if hardware:
+                archive.writestr("hardware.csv", _hardware_csv(hardware))
+            if printable is not None:
+                archive.writestr("printability.json",
+                                 json.dumps(printable, indent=2, default=str))
         payload = buffer.getvalue()
 
     name = artifacts._safe_name(f"{doc.name}-rev{rev.letter}", "zip")
     stored = artifacts.store(doc_id, artifacts.Artifact(payload, "application/zip", name))
     return {"revision": rev.letter, "manifest": manifest, **stored}
+
+
+def file_result(doc_id: str, result: Dict[str, Any], preset: str = "standard") -> bool:
+    """Record a built package against the document, so the mode can say `current`.
+
+    Through `derived_cache.publish`, which refuses a result whose fingerprint
+    moved while the work ran — a package is minutes of work and an edit landing
+    in the middle of one is the normal case, not an error. What is filed is the
+    *URL*: the archive is an artifact with a content hash, and inlining a zip
+    into a document is the mistake P1 undid for the mesh.
+
+    Called from both doors — the operation and the job handler — because a
+    package built one way and a package built the other are the same package,
+    and a freshness answer that depended on which route was taken is the kind of
+    inconsistency `workflow` exists to remove.
+    """
+    from app.services import derived_cache, document_service as docs
+
+    doc = docs.get_document(doc_id)
+    if doc is None:
+        return False
+    kept = derived_cache.publish(
+        doc, "package",
+        {"revision": result.get("revision"), "preset": preset,
+         "url": result.get("url"), "bytes": result.get("bytes"),
+         "digest": result.get("digest"), "manifest": result.get("manifest", {})},
+        # No settings: the preset is not a fingerprint input — see the note on
+        # `PRODUCTS["package"]`. It rides in the payload, where a caller asking
+        # "do I have a printed package" can read it.
+        settings=None)
+    if kept:
+        docs.persist_derived(doc)
+    return kept

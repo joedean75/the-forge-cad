@@ -320,6 +320,13 @@ export interface DesignDocument {
    * model the first time somebody mirrored the part.
    */
   mechanism?: MechanismNote[]
+  /**
+   * How the part is meant to be made — process, printer assumptions, the
+   * hardware it is designed around. An intention, not a measurement, which is
+   * why it is recorded: a package that does not state its nozzle is one whose
+   * wall figures cannot be checked by whoever receives it.
+   */
+  manufacturing?: ManufacturingIntent | null
   /** Named driving parameters/equations (design intent). */
   parameters?: DocumentParameter[]
   /** Part-family variants overriding parameters. */
@@ -412,6 +419,21 @@ export interface ModeStatus {
   computed_at?: string
   /** Which prerequisites are missing, when the state is `blocked`. */
   missing?: string[]
+}
+
+/** The manufacturing assumptions a release package records. */
+export interface ManufacturingIntent {
+  process?: string
+  printer?: string | null
+  nozzle_mm?: number | null
+  layer_mm?: number | null
+  bed_mm?: { x: number; y: number; z: number } | null
+  infill_percent?: number | null
+  /** Screw sizes the part is designed around, e.g. `['M2.5']`. */
+  screws?: string[]
+  /** The printer's fit allowance on traps and counterbores, in mm. */
+  clearance_mm?: number | null
+  notes?: string
 }
 
 /** One statement about how the part moves. See `services/mechanism`. */

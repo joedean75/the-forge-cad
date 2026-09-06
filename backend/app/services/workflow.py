@@ -120,7 +120,13 @@ MODES: Dict[str, Mode] = {m.name: m for m in [
 ]}
 
 #: Not a mode but the same shape, and the one place a release is a prerequisite.
-PACKAGE = Mode("package", (BODY, RELEASE), None, ("release_package",),
+#:
+#: The material is a prerequisite rather than a nicety: the manifest states the
+#: mass and the one-line BOM is priced from it, so a package without one is a
+#: handover document with a blank where the part's weight goes. It carries the
+#: `package` product, so a package built and then edited past reports `stale`
+#: rather than sitting at `ready` looking like nothing has been done.
+PACKAGE = Mode("package", (BODY, MATERIAL, RELEASE), "package", ("release_package",),
                "the handover zip for a released revision")
 
 

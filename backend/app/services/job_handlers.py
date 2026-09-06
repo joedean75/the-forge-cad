@@ -152,9 +152,12 @@ def run_release_package(context: jobs.Context) -> dict:
     result = release_package.build(
         context.subject_id,
         revision=context.inputs.get("revision"),
-        drawing_spec=context.inputs.get("drawing_spec"))
+        drawing_spec=context.inputs.get("drawing_spec"),
+        preset=context.inputs.get("preset") or "standard")
     message = f"Revision {result['revision']} packaged"
     context.progress(1.0, message)
+    release_package.file_result(context.subject_id, result,
+                                context.inputs.get("preset") or "standard")
     # Named in the result, because that is where `jobs.run` reads the message it
     # stores on the job. A progress note is overwritten by the terminal
     # transition; only the returned dict survives it.

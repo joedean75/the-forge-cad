@@ -60,6 +60,13 @@ _AXIS = {**_VEC, "description": "direction to cut along; +Z by default"}
 #: constrained decoder can read rather than a value imported at build time.
 _MECHANISM_KINDS = ("shaft", "gear", "bearing", "hardware")
 
+#: Mirrored from `printability.PROCESSES` and `drawing_presets.STYLES` for the
+#: same reason as above: the enum a constrained decoder reads is a literal here,
+#: and a test asserts it still matches the module that owns it.
+_PRINT_PROCESSES = ("additive", "milling", "molding", "casting")
+_DRAWING_STYLES = ("shop", "print", "inspection")
+_PACKAGE_PRESETS = ("standard", "printed")
+
 _METRIC_SIZES = ("M2", "M2.5", "M3", "M4", "M5", "M6", "M8", "M10", "M12")
 # Same reasoning. The generated catalog only fills the first four; the rest
 # exist because an imported supplier part has to be filed somewhere, and
@@ -2335,6 +2342,162 @@ def _apply_template(doc_id, args):
             **outcome}
 
 
+@operation("set_manufacturing", "mutate",
+           "Record how this part is meant to be made: the process, the "
+           "printer's bed, nozzle and layer height, the screws it is designed "
+           "around and any notes. An intention rather than a measurement, which "
+           "is exactly why it is written down — a release package that does not "
+           "state the nozzle it was drawn for is one whose wall figures nobody "
+           "receiving it can check. `check_printability` and the release "
+           "manifest both read this, so the numbers cannot drift apart.",
+           {"process": {"enum": list(_PRINT_PROCESSES), "default": "additive",
+                        "description": "how the part is meant to be made"},
+            "printer": {"type": "string",
+                        "description": "a machine whose bed is known here "
+                                       "(ender-3, prusa-mk4, bambu-a1, "
+                                       "bambu-x1c, voron-v0), or give bed_mm"},
+            "bed_mm": {**_VEC, "unit": "mm",
+                       "description": "build volume, when the printer is not one "
+                                      "named above"},
+            "nozzle_mm": {"type": "number", "unit": "mm", "exclusiveMinimum": 0,
+                          "description": "sets the minimum printable wall: two "
+                                         "perimeters"},
+            "layer_mm": {"type": "number", "unit": "mm", "exclusiveMinimum": 0},
+            "infill_percent": {"type": "number",
+                               "description": "what the part was designed to be "
+                                              "printed at; it changes the strength, "
+                                              "not the geometry"},
+            "screws": {"type": "array",
+                       "description": "sizes the part is designed around, e.g. "
+                                      "[\"M2.5\"] — what the trap and counterbore "
+                                      "callouts are computed for"},
+            "clearance_mm": {"type": "number", "unit": "mm", "exclusiveMinimum": 0,
+                             "description": "your machine's fit allowance on traps "
+                                            "and counterbores"},
+            "notes": {"type": "string",
+                      "description": "anything the person making it needs"}})
+def _set_manufacturing(doc_id, args):
+    from app.services import printability
+
+    doc = _get(doc_id)
+    try:
+        record = printability.intent(
+            process=args.get("process", "additive"),
+            printer=args.get("printer"), nozzle_mm=args.get("nozzle_mm"),
+            layer_mm=args.get("layer_mm"), bed_mm=args.get("bed_mm"),
+            infill_percent=args.get("infill_percent"),
+            screws=args.get("screws") or (), clearance_mm=args.get("clearance_mm"),
+            notes=args.get("notes") or "")
+    except printability.PrintabilityError as exc:
+        raise BadArgument(str(exc)) from exc
+
+    doc.manufacturing = record
+    # Outside the evaluation key, so nothing rebuilds — and therefore this has
+    # to persist itself. `set_material` did not and lost the assignment on
+    # reload, intermittently, keyed on which two densities were involved.
+    document_service.persist_document(doc)
+    return {"message": f"recorded a {record['process']} intent",
+            "manufacturing": record}
+
+
+@operation("check_printability", "query",
+           "Measure the body against one printer: does it fit the bed in any "
+           "90-degree orientation (and if not, how many pieces it would take), "
+           "is the thinnest wall at least two perimeters, is the smallest bore "
+           "printable, is any cavity sealed. Also identifies every cylindrical "
+           "face — what it matches, a clearance hole or a bearing pocket or a "
+           "shaft bore — and gives the nut-trap and counterbore dimensions for "
+           "the declared screws. The checks are measurements of the body; the "
+           "hardware rows are dimensions to design to. Defaults come from "
+           "set_manufacturing.",
+           {"printer": {"type": "string",
+                        "description": "a machine whose bed is known here; "
+                                       "overrides the recorded one"},
+            "bed_mm": {**_VEC, "unit": "mm", "description": "build volume"},
+            "nozzle_mm": {"type": "number", "unit": "mm", "exclusiveMinimum": 0},
+            "layer_mm": {"type": "number", "unit": "mm", "exclusiveMinimum": 0},
+            "screws": {"type": "array",
+                       "description": "sizes to compute trap and counterbore "
+                                      "callouts for"},
+            "clearance_mm": {"type": "number", "unit": "mm", "exclusiveMinimum": 0},
+            "margin_mm": {"type": "number", "unit": "mm",
+                          "description": "keep-out at the bed edge; a skirt or a "
+                                         "purge tower is not free"}})
+def _check_printability(doc_id, args):
+    from app.services import printability
+
+    doc = _get(doc_id)
+    settings = printability.settings_from(doc)
+
+    bed = settings["bed_mm"]
+    if args.get("printer"):
+        known = printability.BEDS.get(str(args["printer"]).strip().lower())
+        if known is None:
+            raise BadArgument(
+                f"no published bed here for {args['printer']!r}; give bed_mm, or "
+                f"use one of: {', '.join(sorted(printability.BEDS))}", arg="printer")
+        bed = known
+    if args.get("bed_mm"):
+        try:
+            bed = tuple(float(args["bed_mm"][a]) for a in "xyz")
+        except (KeyError, TypeError, ValueError):
+            raise BadArgument("bed_mm needs x, y and z in millimetres",
+                              arg="bed_mm") from None
+
+    try:
+        return printability.check(
+            doc_id, bed_mm=bed,
+            nozzle_mm=float(args.get("nozzle_mm") or settings["nozzle_mm"]),
+            layer_mm=float(args.get("layer_mm") or settings["layer_mm"]),
+            screws=args.get("screws") or settings["screws"],
+            clearance_mm=float(args.get("clearance_mm") or settings["clearance_mm"]),
+            margin_mm=float(args.get("margin_mm", 5.0)))
+    except printability.PrintabilityError as exc:
+        raise BadArgument(str(exc)) from exc
+
+
+@operation("drawing_preset", "query",
+           "A ready-made DrawingSpec — the sheet a drafter would have laid out. "
+           "`shop` is three views, a section, the overall dimensions and every "
+           "mechanism note as a callout; `print` is the footprint and the "
+           "height with no section; `inspection` is all six views dimensioned. "
+           "It returns the spec, which you pass to generate_drawing or edit "
+           "first — it is not a second drawing pipeline, so it can only ask for "
+           "what the open spec could.",
+           {"style": {"enum": list(_DRAWING_STYLES), "default": "shop",
+                      "description": "which sheet to lay out"},
+            "mechanism": {"type": "boolean", "default": True,
+                          "description": "include the document's mechanism notes "
+                                         "as callouts"}})
+def _drawing_preset(doc_id, args):
+    from app.services import drawing_presets
+
+    doc = _get(doc_id)
+    document_service.ensure_derived(doc)
+    try:
+        spec = drawing_presets.spec_for(doc, args.get("style", "shop"),
+                                        mechanism=args.get("mechanism", True))
+    except drawing_presets.PresetError as exc:
+        raise BadArgument(str(exc)) from exc
+    return {"style": args.get("style", "shop"), "spec": spec,
+            "views": spec["views"], "dimensions": len(spec["dimensions"]),
+            "annotations": len(spec["annotations"]),
+            "message": "pass this as generate_drawing's `spec`"}
+
+
+@operation("list_drawing_presets", "query",
+           "What each drawing style lays out, and what is deliberately not "
+           "offered — an exploded view needs more than one body and belongs to "
+           "an assembly drawing; a detail bubble's region is the drafting "
+           "decision the open spec exists to keep with you.",
+           {})
+def _list_drawing_presets(doc_id, args):
+    from app.services import drawing_presets
+
+    _get(doc_id)
+    return drawing_presets.describe()
+
+
 @operation("list_rc_presets", "query",
            "The numbers a 1/16 RC build starts from: wheelbase and track bands, "
            "3 mm axle stock, MR105/MR115 bearings, M2/M2.5 hardware, module-0.6 "
@@ -2723,18 +2886,30 @@ def _export(doc_id, args):
 
 @operation("release_package", "query",
            "Build the handover package for a released revision: the exact STEP "
-           "solid, the drawing as PDF and DXF, the mesh, a one-line BOM, and the "
-           "score against the design spec — one zip, pinned to a revision letter. "
-           "Built from the revision snapshot, not from the document as it stands, "
-           "so it is a release rather than a screenshot. Needs a released "
+           "solid, the drawing as PDF and DXF, the mesh, a one-line BOM, the "
+           "manufacturing intent and the score against the design spec — one "
+           "zip, pinned to a revision letter. Built from the revision snapshot, "
+           "not from the document as it stands, so it is a release rather than "
+           "a screenshot. `preset: printed` adds the printability report "
+           "against the recorded machine and a hardware list, and lays the "
+           "drawing out for a slicer rather than a shop. Needs a released "
            "revision: call release_revision first.",
            {"revision": {"type": "string",
-                         "description": "revision letter, e.g. 'A'. Defaults to the latest released."}})
+                         "description": "revision letter, e.g. 'A'. Defaults to the latest released."},
+            "preset": {"enum": list(_PACKAGE_PRESETS), "default": "standard",
+                       "description": "`printed` adds a printability report and a "
+                                      "hardware list; it only ever adds files"}})
 def _release_package(doc_id, args):
     from app.services import release_package
 
     _get(doc_id)
-    return release_package.build(doc_id, revision=args.get("revision"))
+    preset = args.get("preset", "standard")
+    out = release_package.build(doc_id, revision=args.get("revision"), preset=preset)
+    # Filed against the document, the same as the job path does, so
+    # `workflow_status` reports the package `current` rather than `ready`
+    # depending on which door built it.
+    release_package.file_result(doc_id, out, preset)
+    return out
 
 
 @operation("release_revision", "mutate", "Cut an immutable released revision (next letter A/B/C…) from the current geometry.",

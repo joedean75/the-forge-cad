@@ -400,6 +400,10 @@ def get_document_artifact(
 class ReleasePackageRequest(BaseModel):
     revision: Optional[str] = None
     drawing_spec: Optional[dict] = None
+    #: "standard" or "printed" — the latter adds a printability report and a
+    #: hardware list, and lays the drawing out for a slicer. Validated in
+    #: `release_package.build`, which is the one place that knows the set.
+    preset: str = "standard"
 
 
 class ReleasePackageJob(BaseModel):
@@ -462,7 +466,8 @@ def start_release_package(
     try:
         job = job_service.enqueue(
             job_handlers.RELEASE_PACKAGE, doc.id,
-            {"revision": body.revision, "drawing_spec": body.drawing_spec},
+            {"revision": body.revision, "drawing_spec": body.drawing_spec,
+             "preset": body.preset},
             owner_id=doc.owner_id, message="Queued release package")
     except job_service.QueueFull as full:
         raise HTTPException(status_code=503, detail={

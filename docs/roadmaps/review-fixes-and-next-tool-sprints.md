@@ -2,7 +2,7 @@
 
 Repository: [joedean75/cad_system](https://github.com/joedean75/cad_system)
 Prepared: September 6, 2026
-Status: Fix Sprint and Tool Sprints 1-2 delivered; Tool Sprint 3 in progress
+Status: Delivered — Review Fix Sprint and Tool Sprints 1-3
 
 ## Goal
 
@@ -179,3 +179,41 @@ Demo: `apply_template rc_spur_pinion` gives a 65.2 × 55.6 × 4 mm plate bored a
 0 and 24 mm — the centre distance `gear_layout` computes for module 0.6, 16T and
 64T — carrying three mechanism notes, of which the two gears draw opposite
 rotation arrows on the sheet.
+
+### Tool Sprint 3 — delivered
+
+| Item | Where it landed |
+| --- | --- |
+| TOOL-11 | `release_package.build(preset="printed")` — adds the printability report against the recorded machine and lays the drawing out with `drawing_presets.spec_for(..., "print")`. A preset only ever *adds* files; the hardware list rides in both presets because it comes off the document's mechanism notes. |
+| TOOL-12 | `services/printability.py` — bed fit across the six 90-degree orientations (with a piece count and a named split axis when none fits), wall against two perimeters, smallest bore against the nozzle, trapped voids, and every cylindrical face identified as a bore or a boss with what it matches. |
+| TOOL-13 | `services/drawing_presets.py` — `shop` / `print` / `inspection`, reachable as `drawing_preset` and `list_drawing_presets`. |
+| TOOL-14 | `DesignDocument.manufacturing` and `set_manufacturing`; the release manifest states the intent on every preset, `recorded: false` with a remedy when there is none. |
+| TOOL-15 | `workflow.PACKAGE` gained the material as a prerequisite and the `package` derived product, so it answers `blocked` / `ready` / `queued` / `running` / `current` / `stale` / `failed` like the six modes. |
+
+Three decisions worth recording, because each is a place the obvious
+implementation is wrong:
+
+- **A cylinder's diameter does not say whether it is a pocket.** The first
+  report matched on diameter alone and called the outer surface of an axle
+  housing an MR148 bearing seat. The face's outward normal settles it — on a
+  bore it points at the axis.
+- **Nut traps are callouts, not checks.** Recognising a hexagonal pocket in a
+  B-rep is a heuristic that fails on exactly the parts where it matters, and a
+  wrong finding is worse than a stated dimension. The figures come from
+  `parts_catalog.METRIC` rather than a second transcription of ISO 4032.
+- **The package's preset is not a freshness input.** Unlike `dfm`'s process — an
+  additive report does not answer the milling question — a `printed` package
+  holds the same facts as a `standard` one plus two files, so calling a standard
+  package stale because somebody now wants a printed one would be a false
+  negative in the one vocabulary the editor uses for everything.
+
+Fixed on the way through: `generate_drawing`'s legacy `section=True` shorthand
+added a mid-body section whenever `spec.sections` was empty, so "no section" was
+something a `DrawingSpec` could not express. A spec that names `sections` — an
+empty list included — is now honoured.
+
+Demo: `rc_axle` with PLA and a Bambu A1 intent recorded, released as revision A
+and packaged with `preset: printed` — nine files including `printability.json`
+(80%, warning on the Ø10 mm nominal bearing pockets) and `hardware.csv` from the
+part's own mechanism notes. `workflow_status` reports the package `current`, and
+`stale` after the tube is lengthened.
