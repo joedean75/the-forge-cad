@@ -283,6 +283,26 @@ class Collaborator(BaseModel):
     added_at: str
 
 
+class AnalysisProduct(BaseModel):
+    """One derived reading of the body, with the inputs it was a reading *of*.
+
+    The panels used to hold these client-side and clear them on every edit,
+    which is right for the tab that made the edit and useless after a reload or
+    for a second viewer. Stored against the document with a fingerprint, the
+    question "is this report about the part I am looking at?" has one answer
+    that everybody gets — see `services/derived_cache`.
+    """
+
+    kind: str                       # analysis | dfm | cam | spec | drawing
+    #: `derived_cache.analysis_fingerprint` of the inputs that produced it.
+    fingerprint: str
+    computed_at: str
+    result: Dict[str, Any] = {}
+    #: True when the result was too large to carry inline. A drawing sheet or a
+    #: G-code program is an artifact with a URL, not a field on the document.
+    truncated: bool = False
+
+
 class DesignDocument(BaseModel):
     id: str
     name: str
@@ -338,6 +358,19 @@ class DesignDocument(BaseModel):
     # revisions (immutable letter snapshots) above working version history.
     lifecycle_state: Literal["draft", "in_review", "released", "obsolete"] = "draft"
     revisions: List["DocumentRevision"] = []
+    # How many times this document has been written. Bumped by every persisted
+    # mutation, including ones that cannot move the body (a rename, a material).
+    #
+    # Distinct from `derived.eval_key`, and the distinction is load-bearing: a
+    # revision counts *writes*, so two clients can tell they saw the same
+    # document and a write can refuse to land on a version it did not read; a
+    # fingerprint hashes *inputs*, so a rename does not recompute geometry.
+    # Conflating them makes either a rename rebuild the body or a lost update
+    # invisible.
+    revision: int = 0
+    # Derived readings of the body (FEA, DFM, CAM, spec), each carrying the
+    # fingerprint of the inputs that produced it. See `services/derived_cache`.
+    analysis: Dict[str, AnalysisProduct] = {}
 
 
 class DocumentParameter(BaseModel):
@@ -425,6 +458,10 @@ class UpdateDocumentRequest(BaseModel):
     feature_tree: Optional[dict] = None
     optimization: Optional[OptimizationSetup] = None
     resolution: int = Field(128, ge=32, le=512)
+    # The revision the caller read before making this edit. When given, the write
+    # is refused with 409 if the document has moved on — a whole-tree PUT is the
+    # write most likely to clobber somebody, because it replaces everything.
+    expected_revision: Optional[int] = None
 
 
 # --------------------------------------------------------------------------

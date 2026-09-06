@@ -14,8 +14,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import uuid
-from collections import OrderedDict
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, NamedTuple, Optional
 
@@ -31,7 +32,7 @@ from app.models.schemas import (
     OptimizationSetup,
     Vector3,
 )
-from app.services import persistence
+from app.services import derived_cache, instrumentation, persistence
 from app.cad_kernel.io.mesh_binary import write_mesh_binary
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,104 +40,24 @@ _LOGGER = logging.getLogger(__name__)
 # Default density used for mass estimates when no material is bound to a doc.
 _DEFAULT_DENSITY = 2700.0  # kg/m^3 (aluminium-like)
 
-class _LruCache(dict):
-    """A dict that forgets its least-recently-used entry past `capacity`.
-
-    Both geometry caches were plain dicts with no eviction: fine for a UI
-    session holding a handful of documents, a leak for a rollout loop that
-    touches thousands. Subclassing dict keeps `in`, `[]` and `.pop(k, default)`
-    working for the existing call sites (and the tests that reach into them)
-    rather than forcing an interface change through the codebase.
-
-    Bounded by *count*, not bytes: an evaluated solid's memory is a mesh whose
-    size depends on resolution, and an OCC shape's is not introspectable from
-    Python at all, so any byte figure would be invented.
-    """
-
-    def __init__(self, capacity: int):
-        super().__init__()
-        self._capacity = capacity
-        self._order: "OrderedDict[str, None]" = OrderedDict()
-
-    def __getitem__(self, key):
-        value = super().__getitem__(key)
-        self._order.move_to_end(key)
-        return value
-
-    def __setitem__(self, key, value):
-        super().__setitem__(key, value)
-        self._order[key] = None
-        self._order.move_to_end(key)
-        while len(self._order) > self._capacity:
-            oldest, _ = self._order.popitem(last=False)
-            super().pop(oldest, None)
-
-    def pop(self, key, *default):
-        self._order.pop(key, None)
-        return super().pop(key, *default)
-
-    def clear(self) -> None:
-        self._order.clear()
-        super().clear()
-
-
 # Process-local stores. Documents persist to disk; evaluated solids are cached
 # in memory only and re-derived lazily on restart.
 DOCUMENTS: Dict[str, DesignDocument] = {}
 
-_SOLID_CACHE_SIZE = 64
-_BREP_CACHE_SIZE = 64
+# The geometry caches and every fingerprint that decides what may be reused now
+# live in `services/derived_cache`, so "which edit invalidates which result" is
+# one file rather than five call sites. These are aliases, not copies: the
+# objects are the same ones, so `docs._SOLID_CACHE.pop(...)` in a caller or a
+# test still reaches the live cache.
+_SOLID_CACHE: Dict[str, Solid] = derived_cache.SOLIDS
+_BREP_CACHE: Dict[str, Any] = derived_cache.BREPS
+_MESH_CACHE: Dict[str, bytes] = derived_cache.MESHES
+_THUMBNAIL_CACHE: Dict[str, bytes] = derived_cache.THUMBNAILS
 
-_SOLID_CACHE: Dict[str, Solid] = _LruCache(_SOLID_CACHE_SIZE)
-
-# Exact bodies (an `ExactBody`: shape, entity tags, reference verdicts), keyed by
-# the hash of the *resolved* tree rather than the
-# document id. Resolving suppression, datums and parameters is milliseconds;
-# building the OpenCascade solid is not, and every topology-addressing
-# operation — list_faces, list_edges, fillet_edges, mass_properties, dfm,
-# verify_against_spec, the drawing path — used to rebuild it from the root. An
-# agent that lists edges, picks one and fillets it built the same body three
-# times.
-#
-# Keying on the resolved tree rather than on `doc_id` is the part that has to be
-# right: a stale exact body is far nastier than a slow one, because the geometry
-# silently stops agreeing with the document.
-_BREP_CACHE: Dict[str, Any] = _LruCache(_BREP_CACHE_SIZE)
-
-# Encoded meshes, keyed by `(doc_id, mesh_hash)`.
-#
-# Two reasons this exists rather than re-tessellating per request. It makes a
-# mesh GET a dict lookup instead of an evaluation. And it keeps a *superseded*
-# mesh available: the client is handed a URL with the current hash, and by the
-# time it asks, another edit may have landed — without this the viewport goes
-# blank on a 404 for geometry the server had a moment ago. The hash still names
-# exactly those triangles, which is the whole contract; nothing here weakens it,
-# it only extends how long the answer stays reachable.
-_MESH_CACHE_SIZE = 48
-_MESH_CACHE: Dict[str, bytes] = _LruCache(_MESH_CACHE_SIZE)
-
-
-def cache_mesh(doc_id: str, digest: str, payload: bytes) -> None:
-    _MESH_CACHE[f"{doc_id}:{digest}"] = payload
-
-
-def cached_mesh(doc_id: str, digest: str) -> Optional[bytes]:
-    return _MESH_CACHE.get(f"{doc_id}:{digest}")
-
-
-# Rendered library thumbnails, keyed the same way and for the same reason: a
-# thumbnail is a picture of *these* triangles. Smaller and longer-lived than the
-# meshes — a library view asks for a dozen at once and asks again on every visit.
-_THUMBNAIL_CACHE_SIZE = 256
-_THUMBNAIL_CACHE: Dict[str, bytes] = _LruCache(_THUMBNAIL_CACHE_SIZE)
-
-
-def cache_thumbnail(doc_id: str, digest: str, payload: bytes) -> None:
-    _THUMBNAIL_CACHE[f"{doc_id}:{digest}"] = payload
-
-
-def cached_thumbnail(doc_id: str, digest: str) -> Optional[bytes]:
-    return _THUMBNAIL_CACHE.get(f"{doc_id}:{digest}")
+cache_mesh = derived_cache.cache_mesh
+cached_mesh = derived_cache.cached_mesh
+cache_thumbnail = derived_cache.cache_thumbnail
+cached_thumbnail = derived_cache.cached_thumbnail
 
 
 def _now() -> str:
@@ -206,9 +127,50 @@ def _default_tree_dict() -> dict:
 EPHEMERAL: set = set()
 
 
-def _persist(doc: DesignDocument) -> None:
+class RevisionConflict(Exception):
+    """A write was made against a revision the document has moved past.
+
+    Not an `OperationError`: it is not the caller's *arguments* that are wrong,
+    it is that somebody else wrote in between. The caller's move is to re-read
+    and decide, which is a different remedy from anything in `op_errors` — so
+    the operation layer wraps it in a `PRECONDITION` carrying both numbers, and
+    the router answers 409.
+    """
+
+    def __init__(self, doc_id: str, expected: int, actual: int):
+        super().__init__(
+            f"document {doc_id} is at revision {actual}, not {expected}; "
+            f"re-read it and re-apply the change")
+        self.doc_id = doc_id
+        self.expected = expected
+        self.actual = actual
+
+
+def check_revision(doc: DesignDocument, expected: Optional[int]) -> None:
+    """Refuse a write whose author had not seen the document's current state.
+
+    Optional, and unenforced when omitted: the great majority of writes are one
+    editor in one tab and demanding a revision from every caller would be
+    ceremony. It is the callers that *can* collide — two browser tabs, a
+    collaborator, an agent running against a document a human is also editing —
+    that pass one, and for them a silent lost update is the failure mode with no
+    other defence.
+    """
+    if expected is None:
+        return
+    if doc.revision != expected:
+        raise RevisionConflict(doc.id, expected, doc.revision)
+
+
+def _persist(doc: DesignDocument, *, bump: bool = True) -> None:
     if doc.id in EPHEMERAL:
         return
+    # Every persisted write moves the revision. Bumped here rather than at each
+    # mutator because there are a dozen of those and one of them would be
+    # forgotten — and a revision that is *sometimes* current is worse than none,
+    # since an expected-revision check would then pass on a stale read.
+    if bump:
+        doc.revision += 1
     try:
         data = doc.model_dump()
         # `mesh_url` is now a short hash-keyed URL rather than megabytes of
@@ -229,6 +191,67 @@ def _persist(doc: DesignDocument) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Serializing writes to one document
+# ---------------------------------------------------------------------------
+
+_LOCK_REGISTRY_GUARD = threading.Lock()
+_DOC_LOCKS: Dict[str, "list"] = {}
+
+
+@contextmanager
+def writing(doc_id: str):
+    """Hold the write lock for one document.
+
+    An expected-revision check is only worth anything if the check and the write
+    it guards cannot be separated. Without this they can: two edits arriving
+    together both read revision 3, both pass, both apply, and both report
+    revision 4 — so a caller chaining `expected_revision` is handed a number
+    that was never the one its own write produced, and the next call fails for
+    a reason that looks like somebody else's edit.
+
+    Per document, not global: two people editing two parts have nothing to
+    serialize, and a single lock would put every evaluation in the process on
+    one queue. Reentrant, because an operation handler may call back into
+    another write on the same document.
+
+    The registry is reference-counted rather than capped. A capped one evicts
+    the lock a caller is *currently holding* under enough document churn, and
+    the next arrival then makes a fresh lock and walks straight into the
+    critical section — mutual exclusion lost exactly when the system is busiest,
+    which is not a trade worth a bounded dict for.
+    """
+    with _LOCK_REGISTRY_GUARD:
+        entry = _DOC_LOCKS.get(doc_id)
+        if entry is None:
+            entry = _DOC_LOCKS[doc_id] = [threading.RLock(), 0]
+        entry[1] += 1
+        lock = entry[0]
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+        with _LOCK_REGISTRY_GUARD:
+            entry = _DOC_LOCKS.get(doc_id)
+            if entry is not None:
+                entry[1] -= 1
+                if entry[1] <= 0:
+                    _DOC_LOCKS.pop(doc_id, None)
+
+
+def persist_derived(doc: DesignDocument) -> None:
+    """Save a *reading* of the document without counting it as a write.
+
+    Filing a DFM report or a spec score is not an edit: the part did not change,
+    and a caller holding `expected_revision` from a moment ago has not been
+    overtaken by somebody running an analysis. Bumping the revision for it would
+    make every query a source of spurious 409s on a shared document — which is
+    the failure that makes people stop passing the revision at all.
+    """
+    _persist(doc, bump=False)
+
+
+# ---------------------------------------------------------------------------
 # Evaluation
 # ---------------------------------------------------------------------------
 
@@ -236,31 +259,13 @@ def _persist(doc: DesignDocument) -> None:
 def _evaluation_key(doc: DesignDocument, resolution: int) -> str:
     """Everything that changes what `evaluate_document` would produce.
 
-    Not just the feature tree: a parameter value, the active configuration and
-    the resolution all move the body without touching a single node. Anything
-    missing here becomes a stale mesh served under a fresh hash, which is the
-    one failure a cache must not have — so this is deliberately generous, and
-    excludes only what provably cannot change geometry (the material, the name,
-    the spec).
+    The definition lives in `derived_cache` now, alongside the per-product
+    fingerprints that build on it — a downstream reading that hashed the
+    geometry differently from the geometry cache would disagree about staleness
+    in exactly the cases that matter. This name stays because it is the one the
+    evaluation path and its tests read.
     """
-    def dumped(models, drop=()):
-        # The whole model, minus named outputs. Listing the fields to *include*
-        # is how a later schema addition silently stops being part of the key,
-        # so this inverts it: everything counts unless it is provably derived.
-        return [{k: v for k, v in m.model_dump().items() if k not in drop}
-                for m in (models or [])]
-
-    parts = [
-        _hash_tree(doc.feature_tree),
-        str(resolution),
-        doc.active_configuration or "",
-        # `value` is the *resolved* number this function's caller is about to
-        # write back, not an input — including it would invalidate the key on
-        # the very evaluation that produced it.
-        json.dumps(dumped(doc.parameters, drop=("value",)), sort_keys=True, default=str),
-        json.dumps(dumped(doc.configurations), sort_keys=True, default=str),
-    ]
-    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+    return derived_cache.geometry_fingerprint(doc, resolution)
 
 
 def _numeric_tree(doc: DesignDocument) -> Optional[dict]:
@@ -334,11 +339,20 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
         return doc
     if (doc.derived.eval_key == key and doc.derived.mesh_url and not doc.derived.error
             and doc.id in _SOLID_CACHE):
+        instrumentation.count("eval.cache_hit")
+        mass_before = doc.derived.mass
         _refresh_mass(doc)
-        doc.updated_at = _now()
-        if persist:
-            _persist(doc)
+        # A re-evaluation that changed nothing is not a write. It used to persist
+        # anyway — a new `updated_at` and, now, a new revision — so merely
+        # *looking* at a document through a path that ensures geometry would
+        # invalidate somebody else's optimistic write. Mass is the one derived
+        # number a material moves, so it is the one thing worth writing for.
+        if doc.derived.mass != mass_before:
+            doc.updated_at = _now()
+            if persist:
+                _persist(doc)
         return doc
+    instrumentation.count("eval.cache_miss")
     try:
         if doc.parameters:
             # Evaluating is also when a driving parameter's computed value is
@@ -353,14 +367,19 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
                 cfg = next((c for c in doc.configurations if c.name == doc.active_configuration), None)
                 if cfg:
                     overrides = cfg.overrides
-            _, resolved = parameters.resolve_values(doc.parameters, overrides)
+            with instrumentation.span("eval.parameters"):
+                _, resolved = parameters.resolve_values(doc.parameters, overrides)
             for p, rd in zip(doc.parameters, resolved):
                 p.value = rd.get("value")
-        active = resolved_tree(doc)
+        with instrumentation.span("eval.resolve_tree"):
+            active = resolved_tree(doc)
         tree = FeatureTree.from_dict(active)
         sampler = Kernel.sampler_for(tree.root)
-        solid = Kernel.evaluate_tree(tree, resolution=resolution)
-        mesh = Kernel.tessellate(solid)
+        instrumentation.count(f"sampler.{sampler}")
+        with instrumentation.span("eval.kernel"):
+            solid = Kernel.evaluate_tree(tree, resolution=resolution)
+        with instrumentation.span("eval.tessellate"):
+            mesh = Kernel.tessellate(solid)
 
         volume = abs(float(mesh_volume(mesh.vertices, mesh.faces))) if len(mesh.faces) else 0.0
         bbox = None
@@ -378,13 +397,16 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
         from app.services import picking
 
         digest = mesh_hash(mesh)
+        instrumentation.gauge("mesh.triangles", len(mesh.faces) if mesh.faces is not None else 0)
         # Provenance rides with the triangles rather than being re-derived on
         # demand: on the exact path it is a by-product of the tessellation that
         # just ran, and re-deriving it would mean meshing the body twice.
-        cache_mesh(doc.id, digest,
-                   write_mesh_binary(mesh,
-                                     picking.owners_for(solid, mesh, active, resolution),
-                                     picking.face_ids_for(solid, mesh)))
+        with instrumentation.span("eval.mesh_encode"):
+            encoded = write_mesh_binary(mesh,
+                                        picking.owners_for(solid, mesh, active, resolution),
+                                        picking.face_ids_for(solid, mesh))
+        instrumentation.gauge("mesh.bytes", len(encoded))
+        cache_mesh(doc.id, digest, encoded)
         doc.derived = DerivedCache(
             solid_hash=tree_hash,
             eval_key=key,
@@ -863,10 +885,12 @@ def update_document(
     feature_tree: Optional[dict] = None,
     optimization: Optional[OptimizationSetup] = None,
     resolution: int = 128,
+    expected_revision: Optional[int] = None,
 ) -> Optional[DesignDocument]:
     doc = get_document(doc_id)
     if doc is None:
         return None
+    check_revision(doc, expected_revision)
 
     tree_changed = False
     if name is not None:
@@ -889,7 +913,10 @@ def update_document(
 
 def delete_document(doc_id: str) -> bool:
     DOCUMENTS.pop(doc_id, None)
-    _SOLID_CACHE.pop(doc_id, None)
+    # Meshes and thumbnails are keyed by `(doc_id, hash)`, so dropping the solid
+    # alone left them resident until they aged out — and reachable, since the
+    # route only checks that the *caller* may read the document it no longer is.
+    derived_cache.forget_document(doc_id)
     return persistence.delete_document(doc_id)
 
 

@@ -218,13 +218,21 @@ def get_document(doc: DesignDocument = Depends(readable_document)):
 def update_document(
     body: UpdateDocumentRequest, doc: DesignDocument = Depends(editable_document)
 ):
-    return docs.update_document(
-        doc.id,
-        name=body.name,
-        feature_tree=body.feature_tree,
-        optimization=body.optimization,
-        resolution=body.resolution,
-    )
+    try:
+        return docs.update_document(
+            doc.id,
+            name=body.name,
+            feature_tree=body.feature_tree,
+            optimization=body.optimization,
+            resolution=body.resolution,
+            expected_revision=body.expected_revision,
+        )
+    except docs.RevisionConflict as conflict:
+        # 409, with both numbers: a client that only learns "conflict" has to
+        # re-read to find out how far behind it was, and the answer is already here.
+        raise HTTPException(status_code=409, detail={
+            "code": "REVISION_CONFLICT", "message": str(conflict),
+            "expected": conflict.expected, "actual": conflict.actual})
 
 
 @router.post("/{doc_id}/evaluate", response_model=DesignDocument)

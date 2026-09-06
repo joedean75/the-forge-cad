@@ -251,13 +251,27 @@ def _subtree_key(feature) -> Optional[str]:
     return recorder.subtree_keys.get(id(feature))
 
 
+def _instrument():
+    """The instrumentation module, imported lazily.
+
+    `cad_kernel` is the pure geometry layer and imports nothing from `services`
+    at module scope; a counter is not a reason to invert that. The import is a
+    dict lookup in `sys.modules` after the first call.
+    """
+    from app.services import instrumentation
+
+    return instrumentation
+
+
 def _reuse(key: Optional[str]):
     """A cached shape, re-registered on the running build, or ``None``."""
     if key is None:
         return None
     entry = _NODE_CACHE.get(key)
     if entry is None:
+        _instrument().count("brep_node.miss")
         return None
+    _instrument().count("brep_node.hit")
     _NODE_CACHE.move_to_end(key)
     shape, entities, reports = entry
     recorder = _RECORDER.get()

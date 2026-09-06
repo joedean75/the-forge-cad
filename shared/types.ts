@@ -294,6 +294,39 @@ export interface DesignDocument {
   /** Revision & release (feature 09). */
   lifecycle_state?: 'draft' | 'in_review' | 'released' | 'obsolete'
   revisions?: DocumentRevisionMeta[]
+  /**
+   * How many times this document has been written — bumped by every persisted
+   * mutation, including ones that cannot move the body (a rename, a material).
+   *
+   * Pass it back as `expected_revision` on a write to get a 409 instead of
+   * silently overwriting a change you never saw. Distinct from
+   * `derived.eval_key`, which hashes the *inputs an evaluation reads*: a rename
+   * moves the revision and not the fingerprint, which is what stops renaming a
+   * part from rebuilding its body. See docs/FINGERPRINTS.md.
+   */
+  revision?: number
+  /** Derived readings of the body, each carrying the fingerprint of the inputs
+   *  that produced it. Keyed by kind: analysis | dfm | cam | spec | drawing. */
+  analysis?: Record<string, AnalysisProduct>
+}
+
+/**
+ * One stored reading of the body, and what it was a reading *of*.
+ *
+ * The panels used to hold these client-side and clear them on every edit, which
+ * is right for the tab that made the edit and useless after a reload or for a
+ * second viewer. Stored against the document with a fingerprint, "is this report
+ * about the part I am looking at?" has one answer that everybody gets.
+ */
+export interface AnalysisProduct {
+  kind: string
+  /** `derived_cache.analysis_fingerprint` of the inputs that produced it. */
+  fingerprint: string
+  computed_at: string
+  result: Record<string, unknown>
+  /** True when the result was too large to carry inline — a drawing sheet or a
+   *  G-code program is an artifact with a URL, not a field on the document. */
+  truncated?: boolean
 }
 
 /** What the part is supposed to be. Every kind is something the kernel can

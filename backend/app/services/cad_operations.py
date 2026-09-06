@@ -247,6 +247,45 @@ def _get(doc_id: str):
     return doc
 
 
+def _load_case_digest(doc) -> list:
+    """The loads and supports a solve reads, as plain data for a fingerprint.
+
+    They live on `document.optimization`, which is a whole setup object — most
+    of it (volume fraction, objective, keep regions) is about a SIMP run and
+    changes nothing about a linear-static solve. Fingerprinting the whole thing
+    would call a stress report stale because somebody moved a slider that FEA
+    never looks at.
+    """
+    setup = getattr(doc, "optimization", None)
+    if setup is None:
+        return []
+    return [lc.model_dump() for lc in (setup.load_cases or [])]
+
+
+def _record(doc, kind: str, result: dict, *, resolution: int,
+            settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """File a derived reading against the document and stamp the result.
+
+    Two things come back to the caller that the raw report cannot carry: the
+    fingerprint of the inputs it was a reading of, and whether it is still
+    current. Before this the answer lived only in the browser tab that ran the
+    analysis — cleared on the next edit, and simply absent after a reload or for
+    a second viewer, who saw a report with no way to tell what it was about.
+
+    The fingerprint is taken *before* the work in the callers that take time
+    (see `derived_cache.publish`); here the work has already finished
+    synchronously, so the document cannot have moved underneath it.
+    """
+    from app.services import derived_cache
+
+    derived_cache.publish(doc, kind, result, resolution=resolution, settings=settings)
+    document_service.persist_derived(doc)
+    product = derived_cache.held(doc, kind)
+    return {**result,
+            "fingerprint": product.fingerprint,
+            "computed_at": product.computed_at}
+
+
 # ── handlers ──
 
 @operation("list_features", "query", "List all features in the document (id, type, name).",
@@ -1746,17 +1785,23 @@ def _dfm(doc_id, args):
     build a part but never check whether it could be made."""
     from app.services import document_analysis
 
-    _get(doc_id)  # typed NoSuchDocument rather than the router's HTTPException
+    doc = _get(doc_id)  # typed NoSuchDocument rather than the router's HTTPException
     process = str(args.get("process", "additive"))
+    build_axis = str(args.get("build_axis", "auto"))
+    resolution = int(args.get("resolution", 128))
     try:
         report = document_analysis.dfm_document(
-            doc_id, build_axis=str(args.get("build_axis", "auto")),
-            resolution=int(args.get("resolution", 128)), process=process)
+            doc_id, build_axis=build_axis, resolution=resolution, process=process)
     except ValueError as exc:
         # "this part has no exact form" is a different previous step, not a
         # different argument — model it the way the rest of the catalog does.
         raise PreconditionFailed(str(exc)) from exc
-    return report.model_dump()
+    # The *requested* process, not `report.process` — that one is a display
+    # label ('LPBF', 'MILLING'), so fingerprinting on it would make an additive
+    # report and a milling report indistinguishable to the freshness check.
+    return _record(doc, "dfm", report.model_dump(), resolution=resolution,
+                   settings={"process": process, "build_axis": build_axis,
+                             "resolution": resolution})
 
 
 @operation("simulate", "query", "Linear-static FEA: von Mises stress, displacement and safety factor "
@@ -1776,10 +1821,14 @@ def _simulate(doc_id, args):
     belongs in the action space, and the result says which one produced it."""
     from app.services import document_analysis
 
-    _get(doc_id)
-    return document_analysis.analyse_document(
-        doc_id, resolution=int(args.get("resolution", 128)),
-        elements=int(args["elements"]) if args.get("elements") else None)
+    doc = _get(doc_id)
+    resolution = int(args.get("resolution", 128))
+    elements = int(args["elements"]) if args.get("elements") else None
+    report = document_analysis.analyse_document(
+        doc_id, resolution=resolution, elements=elements)
+    return _record(doc, "analysis", report, resolution=resolution,
+                   settings={"elements": elements,
+                             "load_cases": _load_case_digest(doc)})
 
 
 @operation("verify_toolpath", "query",
@@ -1991,9 +2040,11 @@ def _verify_against_spec(doc_id, args):
 
     doc = _get(doc_id)
     try:
-        return design_spec.verify(doc)
+        report = design_spec.verify(doc)
     except design_spec.SpecError as exc:
         raise PreconditionFailed(str(exc))
+    return _record(doc, "spec", report,
+                   resolution=doc.derived.resolution or 128)
 
 
 @operation("list_standard_parts", "query",
@@ -2539,6 +2590,7 @@ def execute(
     include_state: bool = True,
     rollback_on_eval_error: bool = False,
     rationale: str = "",
+    expected_revision: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run one operation and return a full result envelope. Never raises.
 
@@ -2561,7 +2613,7 @@ def execute(
     document is always in a valid state and there are no absorbing failure
     states. Off by default because it would break the parametric workflow above.
     """
-    from app.services import observation, trajectories
+    from app.services import trajectories
 
     started = time.perf_counter()
 
@@ -2576,6 +2628,34 @@ def execute(
         trajectories.record_step(op_name, doc_id, args, env, rationale=rationale)
         return env
 
+    # Mutating operations run under the document's write lock, so the
+    # expected-revision check and the write it guards cannot be separated.
+    # Without that they can be: two edits arriving together both read revision
+    # 3, both pass the check, both apply, and both report revision 4 — handing a
+    # caller that chains `expected_revision` a number its own write never
+    # produced. Queries take no lock; they only read.
+    if op.kind == "mutate":
+        with document_service.writing(doc_id):
+            return _apply(op, op_name, doc_id, args, started,
+                          include_state=include_state,
+                          rollback_on_eval_error=rollback_on_eval_error,
+                          rationale=rationale, expected_revision=expected_revision)
+    return _apply(op, op_name, doc_id, args, started,
+                  include_state=include_state,
+                  rollback_on_eval_error=rollback_on_eval_error,
+                  rationale=rationale, expected_revision=expected_revision)
+
+
+def _apply(op, op_name: str, doc_id: str, args: Dict[str, Any] | None,
+           started: float, *, include_state: bool, rollback_on_eval_error: bool,
+           rationale: str, expected_revision: Optional[int]) -> Dict[str, Any]:
+    """`execute`'s body, so the mutating path can be wrapped in one lock.
+
+    Split out purely to keep the critical section a `with` block rather than
+    ninety lines of re-indented code — the flow is unchanged.
+    """
+    from app.services import trajectories
+
     subject = _SUBJECTS[op.subject]
     doc = subject.fetch(doc_id)
     if doc is None:
@@ -2585,6 +2665,24 @@ def execute(
         return env
 
     mutates = op.kind == "mutate"
+    if mutates and expected_revision is not None:
+        # Checked here, before the handler runs, rather than inside each of the
+        # sixty mutators. A conflict means the caller wrote against a document
+        # somebody else has since moved; the fix is to re-read and decide, not
+        # to change an argument, which is what makes PRECONDITION the right code
+        # and its remedy the right advice.
+        actual = getattr(doc, "revision", 0)
+        if actual != expected_revision:
+            env = {
+                "ok": False, "op": op_name, "result": {}, "warnings": [],
+                "error": PreconditionFailed(
+                    f"{op.subject} {doc_id} is at revision {actual}, not "
+                    f"{expected_revision}; it changed since you read it — "
+                    f"re-read it and re-apply the change").to_dict(),
+                "revision": actual,
+            }
+            trajectories.record_step(op_name, doc_id, args, env, rationale=rationale)
+            return env
     before = subject.snapshot(doc)
     obs_before = subject.summarize(doc)
     # Only a mutating op can need rolling back, and only then is the copy worth it.
@@ -2594,10 +2692,11 @@ def execute(
         return round((time.perf_counter() - started) * 1000, 2)
 
     try:
-        from app.services import op_schema
+        from app.services import instrumentation, op_schema
 
         op_schema.validate(op.params, args, op=op_name)
-        result = op.handler(doc_id, args or {})
+        with instrumentation.span(f"op.{op_name}"):
+            result = op.handler(doc_id, args or {})
     except Exception as exc:  # noqa: BLE001 — classified, never swallowed
         err = _as_operation_error(exc)
         if isinstance(err, InternalError):
@@ -2656,6 +2755,11 @@ def execute(
 
     if after_doc is not None:
         envelope["delta"] = subject.delta(before, subject.snapshot(after_doc))
+        # The revision this call left behind, so a caller chaining writes can
+        # pass it as the next `expected_revision` without a re-read. Absent for
+        # an assembly, which has no revision counter of its own.
+        if hasattr(after_doc, "revision"):
+            envelope["revision"] = after_doc.revision
         if include_state:
             envelope["state"] = subject.summarize(after_doc)
 

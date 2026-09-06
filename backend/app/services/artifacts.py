@@ -129,8 +129,11 @@ def build(doc_id: str, fmt: str, *, resolution: int = 128,
     meta = FORMATS[fmt]
     filename = _safe_name(name or doc.name, meta.extension)
 
+    from app.services import instrumentation
+
     try:
-        payload = _render(doc_id, fmt, resolution=resolution, spec=spec)
+        with instrumentation.span(f"export.{fmt}"):
+            payload = _render(doc_id, fmt, resolution=resolution, spec=spec)
     except (BadArgument, PreconditionFailed):
         raise
     except Exception as exc:  # noqa: BLE001
@@ -141,6 +144,7 @@ def build(doc_id: str, fmt: str, *, resolution: int = 128,
     if not payload:
         raise PreconditionFailed(
             f"the {fmt} export came back empty — the document has no body to export")
+    instrumentation.gauge(f"export.{fmt}.bytes", len(payload))
     return Artifact(payload, meta.media_type, filename)
 
 
