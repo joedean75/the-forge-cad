@@ -135,6 +135,107 @@ NEMA: Dict[str, Nema] = {
 }
 
 
+class Servo(NamedTuple):
+    """An RC servo case, by form factor rather than by manufacturer.
+
+    Servo cases are a *de-facto* standard the way NEMA frames are a written one:
+    the "9 g micro" and the "standard" case have had the same body and the same
+    mounting-tab span across dozens of makers for decades, because a horn, a
+    tray and a mounting cut-out all have to interchange. That is what makes it
+    honest to ship these — the dimensions belong to the form factor, not to
+    somebody's product, and the notes say so.
+
+    `mass_g` is carried only where the form factor names it: a "9 g servo" is
+    called that because of what it weighs. Where it does not, the field is
+    `None` and the part reports `mass_source: unknown` until somebody records
+    the real figure with `set_part_mass` — which is the right answer, because a
+    metal-geared case of the same size is half again as heavy.
+    """
+
+    body_l: float        # case length (the long axis, through the tabs), mm
+    body_w: float        # case width, mm
+    body_h: float        # case height to the top of the case, mm
+    tab_span: float      # hole centres across the mounting tabs, mm
+    tab_thick: float     # tab thickness, mm
+    output_dia: float    # output spline boss diameter, mm
+    output_h: float      # boss height above the case, mm
+    mass_g: Optional[float]
+    note: str
+
+
+#: Servo form factors. Sizes are the industry case standards; masses only where
+#: the form factor's own name states one.
+SERVOS: Dict[str, Servo] = {
+    "sub-micro": Servo(20.0, 8.6, 20.0, 27.5, 2.0, 4.8, 3.0, None,
+                       "sub-micro (3.7 g class) case; mass varies with gearing"),
+    "micro-9g":  Servo(22.8, 12.2, 22.5, 32.5, 2.5, 4.8, 3.5, 9.0,
+                       "the 9 g micro case, named for its mass; a metal-geared "
+                       "one in the same case is nearer 13 g — record it"),
+    "standard":  Servo(40.5, 20.0, 36.5, 49.5, 2.5, 5.9, 4.0, None,
+                       "the standard (Futaba-derived) case; mass runs 40-60 g "
+                       "by gearing and motor"),
+}
+
+
+class Bldc(NamedTuple):
+    """A brushless outrunner, sized by its stator code.
+
+    The code *is* the dimension: a 2205 has a 22 mm stator diameter and a 5 mm
+    stator height, a 2807 a 28 mm stator. That is the one thing about these
+    motors that is standardised, so it is what the envelope is built from — the
+    can is the stator plus a conventional clearance, and the mounting pattern is
+    the near-universal 16 mm (M3) or 12 mm (M2) cross.
+
+    No mass. It is set by the winding, the KV and the bell material, and two
+    2205s can differ by 40% — a published figure here would be a guess with a
+    decimal point on it.
+    """
+
+    stator_dia: float
+    stator_h: float
+    can_dia: float
+    can_h: float
+    shaft_dia: float
+    shaft_len: float
+    bolt_span: float     # mounting cross, hole centres, mm
+    bolt: str
+
+
+#: Stator codes. `can_dia`/`can_h` are the stator plus the conventional bell and
+#: bearing stack; `bolt_span` is the standard mounting cross for the class.
+BLDC: Dict[str, Bldc] = {
+    "1806": Bldc(18.0, 6.0, 23.0, 16.0, 3.0, 9.0, 12.0, "M2"),
+    "2204": Bldc(22.0, 4.0, 27.5, 15.0, 3.0, 9.0, 16.0, "M3"),
+    "2205": Bldc(22.0, 5.0, 27.5, 16.0, 3.0, 9.0, 16.0, "M3"),
+    "2306": Bldc(23.0, 6.0, 28.5, 18.0, 4.0, 10.0, 16.0, "M3"),
+    "2807": Bldc(28.0, 7.0, 34.0, 20.0, 4.0, 11.0, 16.0, "M3"),
+    "2812": Bldc(28.0, 12.0, 34.0, 26.0, 5.0, 12.0, 16.0, "M3"),
+}
+
+
+class Board(NamedTuple):
+    """A stack-mounted electronics board, sized by its mounting standard.
+
+    Flight controllers and the ESCs that stack under them are standardised on
+    the *mounting pattern* and nothing else: 30.5 x 30.5 mm, 20 x 20 mm, and the
+    16 x 16 mm micro pattern. Board outline follows the pattern by convention
+    and component height is what varies, so height is a parameter with a
+    conventional default and the notes say it is an envelope for clearance.
+    """
+
+    pattern: float       # mounting hole pitch, square, mm
+    outline: float       # board outline, square, mm
+    height: float        # envelope height including the tallest components, mm
+    bolt: str
+
+
+BOARDS: Dict[str, Board] = {
+    "30x30": Board(30.5, 36.0, 8.0, "M3"),
+    "20x20": Board(20.0, 27.0, 7.0, "M2"),
+    "16x16": Board(16.0, 20.0, 6.0, "M2"),
+}
+
+
 class Extrusion(NamedTuple):
     width: float
     height: float
@@ -302,6 +403,95 @@ def stepper_motor(frame: str, body_mm: Optional[float] = None) -> dict:
     ], name=f"{frame} stepper"))
 
 
+def rc_servo(form: str) -> dict:
+    """A servo case: body, mounting tabs, output boss.
+
+    Three things a design needs from a servo and nothing else: the volume it
+    occupies, where the two mounting screws go, and where the horn turns. The
+    gearbox, the case screws and the wire exit are omitted — they vary by maker
+    and none of them is what a tray or a cut-out is dimensioned from.
+    """
+    v = SERVOS[form]
+    hole = METRIC["M2"].clearance / 2
+    tab_z = v.body_h - v.tab_thick - 4.0     # tabs sit below the case top
+
+    holes = [
+        {"type": "CylinderFeature", "name": "Tab hole", "params": {
+            "radius": hole * MM, "height": (v.tab_thick * 4) * MM,
+            "center": {"x": sx * (v.tab_span / 2) * MM, "y": 0.0, "z": tab_z * MM},
+            "axis": {"x": 0.0, "y": 0.0, "z": 1.0}}}
+        for sx in (-1, 1)
+    ]
+    return _tree(_subtract([
+        _union([
+            _box(v.body_l, v.body_w, v.body_h, (0, 0, v.body_h / 2), name="Case"),
+            _box(v.tab_span + 8.0, v.body_w, v.tab_thick,
+                 (0, 0, tab_z + v.tab_thick / 2), name="Mounting tabs"),
+            _cyl(v.output_dia / 2, v.output_h,
+                 v.body_h + v.output_h / 2, name="Output boss"),
+        ], name=f"{form} servo"),
+        *holes,
+    ], name=f"{form} servo"))
+
+
+def bldc_motor(code: str) -> dict:
+    """A brushless outrunner: can, shaft, and the mounting cross underneath.
+
+    The bell and the base are one cylinder rather than two: the gap between them
+    is where the windings are, and modelling it would suggest a clearance a
+    mount can use, which it cannot — the bell rotates.
+    """
+    m = BLDC[code]
+    hole = METRIC[m.bolt].clearance / 2
+    holes = []
+    # The standard cross: four holes on the axes, not on the diagonals.
+    for axis in ("x", "y"):
+        for sign in (-1, 1):
+            at = {"x": 0.0, "y": 0.0, "z": 0.0}
+            at[axis] = sign * (m.bolt_span / 2)
+            holes.append({"type": "CylinderFeature", "name": "Mount hole", "params": {
+                "radius": hole * MM, "height": (m.can_h * 2) * MM,
+                "center": {"x": at["x"] * MM, "y": at["y"] * MM, "z": 0.0},
+                "axis": {"x": 0.0, "y": 0.0, "z": 1.0}}})
+    return _tree(_subtract([
+        _union([
+            _cyl(m.can_dia / 2, m.can_h, m.can_h / 2, name="Can"),
+            _cyl(m.shaft_dia / 2, m.shaft_len,
+                 m.can_h + m.shaft_len / 2, name="Shaft"),
+        ], name=f"{code} motor"),
+        *holes,
+    ], name=f"{code} motor"))
+
+
+def stack_board(pattern: str, height_mm: Optional[float] = None) -> dict:
+    """A stack-mounted board: outline, component envelope, mounting holes.
+
+    One box, not a board plus components, because the thing a frame needs is the
+    clearance volume. Height is a parameter for the same reason a stepper's body
+    length is: the pattern is standardised and what sits on the board is not.
+    """
+    b = BOARDS[pattern]
+    height = float(height_mm if height_mm else b.height)
+    hole = METRIC[b.bolt].clearance / 2
+    holes = [
+        {"type": "CylinderFeature", "name": "Mount hole", "params": {
+            "radius": hole * MM, "height": (height * 3) * MM,
+            "center": {"x": sx * (b.pattern / 2) * MM,
+                       "y": sy * (b.pattern / 2) * MM, "z": 0.0},
+            "axis": {"x": 0.0, "y": 0.0, "z": 1.0}}}
+        for sx in (-1, 1) for sy in (-1, 1)
+    ]
+    return _tree(_subtract([
+        _box(b.outline, b.outline, height, (0, 0, height / 2), name="Board envelope"),
+        *holes,
+    ], name=f"{pattern} board"))
+
+
+def ground_shaft(diameter_mm: float, length_mm: float) -> dict:
+    """A length of ground shaft. A cylinder, and that is the whole part."""
+    return _tree(_cyl(diameter_mm / 2, length_mm, 0.0, name="Shaft"))
+
+
 def tslot_extrusion(profile: str, length_mm: float) -> dict:
     """T-slot extrusion: the envelope, the four slot openings and the centre bore.
 
@@ -436,6 +626,64 @@ def catalog() -> List[Entry]:
                 notes="envelope, slot openings and centre bore; the internal T "
                       "of each slot is not modelled",
                 build=(lambda p=profile, l=length: tslot_extrusion(p, l))))
+
+    for form, v in SERVOS.items():
+        out.append(Entry(
+            key=f"servo-{form}", category="motor",
+            designation=f"RC servo, {form} case",
+            standard="industry case form factor", material="abs",
+            fidelity="envelope",
+            notes=(f"{v.body_l:g}x{v.body_w:g}x{v.body_h:g} mm case, "
+                   f"{v.tab_span:g} mm between tab holes. {v.note}. Gearbox, "
+                   "case screws and wire exit omitted — a tray is dimensioned "
+                   "from the case and the tabs."),
+            build=(lambda f=form: rc_servo(f)),
+            typical_mass_g=v.mass_g))
+
+    for code, m in BLDC.items():
+        out.append(Entry(
+            key=f"bldc-{code}", category="motor",
+            designation=f"{code} brushless outrunner",
+            standard="stator code (diameter x height, mm)",
+            material="al-6061", fidelity="envelope",
+            notes=(f"{m.stator_dia:g} mm stator, {m.can_dia:g} mm can, "
+                   f"{m.shaft_dia:g} mm shaft on a {m.bolt_span:g} mm "
+                   f"{m.bolt} cross. No published mass: it is set by the "
+                   "winding, the KV and the bell, and two motors of one stator "
+                   "code differ by 40% — record yours with set_part_mass."),
+            build=(lambda c=code: bldc_motor(c))))
+
+    for pattern, b in BOARDS.items():
+        for role in ("flight controller", "ESC", "receiver"):
+            slug = role.split()[0].lower()
+            out.append(Entry(
+                key=f"board-{pattern}-{slug}", category="electronics",
+                designation=f"{role}, {pattern} mm stack",
+                standard=f"{b.pattern:g} mm mounting pattern",
+                # G10 rather than a new "fr4" id: FR-4 is G10 with a flame
+                # retardant and the same glass-epoxy laminate, so the density
+                # that matters here is already in the catalog. Material ids are
+                # persisted, and the rule is that new grades are added only when
+                # an existing one is genuinely wrong.
+                material="gfrp", fidelity="envelope",
+                notes=(f"clearance envelope {b.outline:g}x{b.outline:g}x"
+                       f"{b.height:g} mm on the {b.pattern:g} mm {b.bolt} "
+                       "pattern. The pattern is the standard; the outline and "
+                       "the component height are conventions, so treat the "
+                       "height as a clearance to check rather than a fact. "
+                       "No published mass — record yours."),
+                build=(lambda p=pattern: stack_board(p))))
+
+    for diameter in (2.0, 3.0, 4.0, 5.0, 6.0):
+        for length in (30, 50, 80, 120):
+            out.append(Entry(
+                key=f"shaft-{diameter:g}-{length}", category="shaft",
+                designation=f"ground shaft ⌀{diameter:g}x{length}",
+                standard="h7 stock shafting", material="steel-4140",
+                fidelity="as-standard",
+                notes="plain ground shaft; cut to length. The mating bearing "
+                      "bore is the same nominal — see the bearing entries.",
+                build=(lambda d=diameter, l=length: ground_shaft(d, l))))
 
     for diameter in (2, 3, 4, 5, 6, 8, 10):
         for length in (6, 8, 10, 12, 16, 20, 25, 30):

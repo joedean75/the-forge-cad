@@ -289,6 +289,30 @@ export interface DesignDocument {
   dimensions: Dimension[]
   /** Engineering material bound to the part (drives mass/sim/DFM/quote). */
   material_id?: string | null
+  /**
+   * A mass someone measured or read off a datasheet, in grams.
+   *
+   * Beats both the geometry and the catalog — it is a statement about the
+   * actual object rather than about a model of it. Only meaningful where the
+   * geometry is a deliberate simplification (a purchased motor, an ESC, a
+   * battery); on a part you modelled it makes the report disagree with its own
+   * volume. See `services/part_mass`.
+   */
+  mass_override_g?: number | null
+  /**
+   * Electrical metadata for a document that *is* a battery pack.
+   *
+   * Recorded, never derived: pack dimensions are not standardised, so a
+   * capacity cannot be turned into a size and nothing here follows from the
+   * geometry. See the `add_battery` operation.
+   */
+  battery?: {
+    cells: number
+    chemistry: string
+    nominal_v: number
+    capacity_mah?: number | null
+    mass_g?: number | null
+  } | null
   /** Named driving parameters/equations (design intent). */
   parameters?: DocumentParameter[]
   /** Part-family variants overriding parameters. */

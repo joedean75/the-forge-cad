@@ -342,6 +342,20 @@ class DesignDocument(BaseModel):
     # Engineering material bound to the part (see services/materials.py); drives
     # mass, mass properties, simulation, DFM and quotes. None => catalog default.
     material_id: Optional[str] = None
+    # A mass someone measured or read off a datasheet, in grams. Beats both the
+    # geometry and the catalog, because it is a statement about the actual
+    # object rather than about a model of it — see `services/part_mass`.
+    #
+    # Only meaningful for a part whose geometry is a deliberate simplification:
+    # a purchased motor, an ESC, a battery. Setting it on a bracket you modelled
+    # is how a printed part comes to disagree with its own volume.
+    mass_override_g: Optional[float] = None
+    # Electrical metadata for a document that *is* a battery pack: cells,
+    # chemistry, nominal volts and capacity. Recorded rather than derived —
+    # pack dimensions are not standardised, so nothing here can be inferred
+    # from anything else, and a mass budget that also knows the pack's energy
+    # is what a flight-time or run-time estimate needs. See `add_battery`.
+    battery: Optional[Dict[str, Any]] = None
     # Named driving parameters/equations (feature 03); resolved into feature
     # params at evaluation. Ordered so later entries may reference earlier ones.
     parameters: List["DocumentParameter"] = []

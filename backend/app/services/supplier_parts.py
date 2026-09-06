@@ -193,8 +193,17 @@ def record(
     geometry: str = "exact",
     size_mm: Optional[Dict[str, float]] = None,
     mass_g: Optional[float] = None,
+    mass_source: str = "geometric",
 ) -> dict:
-    """File an already-imported document as a catalog part of this account's."""
+    """File an already-imported document as a catalog part of this account's.
+
+    `mass_source` says where `mass_g` came from and it is not decoration. The
+    import path fills `mass_g` from the *derived* mass of the body it just
+    voxelised or read — which is a geometric figure wearing a catalog row's
+    clothes. Reading it back as a published mass would report `source: catalog`
+    for a number the geometry produced, which is precisely the confusion
+    `part_mass` exists to end. Only `declared` is trusted over geometry.
+    """
     if source not in SOURCES:
         raise ValueError(f"unknown source {source!r}; one of {', '.join(SOURCES)}")
     if category not in CATEGORIES:
@@ -226,6 +235,8 @@ def record(
         "geometry": geometry,
         "size_mm": size_mm or {"x": 0.0, "y": 0.0, "z": 0.0},
         "mass_g": mass_g,
+        "mass_source": mass_source if mass_source in ("declared", "geometric")
+                       else "geometric",
         "created_at": _now(),
     }
     persistence._save(_KIND, _row_id(key, owner_id), row, owner_id=owner_id)

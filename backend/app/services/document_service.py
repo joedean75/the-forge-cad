@@ -243,6 +243,24 @@ def writing(doc_id: str):
                     _DOC_LOCKS.pop(doc_id, None)
 
 
+def persist_document(doc: DesignDocument) -> None:
+    """Save a change to a field the evaluation key does not cover.
+
+    A material, a recorded mass, a spec: none of them can move the body, so none
+    of them re-evaluates — which means the evaluate path's cache-hit branch will
+    not write them either. A caller that changes one persists it here, and it
+    counts as a write, so the revision moves and an optimistic writer sees it.
+
+    `set_material` is why this exists as a named function rather than a habit:
+    it relied on the evaluate path to save, and the branch that would have done
+    so only writes when the *mass* changed. Two aluminium grades have all but
+    identical densities, so the assignment was silently lost on reload.
+    """
+    with writing(doc.id):
+        doc.updated_at = _now()
+        _persist(doc)
+
+
 def persist_derived(doc: DesignDocument) -> None:
     """Save a *reading* of the document without counting it as a write.
 

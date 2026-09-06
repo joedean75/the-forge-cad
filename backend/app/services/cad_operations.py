@@ -1129,12 +1129,126 @@ def _get_parameters(doc_id, args):
     return {"parameters": [p.model_dump() for p in doc.parameters]}
 
 
-@operation("mass_properties", "query", "Volume, mass, center of mass, surface area and inertia tensor (uses the assigned material).",
+@operation("mass_properties", "query",
+           "Volume, mass, center of mass, surface area and inertia tensor. "
+           "`mass_g` is the mass to use and `mass_source` says where it came "
+           "from: 'geometric' (volume x the assigned material's density), "
+           "'catalog' (the published figure for the purchased part this "
+           "document is), 'override' (a mass somebody measured), or 'unknown'. "
+           "For a purchased component the geometry is a declared envelope, so "
+           "the geometric figure is the wrong one — a NEMA 17 modelled as solid "
+           "steel weighs 669 g against a real 350 g.",
            {})
 def _mass_properties(doc_id, args):
-    from app.services import mass_properties
+    from app.services import mass_properties, part_mass
 
-    return mass_properties.mass_properties(doc_id)
+    doc = _get(doc_id)
+    report = mass_properties.mass_properties(doc_id)
+    fact = part_mass.effective_mass(doc)
+    # `mass_kg` stays exactly what it was — the integrated geometry — because
+    # callers read it and it is a true statement about the body. What is added
+    # is the figure to *use* and the record of why it differs.
+    return {**report, **fact.as_dict()}
+
+
+@operation("add_battery", "mutate",
+           "Add a battery pack as a declared envelope: the dimensions you "
+           "measured and the mass off the label, plus cell count, voltage and "
+           "capacity recorded with it. There is no battery catalog and there "
+           "will not be one — pack dimensions are not standardised, so a "
+           "capacity cannot be turned into a size, and a box of aluminium the "
+           "shape of a guess is worse than asking. Nominal voltage is computed "
+           "from the cell count at 3.7 V/cell for lithium polymer.",
+           {"length": {"type": "number", "required": True, "unit": "m",
+                       "description": "measured pack length"},
+            "width": {"type": "number", "required": True, "unit": "m",
+                      "description": "measured pack width"},
+            "height": {"type": "number", "required": True, "unit": "m",
+                       "description": "measured pack height"},
+            "grams": {"type": "number", "required": True, "unit": "g",
+                      "description": "mass off the label or a scale — this is "
+                                     "what every mass report will use"},
+            "cells": {"type": "integer", "default": 1, "minimum": 1,
+                      "description": "cells in series (the S count)"},
+            "capacity_mah": {"type": "number",
+                             "description": "capacity in mAh, for the record"},
+            "chemistry": {"enum": ["lipo", "li-ion", "lifepo4", "nimh"],
+                          "default": "lipo",
+                          "description": "cell chemistry; sets the nominal "
+                                         "volts per cell"},
+            "center": {**_VEC, "description": "pack centre; defaults to the origin"}})
+def _add_battery(doc_id, args):
+    from app.services import part_mass
+
+    doc = _get(doc_id)
+    length = float(require(args, "length"))
+    width = float(require(args, "width"))
+    height = float(require(args, "height"))
+    grams = float(require(args, "grams"))
+    cells = int(args.get("cells", 1) or 1)
+    chemistry = str(args.get("chemistry", "lipo"))
+
+    centre = args.get("center") or {}
+    box = {"type": "BoxFeature", "name": "Battery", "params": {
+        "size": {"x": length, "y": width, "z": height},
+        "center": {a: float(centre.get(a, 0.0)) for a in "xyz"}}}
+    tree = feature_ops.add_primitive(doc.feature_tree, box,
+                                     target_id=args.get("target"))
+    document_service.update_document(doc_id, feature_tree=tree)
+
+    doc = _get(doc_id)
+    # The declared mass, not the envelope's. A LiPo modelled as a solid box of
+    # anything is wrong by a factor, and this is the number a CG hangs on.
+    doc.mass_override_g = grams
+    doc.battery = {
+        "cells": cells,
+        "chemistry": chemistry,
+        "nominal_v": round(cells * _CELL_VOLTS.get(chemistry, 3.7), 2),
+        "capacity_mah": float(args["capacity_mah"]) if args.get("capacity_mah") else None,
+        "mass_g": grams,
+    }
+    document_service.persist_document(doc)
+    fact = part_mass.effective_mass(doc)
+    return {"message": (f"added a {cells}S {chemistry} pack, "
+                        f"{doc.battery['nominal_v']:g} V nominal, {grams:g} g"),
+            "feature_id": box["id"],
+            "battery": doc.battery,
+            **fact.as_dict()}
+
+
+#: Nominal volts per cell. The figure a pack is *labelled* with, which is what a
+#: "3S 11.1 V" pack means — not the 4.2 V it is charged to nor the 3.0 V it is
+#: flown down to, both of which are real numbers answering different questions.
+_CELL_VOLTS = {"lipo": 3.7, "li-ion": 3.6, "lifepo4": 3.2, "nimh": 1.2}
+
+
+@operation("set_part_mass", "mutate",
+           "Record the real mass of this part, in grams — measured on a scale "
+           "or read off a datasheet. It beats both the geometry and the catalog "
+           "in every mass report, because it is a statement about the actual "
+           "object rather than about a model of it. Use it for a purchased "
+           "component whose body here is a simplified envelope: a motor, an "
+           "ESC, a battery, a servo. Pass 0 or omit `grams` to clear it and go "
+           "back to the geometric figure. Setting it on a part you modelled "
+           "makes the report disagree with its own volume.",
+           {"grams": {"type": "number", "unit": "g", "minimum": 0,
+                      "description": "the real mass; 0 clears the override"}})
+def _set_part_mass(doc_id, args):
+    from app.services import part_mass
+
+    doc = _get(doc_id)
+    grams = args.get("grams")
+    doc.mass_override_g = float(grams) if grams else None
+    # A recorded mass changes no geometry, so it must not invalidate the
+    # evaluation — but it is a real edit to the document, so it persists and
+    # moves the revision like one. `set_material` learned that the hard way:
+    # a field outside the evaluation key persists itself or not at all.
+    document_service.persist_document(doc)
+    fact = part_mass.effective_mass(doc)
+    return {"message": ("recorded a mass of "
+                        f"{fact.grams:.3f} g for this part" if doc.mass_override_g
+                        else "cleared the recorded mass; using the geometry again"),
+            **fact.as_dict()}
 
 
 def _exact_body(doc_id):

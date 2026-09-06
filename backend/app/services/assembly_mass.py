@@ -33,7 +33,9 @@ from typing import Any, Dict, List
 
 import numpy as np
 
-from app.services import assembly_service, document_service, mass_properties
+from app.services import (
+    assembly_service, document_service, mass_properties, part_mass,
+)
 
 MM = 1000.0
 G = 1000.0
@@ -63,6 +65,7 @@ def assembly_mass_properties(asm_id: str) -> Dict[str, Any]:
         raise KeyError(asm_id)
 
     rows: List[Dict[str, Any]] = []
+    facts: List[part_mass.MassFact] = []
     notes: List[str] = []
     total_mass = 0.0
     weighted_cg = np.zeros(3)
@@ -87,11 +90,41 @@ def assembly_mass_properties(asm_id: str) -> Dict[str, Any]:
             notes.append(f"{component.name or component.id}: {exc}")
             continue
 
-        mass = float(part["mass_kg"])
+        # `mass_properties` integrates the *geometry*, which is the right
+        # answer for a modelled part and the wrong one for a purchased
+        # component whose body is a declared envelope. `part_mass` decides
+        # which figure to trust and says why — see `services/part_mass`.
+        held = document_service.get_document(component.part_id)
+        fact = part_mass.effective_mass(held) if held is not None else None
+        geometric = float(part["mass_kg"])
+        mass = fact.kg if (fact and fact.kg > 0) else geometric
         if mass <= 0:
-            notes.append(f"{component.name or component.id}: zero mass — is a "
-                         f"material assigned?")
+            notes.append(f"{component.name or component.id}: zero mass — "
+                         + ((fact.basis + ".") if fact else "is a material assigned?"))
             continue
+
+        # **Inertia scales with the mass, not with the shape.** For a rigid body
+        # of fixed geometry the tensor is linear in density, so correcting a
+        # motor from its steel-block envelope to its published mass is exactly a
+        # multiply by the ratio — the assumption being uniform density, which is
+        # the same assumption the envelope already made and no worse than it.
+        # Leaving the tensor at the envelope's value while fixing the mass would
+        # be the incoherent middle: a 350 g motor with a 669 g motor's rotational
+        # inertia.
+        #
+        # The CG stays where the geometry puts it. The envelope is the only
+        # positional information there is, and inventing an offset because a
+        # real motor's mass sits toward the stator would be a guess dressed as
+        # a correction.
+        inertia_scale = 1.0
+        if fact is not None and fact.source != part_mass.GEOMETRIC and geometric > 0:
+            inertia_scale = mass / geometric
+            if abs(inertia_scale - 1.0) > 0.02:
+                notes.append(
+                    f"{component.name or component.id}: mass from "
+                    f"{fact.source} ({fact.basis}); its envelope implies "
+                    f"{geometric * G:.1f} g, so the inertia tensor is scaled by "
+                    f"{inertia_scale:.3f} and the CG is the envelope's.")
 
         rotation = _rotation(component)
         translate = np.array([component.transform.translate.x,
@@ -103,7 +136,8 @@ def assembly_mass_properties(asm_id: str) -> Dict[str, Any]:
 
         # kg·mm² back to SI, rotated into assembly axes, then shifted from the
         # part's CG to the assembly origin. Both steps, in that order.
-        local_inertia = np.asarray(part["inertia_kg_mm2"], dtype=float) / (MM ** 2)
+        local_inertia = (np.asarray(part["inertia_kg_mm2"], dtype=float)
+                         / (MM ** 2)) * inertia_scale
         inertia = rotation @ local_inertia @ rotation.T
         inertia_origin += inertia + _parallel_axis(mass, cg)
 
@@ -115,7 +149,17 @@ def assembly_mass_properties(asm_id: str) -> Dict[str, Any]:
             "mass_g": round(mass * G, 3),
             "center_of_mass_mm": [round(float(v) * MM, 4) for v in cg],
             "exact": bool(part.get("exact")),
+            # On every row, so a CG that is 4 mm off because one component was
+            # weighed as a solid block is distinguishable from a correct one.
+            "mass_source": fact.source if fact else part_mass.GEOMETRIC,
+            "mass_basis": fact.basis if fact else "solid geometry",
+            **({"geometric_mass_g": round(geometric * G, 3),
+                "inertia_scale": round(inertia_scale, 4)}
+               if inertia_scale != 1.0 else {}),
         })
+        facts.append(fact if fact is not None
+                     else part_mass.MassFact(mass, part_mass.GEOMETRIC,
+                                             "solid geometry", None))
 
     if total_mass <= 0:
         return {
@@ -147,5 +191,8 @@ def assembly_mass_properties(asm_id: str) -> Dict[str, Any]:
                             for j in range(3)] for i in range(3)],
         "components": rows,
         "counted": len(rows),
+        # Where the all-up weight came from, in one block. An airframe checked
+        # against a number built half from envelopes needs to know that.
+        "mass": part_mass.summarize(facts),
         "notes": notes,
     }

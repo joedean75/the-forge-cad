@@ -72,7 +72,7 @@ UNIT_BY_NAME: Dict[str, str] = {
     "countersink_angle": "deg", "tip_angle": "deg", "draft": "deg",
     # already named for their unit, and not in metres — never warned about
     "feed_mm_min": "mm", "kerf_mm": "mm", "min_length_mm": "mm",
-    "nominal_mm": "mm", "general_tolerance": "mm",
+    "nominal_mm": "mm", "general_tolerance": "mm", "capacity_mah": "mAh",
 }
 
 #: Vector components. They mean whatever the vector means — metres under
@@ -97,6 +97,9 @@ UNITLESS = frozenset({
     # `workflow_status` uses to answer freshness (whose contents are themselves
     # classified wherever they are declared).
     "job_id",
+    # a battery pack's electrical record: a count and a chemistry name. The
+    # capacity carries its unit in its own name and is in the map above.
+    "cells", "chemistry",
     # assembly operations: ids, constraint kinds and bounding-box extremes
     "part_id", "component_id", "mate_id", "type", "base", "moved",
     "base_face", "moved_face",
