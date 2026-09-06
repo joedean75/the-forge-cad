@@ -259,11 +259,18 @@ def test_a_format_that_cannot_be_written_is_recorded_not_fatal(monkeypatch):
 
 
 def test_the_package_job_polls_to_done():
+    from app.services import jobs
+
     doc_id = _doc()
     _ok(doc_id, "release_revision")
     started = client.post(f"/api/documents/{doc_id}/package", json={}).json()
-    # TestClient runs background tasks before returning, so the job is already
-    # resolved; the contract under test is the shape, not the timing.
+    # The job is a durable row now, not a FastAPI BackgroundTask that TestClient
+    # ran before returning — so it is genuinely queued at this point, which is
+    # the whole difference: it would still be there after a restart. The worker
+    # pool is not started under the test client, so drain it on this thread.
+    assert started["status"] == "running"  # "queued" reports as running; see _legacy_status
+    jobs.run_pending_inline()
+
     job = client.get(f"/api/documents/{doc_id}/package/{started['id']}").json()
     assert job["status"] == "done", job["message"]
     assert job["result"]["revision"] == "A"

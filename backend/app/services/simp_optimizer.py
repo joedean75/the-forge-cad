@@ -58,11 +58,23 @@ class SimpResult:
 # ---------------------------------------------------------------------------
 
 
+class SolveCancelled(Exception):
+    """The solve stopped because somebody asked it to, not because it failed."""
+
+
 class ProgressState:
     """Thread-safe progress state shared between the optimizer and the API."""
 
     def __init__(self):
         self._lock = threading.Lock()
+        # Cooperative cancellation. Read at the top of each SIMP iteration,
+        # which is the only safe checkpoint in the solve: `x` is a complete
+        # iterate there, whereas mid-iteration the stiffness matrix is half
+        # assembled and `spsolve` is inside a Fortran call that cannot be
+        # interrupted at all. A cancel therefore takes up to one iteration to
+        # land, which is honest — a button that claimed to stop a running
+        # factorisation would be lying.
+        self._cancelled = False
         self.stage = "initializing"
         self.iteration = 0
         self.max_iter = 0
@@ -92,6 +104,15 @@ class ProgressState:
                 self.change = change
             if message is not None:
                 self.message = message
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._cancelled = True
+
+    @property
+    def cancelled(self) -> bool:
+        with self._lock:
+            return self._cancelled
 
     def read(self) -> dict:
         with self._lock:
@@ -566,6 +587,8 @@ def run_simp(
         )
 
     while loop < max_iter and change > 0.01:
+        if progress is not None and progress.cancelled:
+            raise SolveCancelled(f"stopped after {loop} of {max_iter} iterations")
         loop += 1
 
         # Tensor density operations (run on GPU if available)

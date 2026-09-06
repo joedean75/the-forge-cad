@@ -277,7 +277,6 @@ def test_document_service_and_derived_cache_share_one_set_of_caches():
     the live cache, or an eviction in one place is invisible in the other."""
     assert docs._SOLID_CACHE is derived_cache.SOLIDS
     assert docs._BREP_CACHE is derived_cache.BREPS
-    assert docs._MESH_CACHE is derived_cache.MESHES
 
 
 def test_deleting_a_document_forgets_its_mesh_and_thumbnail():
@@ -296,4 +295,4 @@ def test_the_lru_reports_what_it_evicted():
     assert cache.evictions == 1
     # Counted, not just bounded: an entry count alone cannot say whether a
     # workload is thrashing a cache or comfortably inside it.
-    assert derived_cache.stats()["meshes"]["capacity"] == derived_cache.MESH_CAPACITY
+    assert derived_cache.stats()["solids"]["capacity"] == derived_cache.SOLID_CAPACITY

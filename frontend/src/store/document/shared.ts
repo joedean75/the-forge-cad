@@ -17,7 +17,7 @@ import type {
   AnalysisReport, CamResult, DerivedCache, DesignDocument, DfmProcess, DfmReport,
   EdgeRef, EditorMode, FaceRef, FeatureTreeDict, OptimizeJob, ReferenceReport,
   SpecReport, SpecRequirement, Vector3, CopilotResult, DocumentParameter,
-  LoadCase, Objective, OptimizationSetup,
+  LoadCase, ModeStatus, Objective, OptimizationSetup,
 } from '../../../../shared/types'
 import { ApiError } from '../../api/client'
 import { ensureIds } from '../../util/featureTree'
@@ -229,7 +229,25 @@ export interface ComputeSlice {
   runDfm: (buildAxis?: string, process?: DfmProcess) => Promise<void>
   runCam: (tool: { diameter_mm: number; stepdown_mm: number; stepover_mm: number; feed_mm_min: number }) => Promise<void>
   exportStep: () => Promise<void>
-  downloadGcode: () => void
+  downloadGcode: () => Promise<void>
+  /**
+   * Re-attach to whatever is already running against the open document.
+   *
+   * A reload loses the job id — it was in the closed tab's memory — but the
+   * document knows what is running against it, because a job is a row. Without
+   * this, refreshing during a four-minute solve leaves the panel idle while the
+   * work goes on and the tree changes underneath.
+   */
+  reconnectJobs: () => Promise<void>
+  /**
+   * Per-mode readiness and freshness, keyed by mode name.
+   *
+   * The server's answer, not the store's guess: `stale` here means the
+   * fingerprint of the inputs moved, which is a judgement the browser cannot
+   * make and which survives a reload and holds for a second viewer.
+   */
+  workflow: Record<string, ModeStatus> | null
+  refreshWorkflow: () => Promise<void>
 }
 
 export type DocumentState = DocumentSlice & SelectionSlice & ComputeSlice

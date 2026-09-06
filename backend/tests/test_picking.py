@@ -24,7 +24,7 @@ from app.cad_kernel.io.mesh_binary import (
     read_mesh_binary_owned,
     write_mesh_binary,
 )
-from app.services import cad_operations as ops
+from app.services import blobs, cad_operations as ops
 from app.services import document_analysis
 from app.services import document_service as docs
 from app.services import picking
@@ -172,7 +172,7 @@ def test_the_answer_does_not_depend_on_the_cache_being_warm():
     doc_id = _plate_and_boss()
     warm = _owners_over_the_wire(doc_id)
     brep.clear_cache()
-    docs._MESH_CACHE.clear()
+    blobs.forget(doc_id)
     assert _owners_over_the_wire(doc_id) == warm
 
 

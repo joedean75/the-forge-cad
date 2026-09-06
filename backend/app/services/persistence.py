@@ -28,6 +28,7 @@ _ASSEMBLY_DOC = "assembly_doc"  # parts-composition assembly
 _ORDER = "order"  # manufacturing orders / RFQs
 _META = "meta"  # one-time migration markers etc.
 _TRAJECTORY = "trajectory"  # recorded agent interaction sequences (training data)
+_JOB = "job"  # durable background work (see services/jobs.py)
 
 _MIGRATION_MARKER = "json_files_migrated"
 _MESH_STRIP_MARKER = "document_meshes_stripped_v1"
@@ -240,6 +241,77 @@ def delete_trajectory(trajectory_id: str) -> bool:
 def list_trajectories_for_document(document_id: str) -> List[dict]:
     """Trajectories that built one document, filtered in SQL."""
     return _rows_by_json_field(_TRAJECTORY, "doc_id", document_id)
+
+
+# ---------------------------------------------------------------------------
+# Background jobs
+#
+# A job is a row like everything else, which is what makes its status and result
+# survive a restart. `claim_job` is the one function here that is not a plain
+# read or write: it is the queue's compare-and-set, and it has to be in this
+# file because which lock enforces it is a property of the dialect.
+# ---------------------------------------------------------------------------
+
+def save_job(job_id: str, job: dict, owner_id: Optional[str] = None) -> None:
+    _save(_JOB, job_id, job, owner_id=owner_id)
+
+
+def load_job(job_id: str) -> Optional[dict]:
+    return _load(_JOB, job_id)
+
+
+def delete_job(job_id: str) -> bool:
+    return _delete(_JOB, job_id)
+
+
+def list_job_rows() -> List[dict]:
+    """Every job row. The table holds tens of these, not millions.
+
+    Retention prunes finished jobs, so the working set is the queue plus a day
+    of outcomes. If that ever stops being true the fix is a status index, not a
+    cache: a stale view of the queue is a job run twice.
+    """
+    with SessionLocal() as s:
+        rows = s.scalars(select(Record.data).where(Record.kind == _JOB)).all()
+    return [json.loads(r) for r in rows]
+
+
+def list_jobs_for_subject(subject_id: str) -> List[dict]:
+    """Jobs against one document or assembly, filtered in SQL."""
+    return _rows_by_json_field(_JOB, "subject_id", subject_id)
+
+
+def claim_job(job_id: str, *, expect_status: str, patch: dict) -> Optional[dict]:
+    """Apply `patch` to a job, but only while its status is still `expect_status`.
+
+    The queue's whole mutual exclusion. Two workers both list the queue, both
+    see the same oldest job, and both try to take it — exactly one may win, or
+    the job runs twice.
+
+    The read and the write are in one transaction. Under SQLite that is enough
+    on its own: there is a single writer, and the loser's `UPDATE` waits for the
+    winner's commit and then sees `running`. Under Postgres, where two
+    transactions can read concurrently, the row is locked with `FOR UPDATE`
+    first — without it both would read `queued`, both would write, and the
+    second would silently overwrite the first worker's name.
+
+    Returns the updated row to the winner and `None` to everybody else.
+    """
+    with SessionLocal() as s:
+        if engine.dialect.name != "sqlite":
+            s.execute(
+                select(Record).where(Record.kind == _JOB, Record.id == job_id)
+                .with_for_update())
+        row = s.get(Record, {"kind": _JOB, "id": job_id})
+        if row is None:
+            return None
+        data = json.loads(row.data)
+        if data.get("status") != expect_status:
+            return None
+        data.update(patch)
+        row.data = json.dumps(data)
+        s.commit()
+        return data
 
 
 #: A bare JSON key. `field` names a path and so cannot be a bound parameter —

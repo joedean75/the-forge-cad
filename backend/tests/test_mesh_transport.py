@@ -18,7 +18,7 @@ from app.cad_kernel.io.mesh_binary import read_mesh_binary, write_mesh_binary
 from app.cad_kernel.kernel import Kernel
 from conftest import body_id
 from app.services import cad_operations as ops
-from app.services import document_analysis
+from app.services import blobs, document_analysis
 from app.services import document_service as docs
 
 
@@ -90,7 +90,7 @@ def test_one_hash_always_serves_the_same_bytes():
     doc_id = _part()
     digest = docs.get_document(doc_id).derived.mesh_hash
     first = document_analysis.mesh_payload(doc_id, digest)
-    docs._MESH_CACHE.clear()          # force the re-derivation path
+    blobs.forget(doc_id)              # force the re-derivation path
     second = document_analysis.mesh_payload(doc_id, digest)
     assert first is not None and first == second
 

@@ -262,7 +262,7 @@ def _load_case_digest(doc) -> list:
     return [lc.model_dump() for lc in (setup.load_cases or [])]
 
 
-def _record(doc, kind: str, result: dict, *, resolution: int,
+def _record(doc, kind: str, result: dict,
             settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """File a derived reading against the document and stamp the result.
 
@@ -278,7 +278,7 @@ def _record(doc, kind: str, result: dict, *, resolution: int,
     """
     from app.services import derived_cache
 
-    derived_cache.publish(doc, kind, result, resolution=resolution, settings=settings)
+    derived_cache.publish(doc, kind, result, settings=settings)
     document_service.persist_derived(doc)
     product = derived_cache.held(doc, kind)
     return {**result,
@@ -1796,12 +1796,15 @@ def _dfm(doc_id, args):
         # "this part has no exact form" is a different previous step, not a
         # different argument — model it the way the rest of the catalog does.
         raise PreconditionFailed(str(exc)) from exc
-    # The *requested* process, not `report.process` — that one is a display
-    # label ('LPBF', 'MILLING'), so fingerprinting on it would make an additive
-    # report and a milling report indistinguishable to the freshness check.
-    return _record(doc, "dfm", report.model_dump(), resolution=resolution,
-                   settings={"process": process, "build_axis": build_axis,
-                             "resolution": resolution})
+    # The requested process, not `report.process` — that one is a display label
+    # ('LPBF', 'MILLING'), so fingerprinting on it would make an additive report
+    # and a milling report indistinguishable to the freshness check. The
+    # `resolution` argument is a *setting* here, not the geometry's: it meshes
+    # the additive rows, and the body was evaluated at whatever it was
+    # evaluated at.
+    return _record(doc, "dfm", report.model_dump(),
+                   {"process": process, "build_axis": build_axis,
+                    "resolution": resolution})
 
 
 @operation("simulate", "query", "Linear-static FEA: von Mises stress, displacement and safety factor "
@@ -1826,9 +1829,8 @@ def _simulate(doc_id, args):
     elements = int(args["elements"]) if args.get("elements") else None
     report = document_analysis.analyse_document(
         doc_id, resolution=resolution, elements=elements)
-    return _record(doc, "analysis", report, resolution=resolution,
-                   settings={"elements": elements,
-                             "load_cases": _load_case_digest(doc)})
+    return _record(doc, "analysis", report,
+                   {"elements": elements, "load_cases": _load_case_digest(doc)})
 
 
 @operation("verify_toolpath", "query",
@@ -2043,8 +2045,7 @@ def _verify_against_spec(doc_id, args):
         report = design_spec.verify(doc)
     except design_spec.SpecError as exc:
         raise PreconditionFailed(str(exc))
-    return _record(doc, "spec", report,
-                   resolution=doc.derived.resolution or 128)
+    return _record(doc, "spec", report)
 
 
 @operation("list_standard_parts", "query",
@@ -2325,6 +2326,106 @@ def _clearance_hole(doc_id, args):
             "counterbored": counterbored}
 
 
+@operation("workflow_status", "query",
+           "What each mode of the editor can do right now, and whether what it "
+           "is showing is still true. One vocabulary for all six: 'blocked' (a "
+           "prerequisite is missing, and it says which and what to do), 'ready', "
+           "'queued', 'running' (with a fraction), 'current' (the held result "
+           "was computed from exactly these inputs), 'stale' (a result is held "
+           "but the inputs moved) and 'failed'. Read this before deciding what "
+           "to run: it distinguishes 'nothing computed yet' from 'nothing to "
+           "compute with', which an empty panel cannot.",
+           {"settings": {"type": "object",
+                         "description": "per-mode call settings that affect freshness, "
+                                        "e.g. {\"make\": {\"process\": \"milling\"}} — a "
+                                        "DFM report for additive is not current for milling"}})
+def _workflow_status(doc_id, args):
+    from app.services import workflow
+
+    doc = _get(doc_id)
+    settings = args.get("settings") or {}
+    return {"modes": workflow.overview(doc, settings),
+            "package": workflow.status(doc, workflow.PACKAGE,
+                                       settings.get("package")).as_dict()}
+
+
+@operation("start_analysis", "mutate",
+           "Queue a linear-static FEA solve as a background job and return its "
+           "id. Use this instead of `simulate` when raising `elements`: above "
+           "roughly 20k free degrees of freedom the direct solve is abandoned "
+           "for conjugate gradient and the wall clock goes to minutes, which is "
+           "longer than a request should hold. Poll with `job_status`. The "
+           "result is published against the document only if the part, the "
+           "material and the load cases have not moved while it ran.",
+           {"elements": {"type": "number",
+                         "description": "element budget; more is slower and resolves "
+                                        "stress further"},
+            "resolution": {"type": "number", "default": 128,
+                           "description": "meshing resolution for the fallback estimate only"}})
+def _start_analysis(doc_id, args):
+    from app.services import derived_cache, job_handlers, jobs
+
+    doc = _get(doc_id)
+    resolution = int(args.get("resolution", 128))
+    elements = args.get("elements")
+    settings = {"elements": elements, "load_cases": _load_case_digest(doc)}
+    fingerprint = derived_cache.analysis_fingerprint(doc, "analysis", settings)
+    try:
+        job = jobs.enqueue(job_handlers.ANALYSIS, doc_id,
+                           {"elements": elements, "resolution": resolution},
+                           owner_id=doc.owner_id, input_fingerprint=fingerprint,
+                           document_revision=doc.revision,
+                           message="Queued linear-static solve")
+    except jobs.QueueFull as full:
+        raise PreconditionFailed(str(full)) from full
+    return {"job_id": job.id, "status": job.status, "kind": job.kind,
+            "input_fingerprint": fingerprint,
+            "message": "queued; poll job_status with this job_id"}
+
+
+@operation("job_status", "query",
+           "The state of one background job on this document: queued, running "
+           "(with a progress fraction), succeeded, failed, cancel_requested or "
+           "cancelled, plus its result or a typed error. Omit `job_id` to list "
+           "every job against the document, newest first — which is how a "
+           "client that lost track of an id finds the work still running.",
+           {"job_id": {"type": "string",
+                       "description": "the job to read; omit to list them all"}})
+def _job_status(doc_id, args):
+    from app.services import jobs
+
+    _get(doc_id)
+    job_id = args.get("job_id")
+    if not job_id:
+        return {"jobs": [j.public() for j in jobs.for_subject(doc_id)]}
+    job = jobs.get(str(job_id))
+    # The subject check is the access check: the router has already decided the
+    # caller may read *this document*, and a job id from another one must not
+    # resolve through it.
+    if job is None or job.subject_id != doc_id:
+        raise NoSuchDocument(f"no job {job_id!r} on this document")
+    return job.public()
+
+
+@operation("cancel_job", "mutate",
+           "Ask a background job to stop. A queued job is cancelled outright; a "
+           "running one is asked, and stops at the next checkpoint its handler "
+           "chooses — a solve already inside a linear factorisation is not "
+           "interruptible, so the state goes to 'cancel_requested' first and "
+           "the result says so rather than pretending otherwise.",
+           {"job_id": {"type": "string", "required": True,
+                       "description": "the job to stop"}})
+def _cancel_job(doc_id, args):
+    from app.services import jobs
+
+    _get(doc_id)
+    job_id = str(require(args, "job_id"))
+    job = jobs.get(job_id)
+    if job is None or job.subject_id != doc_id:
+        raise NoSuchDocument(f"no job {job_id!r} on this document")
+    return (jobs.request_cancel(job_id) or job).public()
+
+
 @operation("export", "query",
            "Write the part out as a file somebody else can open. Returns a URL "
            "keyed by the file's content hash — fetch it with GET, it is never "
@@ -2444,16 +2545,17 @@ def _slice_part(doc_id, args):
     bypassed the editor-access check and the quota meter, and returned
     ``document=None`` — so a caller never saw the G-code it had just produced.
     """
-    import base64
-
     from app.models.schemas import CamResult
-    from app.services import slicer
+    from app.services import artifacts, slicer
 
     settings = slicer.SliceSettings(**(args.get("settings") or {}))
     out = slicer.slice_document(doc_id, settings)
     doc = _get(doc_id)
     doc.derived.cam = CamResult(
-        gcode_url="data:text/plain;base64," + base64.b64encode(out["gcode"].encode("utf-8")).decode("ascii"),
+        # An artifact URL, not a megabyte of base64 riding on the document. The
+        # inline form was stripped on persist, so a reload lost a program the
+        # toolpath behind it had not changed.
+        gcode_url=artifacts.store_gcode(doc_id, out["gcode"], doc.name or "part"),
         operations=[f"fdm {settings.layer_height}mm/{settings.wall_count} walls/{int(settings.infill * 100)}% infill"],
         estimated_minutes=out["stats"]["estimated_minutes"],
     )
@@ -2471,8 +2573,7 @@ def _slice_part(doc_id, args):
            "settings": {"type": "object", "description": "slice settings if slicing is needed"}})
 def _print_part(doc_id, args):
     """Upload the sliced G-code to a Moonraker/Klipper printer (slice first if needed)."""
-    import base64
-
+    from app.services import artifacts
     from app.services.machine import moonraker_client as mr
     from app.services.machine.url_guard import UrlNotAllowed, validate_url
 
@@ -2485,8 +2586,10 @@ def _print_part(doc_id, args):
     if doc.derived.cam is None or not doc.derived.cam.gcode_url:
         _slice_part(doc_id, args)  # defaults (or agent-passed settings)
         doc = _get(doc_id)
-    _, b64 = doc.derived.cam.gcode_url.split(",", 1)
-    gcode = base64.b64decode(b64).decode("utf-8")
+    gcode = artifacts.gcode_text(doc_id, doc.derived.cam.gcode_url)
+    if gcode is None:
+        raise PreconditionFailed(
+            "the sliced G-code is no longer available; slice the part again")
     filename = f"forge_{(doc.name or 'part')[:32].replace(' ', '_')}.gcode"
     start = bool(args.get("start", False))
     try:

@@ -270,6 +270,13 @@ export interface DesignDocument {
   optimization?: OptimizationSetup
   derived: DerivedCache
   provenance: DocumentProvenance
+  /**
+   * Which standard part this document *is*, when it came from the catalog.
+   *
+   * One document per (key, owner), reused — which is what makes eight screws
+   * one BOM line of qty 8 rather than eight lines.
+   */
+  catalog_ref?: string | null
   /** The natural-language request this document came from, when there was one. */
   source_prompt?: string | null
   /** The recorded operation sequence that produced it (copilot run, replay). */
@@ -318,6 +325,64 @@ export interface DesignDocument {
  * second viewer. Stored against the document with a fingerprint, "is this report
  * about the part I am looking at?" has one answer that everybody gets.
  */
+/**
+ * A durable background job: a row, not an entry in a process-local dict.
+ *
+ * Six states, because the three the optimize panel reads cannot express the two
+ * that matter operationally — `cancel_requested` (asked to stop, not stopped
+ * yet, because a running solve is only interruptible at a checkpoint it
+ * chooses) and `cancelled` (it did). `queued` is distinct from `running` for
+ * the same reason: a job waiting for a worker and a job in a solve are
+ * different things to a person deciding whether to wait.
+ *
+ * `inputs` is deliberately absent: the client that submitted the job already
+ * has them, and echoing an optimization setup back on every poll is the payload
+ * mistake this codebase keeps undoing.
+ */
+export interface JobRecord {
+  id: string
+  kind: string
+  subject_id: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancel_requested' | 'cancelled'
+  /** 0..1. */
+  progress: number
+  message: string
+  result?: Record<string, unknown> | null
+  error?: { code: string; message: string; remedy?: string } | null
+  attempts: number
+  /** The fingerprint of the inputs the work was asked about. */
+  input_fingerprint?: string | null
+  /** The document revision it was submitted against — a result computed for an
+   *  older one is refused rather than folded in over the edits since. */
+  document_revision?: number | null
+  created_at: string
+  started_at?: string | null
+  finished_at?: string | null
+}
+
+/**
+ * What one editor mode can do right now, and whether what it shows is still true.
+ *
+ * One vocabulary for all six, from `services/workflow`. The distinction the
+ * panels could not previously draw is `blocked` vs `ready`: an Analysis panel
+ * with no load cases and an Analysis panel nobody has run both looked empty,
+ * and only one of them was a button press away.
+ */
+export interface ModeStatus {
+  mode: string
+  state: 'blocked' | 'ready' | 'queued' | 'running' | 'current' | 'stale' | 'failed'
+  /** What to do about it — for `blocked`, the step that unblocks it. */
+  detail: string
+  job_id?: string
+  /** 0..1, while a job is in flight. */
+  progress?: number
+  /** The fingerprint the held result was computed under. */
+  fingerprint?: string
+  computed_at?: string
+  /** Which prerequisites are missing, when the state is `blocked`. */
+  missing?: string[]
+}
+
 export interface AnalysisProduct {
   kind: string
   /** `derived_cache.analysis_fingerprint` of the inputs that produced it. */

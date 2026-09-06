@@ -172,11 +172,14 @@ def generate_toolpaths(root_feature, tool: ToolParams) -> dict:
     plunge_minutes = n_plunges * (tool.stepdown_mm / max(tool.plunge_mm_min, 1e-9))
     est_minutes = round(cut_minutes + plunge_minutes, 2)
 
-    gcode_b64 = base64.b64encode(gcode.encode("utf-8")).decode("ascii")
     n_rough = sum(len(s) for _, s in rough_by_level)
     n_finish = sum(len(p) for _, p in finish_by_level)
     return {
-        "gcode_url": f"data:text/plain;base64,{gcode_b64}",
+        # The program itself, not a URL. Where a generated file *lives* is the
+        # caller's decision — `document_analysis.cam_document` files it as an
+        # artifact — and a pure geometry module inventing a data URI for it was
+        # how a megabyte of base64 ended up inlined in the document.
+        "gcode": gcode,
         "operations": [
             f"Roughing · {len(rough_by_level)} levels · {n_rough} passes · {tool.stepover_mm:g}mm stepover",
             f"Finishing · {len(finish_by_level)} levels · {n_finish} contours",

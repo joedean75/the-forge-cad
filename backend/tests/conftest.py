@@ -26,6 +26,11 @@ os.environ["FORGE_DATA_DIR"] = _TEST_DATA_DIR
 # Rate limiting is exercised explicitly in test_security.py; keep it off for the
 # rest of the suite, which signs up/logs in many times from one client IP.
 os.environ.setdefault("FORGE_RATE_LIMIT", "0")
+# No background worker pool under test. Jobs are durable rows, so a test drains
+# the queue with `jobs.run_pending_inline()` and asserts on the outcome — a
+# suite that waited on a thread pool would be measuring the scheduler, and one
+# that raced it would fail on a loaded runner and nowhere else.
+os.environ.setdefault("FORGE_JOB_WORKERS", "0")
 
 import pytest
 

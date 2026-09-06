@@ -48,6 +48,11 @@ export function createDocumentSlice(set: Set, get: Get): DocumentSlice {
       future: [],
       ...STALE,
     })
+    // Re-attach to anything already running against this part. A reload during
+    // a four-minute solve loses the job id with the tab; the document knows
+    // what is running against it, because a job is a row. Fire-and-forget: it
+    // is a reconnection, not a precondition for showing the part.
+    void get().reconnectJobs()
   }
 
   /** Run a write, adopting its response only if it is still about this part. */

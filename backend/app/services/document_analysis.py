@@ -449,10 +449,27 @@ def mesh_payload(doc_id: str, mesh_hash: str) -> Optional[bytes]:
     The solid is re-derived on a cache miss the way `get_solid` already does, so
     a process restart costs one evaluation rather than a broken viewport.
     """
+    from app.services import singleflight
+
+    cached = docs.cached_mesh(doc_id, mesh_hash)
+    if cached is not None:
+        return cached
+    # Two tabs opening one document after a restart both miss the cache and both
+    # evaluate the same body, in parallel, on the box whose problem is that one
+    # evaluation is slow. Same key, same question: the second waits for the
+    # first. See `services/singleflight`.
+    return singleflight.group("mesh").do(
+        singleflight.keyed(doc_id, mesh_hash),
+        lambda: _derive_mesh_payload(doc_id, mesh_hash))
+
+
+def _derive_mesh_payload(doc_id: str, mesh_hash: str) -> Optional[bytes]:
     from app.cad_kernel.geom.meshing import mesh_hash as hash_of
     from app.cad_kernel.io import mesh_binary
     from app.cad_kernel.kernel import Kernel
 
+    # Re-checked inside the flight: the caller this one waited behind may have
+    # just written it.
     cached = docs.cached_mesh(doc_id, mesh_hash)
     if cached is not None:
         return cached
@@ -523,7 +540,11 @@ def cam_document(doc_id: str, tool) -> "object":
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"CAM generation failed: {exc}")
 
-    cam = CamResult(**result)
+    from app.services import artifacts
+
+    program = result.pop("gcode", "")
+    cam = CamResult(gcode_url=artifacts.store_gcode(doc_id, program, doc.name or "part"),
+                    **result)
     doc.derived.cam = cam
     docs._persist(doc)
     return cam
