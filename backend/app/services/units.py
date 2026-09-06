@@ -100,6 +100,14 @@ UNITLESS = frozenset({
     # a battery pack's electrical record: a count and a chemistry name. The
     # capacity carries its unit in its own name and is in the map above.
     "cells", "chemistry",
+    # mechanism notes: a tooth count, the designation of a bought part, free
+    # text, and a pair of note ids. `module_mm` is a length and carries its own
+    # explicit unit on the descriptor, which is why it is not listed here.
+    "teeth", "designation", "text", "ratio",
+    # RC presets: a preset group name and two tooth counts. `module`,
+    # `wheelbase`, `kingpin_track` and `arm` are lengths and carry an explicit
+    # `unit` on their descriptors.
+    "group", "pinion_teeth", "spur_teeth",
     # assembly operations: ids, constraint kinds and bounding-box extremes
     "part_id", "component_id", "mate_id", "type", "base", "moved",
     "base_face", "moved_face",

@@ -696,7 +696,21 @@ def _annotation_text(doc, note: dict) -> str:
             if callout.label == tol_label:
                 return _callout_text(callout)
         raise ValueError(f"no tolerance callout labelled {tol_label!r}")
-    raise ValueError("annotation needs 'text', 'gdt_feature' or 'tolerance_label'")
+    # A mechanism note: a shaft axis, a gear's teeth and direction, a bearing
+    # designation, a hardware callout. Named rather than repeated, for the same
+    # reason `gdt_feature` is — a callout that restates a fact is one that will
+    # eventually contradict it, and a rotation arrow typed onto a sheet is wrong
+    # the first time somebody mirrors the part.
+    mech = note.get("mechanism")
+    if mech:
+        from app.services import mechanism
+
+        entry = mechanism.by_id(doc, str(mech))
+        if entry is None:
+            raise ValueError(f"no mechanism note {mech!r} on this document")
+        return mechanism.describe(entry)
+    raise ValueError("annotation needs 'text', 'gdt_feature', 'tolerance_label' "
+                     "or 'mechanism'")
 
 
 def _render_annotation(sheet: _Sheet, doc, note: dict,
@@ -713,6 +727,7 @@ def _render_annotation(sheet: _Sheet, doc, note: dict,
     anchor = sheet.to_paper(view_name, at[0], at[1])
     dx, dy = float(note.get("dx", 12.0)), float(note.get("dy", -10.0))
     tx, ty = anchor[0] + dx, anchor[1] + dy
+    turn = _rotation_arrow(doc, note, anchor)
 
     width = max(10.0, 1.7 * len(text) + 3.0)
     box_x = tx if dx >= 0 else tx - width
@@ -724,8 +739,58 @@ def _render_annotation(sheet: _Sheet, doc, note: dict,
     if note.get("frame", True):
         parts.append(f'<rect class="frame" x="{box_x:.2f}" y="{ty-3.6:.2f}" '
                      f'width="{width:.2f}" height="5.0"/>')
-    parts.append(f'<text class="note" x="{box_x+1.5:.2f}" y="{ty:.2f}">{_esc(text)}</text></g>')
+    parts.append(f'<text class="note" x="{box_x+1.5:.2f}" y="{ty:.2f}">{_esc(text)}</text>')
+    parts.append(turn)
+    parts.append("</g>")
     return "".join(parts)
+
+
+def _rotation_arrow(doc, note: dict, anchor) -> str:
+    """A curved arrow at the anchor, when the note names something that turns.
+
+    Drawn rather than written, because "CCW" in a box is a claim a reader has to
+    resolve against a viewing direction they have to work out for themselves,
+    and an arc with a head on it is not. The arc is a three-quarter circle so the
+    head is unambiguous — a half circle's head reads as either direction at a
+    glance, which is the whole failure this is here to avoid.
+
+    Only for a note the document actually carries a *direction* on: a bearing
+    does not turn in a direction, and `mechanism.note` already refuses a
+    direction without an axis, so anything reaching here is well formed.
+    """
+    mech = note.get("mechanism")
+    if not mech:
+        return ""
+    from app.services import mechanism
+
+    entry = mechanism.by_id(doc, str(mech))
+    if not entry or not entry.get("direction"):
+        return ""
+
+    cx, cy = anchor[0], anchor[1]
+    r = float(note.get("arrow_r", 4.0))
+    clockwise = entry["direction"] == "cw"
+    # Start at the top, sweep three quarters. SVG y runs down the page, so the
+    # sweep flag is inverted against the maths convention — the same flip every
+    # coordinate in this writer makes.
+    start = (cx, cy - r)
+    end = (cx + (r if clockwise else -r), cy)
+    sweep = 1 if clockwise else 0
+    head = _arrow_head(end, clockwise)
+    return (f'<path class="lead" fill="none" d="M {start[0]:.2f} {start[1]:.2f} '
+            f'A {r:.2f} {r:.2f} 0 1 {sweep} {end[0]:.2f} {end[1]:.2f}"/>{head}')
+
+
+def _arrow_head(at, clockwise: bool) -> str:
+    """A small filled triangle tangent to the arc at its end."""
+    x, y = at
+    # Tangent at the 3-o'clock (cw) or 9-o'clock (ccw) end points down or up.
+    dy = 1.0 if clockwise else -1.0
+    size = 1.6
+    pts = (f"{x:.2f},{y + dy * size:.2f} "
+           f"{x - size * 0.7:.2f},{y - dy * size * 0.3:.2f} "
+           f"{x + size * 0.7:.2f},{y - dy * size * 0.3:.2f}")
+    return f'<polygon points="{pts}" fill="#1a1f27"/>'
 
 
 def _callout_text(callout) -> str:

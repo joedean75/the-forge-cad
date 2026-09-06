@@ -166,7 +166,7 @@ def test_a_motor_says_what_it_really_weighs():
 def test_the_parts_are_browsable_as_an_operation():
     doc_id = client.post("/api/documents", json={"resolution": 48}).json()["id"]
     result = _op(doc_id, "list_standard_parts", category="bearing")["result"]
-    assert result["count"] == len(pc.BEARINGS)
+    assert result["count"] == len(pc.BEARINGS) + len(pc.MINIATURE)
     assert all(row["category"] == "bearing" for row in result["parts"])
 
     narrowed = _op(doc_id, "list_standard_parts", search="NEMA 17")["result"]

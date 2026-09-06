@@ -110,6 +110,38 @@ BEARINGS: Dict[str, Bearing] = {
 }
 
 
+#: The miniature metric ("MR") series, which is not ISO 15 and is where every
+#: small RC bearing actually comes from. The designation encodes the *boundary*
+#: — MR105 is a 5 mm bore in a 10 mm outer — and pointedly **not** the width,
+#: which is the series' one trap: an MR128 comes 3.5 mm wide from most makers
+#: and 4 mm from some. The widths below are the common ones and the entry says
+#: so, because a press-fit pocket cut 0.5 mm shallow is a bearing that will not
+#: seat.
+MINIATURE: Dict[str, Bearing] = {
+    "MR63":  Bearing(3, 6, 2.5),
+    "MR83":  Bearing(3, 8, 3),
+    "MR84":  Bearing(4, 8, 3),
+    "MR85":  Bearing(5, 8, 2.5),
+    "MR104": Bearing(4, 10, 4),
+    "MR105": Bearing(5, 10, 4),
+    "MR106": Bearing(6, 10, 3),
+    "MR115": Bearing(5, 11, 4),
+    "MR126": Bearing(6, 12, 4),
+    "MR128": Bearing(8, 12, 3.5),
+    "MR148": Bearing(8, 14, 4),
+}
+
+
+def bearing_by_designation(designation: str) -> Bearing:
+    """Either series, one lookup — a caller should not have to know which."""
+    key = str(designation).strip().upper()
+    if key in BEARINGS:
+        return BEARINGS[key]
+    if key in MINIATURE:
+        return MINIATURE[key]
+    raise KeyError(designation)
+
+
 class Nema(NamedTuple):
     face: float          # frame face, square, mm
     bolt_circle: float   # mounting hole spacing (square pattern), mm
@@ -364,7 +396,7 @@ def ball_bearing(designation: str) -> dict:
     within a few percent, and modelling the rolling elements would be a
     decorative body that slows every boolean it takes part in.
     """
-    b = BEARINGS[designation]
+    b = bearing_by_designation(designation)
     return _tree(_subtract([
         _cyl(b.outer / 2, b.width, 0, name="Outer race"),
         _cyl(b.bore / 2, b.width * 3, 0, name="Bore"),
@@ -599,6 +631,18 @@ def catalog() -> List[Entry]:
             standard="ISO 15", material="steel-4140", fidelity="envelope",
             notes=(f"boundary envelope {b.bore:g}×{b.outer:g}×{b.width:g} mm; "
                    "races and rolling elements are not modelled"),
+            build=(lambda d=designation: ball_bearing(d))))
+
+    for designation, b in MINIATURE.items():
+        out.append(Entry(
+            key=f"bearing-{designation.lower()}", category="bearing",
+            designation=f"{designation} miniature ball bearing",
+            standard="miniature metric (MR) series",
+            material="steel-4140", fidelity="envelope",
+            notes=(f"boundary envelope {b.bore:g}×{b.outer:g}×{b.width:g} mm; "
+                   "the designation fixes the bore and the outer diameter but "
+                   "not the width — confirm the width against your supplier "
+                   "before cutting a press-fit pocket"),
             build=(lambda d=designation: ball_bearing(d))))
 
     for frame, n in NEMA.items():

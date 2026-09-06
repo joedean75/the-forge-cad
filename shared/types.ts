@@ -313,6 +313,13 @@ export interface DesignDocument {
     capacity_mah?: number | null
     mass_g?: number | null
   } | null
+  /**
+   * How the part moves — shaft axes, gear directions, bearing and hardware
+   * callouts. Recorded on the document so one statement reaches the drawing
+   * rather than being retyped onto the sheet, where it would disagree with the
+   * model the first time somebody mirrored the part.
+   */
+  mechanism?: MechanismNote[]
   /** Named driving parameters/equations (design intent). */
   parameters?: DocumentParameter[]
   /** Part-family variants overriding parameters. */
@@ -405,6 +412,23 @@ export interface ModeStatus {
   computed_at?: string
   /** Which prerequisites are missing, when the state is `blocked`. */
   missing?: string[]
+}
+
+/** One statement about how the part moves. See `services/mechanism`. */
+export interface MechanismNote {
+  id: string
+  kind: 'shaft' | 'gear' | 'bearing' | 'hardware'
+  label: string
+  /** Unit vector the shaft or gear turns about, in part space. */
+  axis?: { x: number; y: number; z: number } | null
+  /** Which way it turns, looking down `axis`. Gears and shafts only. */
+  direction?: 'cw' | 'ccw' | null
+  /** Gear teeth and module, when the note is a gear. */
+  teeth?: number | null
+  module_mm?: number | null
+  /** The bearing designation or screw size this note calls out. */
+  designation?: string | null
+  note?: string
 }
 
 export interface AnalysisProduct {

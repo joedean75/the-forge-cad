@@ -56,6 +56,10 @@ _AXIS = {**_VEC, "description": "direction to cut along; +Z by default"}
 # Listed rather than derived from `parts_catalog` at import: the enum reaches
 # the JSON Schema a constrained decoder is pointed at, and a schema that
 # depends on an import cycle is a schema that is sometimes empty.
+#: Mirrors `mechanism.KINDS`. Named here so the schema is a literal a
+#: constrained decoder can read rather than a value imported at build time.
+_MECHANISM_KINDS = ("shaft", "gear", "bearing", "hardware")
+
 _METRIC_SIZES = ("M2", "M2.5", "M3", "M4", "M5", "M6", "M8", "M10", "M12")
 # Same reasoning. The generated catalog only fills the first four; the rest
 # exist because an imported supplier part has to be filed somewhere, and
@@ -1151,6 +1155,83 @@ def _mass_properties(doc_id, args):
     return {**report, **fact.as_dict()}
 
 
+@operation("annotate_mechanism", "mutate",
+           "Record how the part moves: a shaft and the axis it turns about, a "
+           "gear with its teeth, module and direction, a bearing pocket's "
+           "designation, or the screw a hole takes. Recorded on the document, "
+           "not typed onto a drawing — a drawing annotation then names the note "
+           "(`{mechanism: <id or label>}`) and prints what the note says, so "
+           "mirroring the part cannot leave an arrow pointing the wrong way. A "
+           "gear or shaft with a direction also draws a rotation arrow on the "
+           "sheet. A direction needs an axis: 'clockwise' is a statement about "
+           "where you are looking from.",
+           {"kind": {"enum": list(_MECHANISM_KINDS), "required": True,
+                     "description": "what the note is about"},
+            "label": {"type": "string", "required": True,
+                      "description": "what the drawing prints — 'Pinion', "
+                                     "'Front axle', 'Outer bearing'"},
+            "axis": {**_AXIS, "description": "what it turns about, in part space; "
+                                             "required to give a direction"},
+            "direction": {"enum": ["cw", "ccw"],
+                          "description": "which way it turns looking down `axis`; "
+                                         "shafts and gears only"},
+            "teeth": {"type": "integer", "description": "tooth count, for a gear"},
+            "module_mm": {"type": "number", "unit": "mm",
+                          "description": "gear module"},
+            "designation": {"type": "string",
+                            "description": "the bearing ('5x11x4') or screw ('M2.5') "
+                                           "this note calls out"},
+            "text": {"type": "string", "description": "anything else to print"}})
+def _annotate_mechanism(doc_id, args):
+    from app.services import mechanism
+
+    doc = _get(doc_id)
+    try:
+        entry = mechanism.note(
+            require(args, "kind"), require(args, "label"),
+            axis=args.get("axis"), direction=args.get("direction"),
+            teeth=args.get("teeth"), module_mm=args.get("module_mm"),
+            designation=args.get("designation") or "", text=args.get("text") or "")
+    except mechanism.MechanismError as exc:
+        raise BadArgument(str(exc)) from exc
+
+    doc.mechanism = [*(doc.mechanism or []), entry]
+    document_service.persist_document(doc)
+    return {"message": f"recorded {entry['kind']} note {entry['label']!r}",
+            "note": entry, "prints_as": mechanism.describe(entry),
+            "count": len(doc.mechanism)}
+
+
+@operation("list_mechanism", "query",
+           "The mechanism notes on this part — shaft axes, gear directions, "
+           "bearing and hardware callouts — each with the line a drawing would "
+           "print for it. Pass two gear note ids as `ratio` to get the "
+           "reduction between them and which way the output turns.",
+           {"ratio": {"type": "array",
+                      "description": "[driver, driven] — two gear note ids or labels"}})
+def _list_mechanism(doc_id, args):
+    from app.services import mechanism
+
+    doc = _get(doc_id)
+    notes = list(doc.mechanism or [])
+    out = {"notes": [{**n, "prints_as": mechanism.describe(n)} for n in notes],
+           "count": len(notes)}
+
+    pair = args.get("ratio")
+    if pair:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            raise BadArgument("`ratio` is [driver, driven]", arg="ratio")
+        found = [mechanism.by_id(doc, str(p)) for p in pair]
+        if any(f is None for f in found):
+            raise NoSuchFeature(
+                f"no mechanism note for {[p for p, f in zip(pair, found) if f is None]}")
+        try:
+            out["ratio"] = mechanism.ratio(found[0], found[1])
+        except mechanism.MechanismError as exc:
+            raise BadArgument(str(exc)) from exc
+    return out
+
+
 @operation("add_battery", "mutate",
            "Add a battery pack as a declared envelope: the dimensions you "
            "measured and the mass off the label, plus cell count, voltage and "
@@ -2032,10 +2113,12 @@ _DRAWING_SPEC = {
                                       "'label' and the true model distance is printed."},
         "annotations": {"type": "array",
                         "description": "[{view, at:[h_mm,v_mm], text | gdt_feature | "
-                                       "tolerance_label, dx?, dy?, frame?}] — a leader from "
-                                       "a point on the part to a callout. Naming a "
-                                       "gdt_feature or tolerance_label pulls the text from "
-                                       "the document so it cannot drift."},
+                                       "tolerance_label | mechanism, dx?, dy?, frame?}] — a "
+                                       "leader from a point on the part to a callout. Naming "
+                                       "a gdt_feature, tolerance_label or mechanism note "
+                                       "pulls the text from the document so it cannot drift. "
+                                       "A mechanism note with a direction also draws a "
+                                       "rotation arrow at the anchor."},
         "projection": {"enum": ["first", "third"], "default": "third",
                        "description": "projection angle convention: third angle (ISO A) or first"},
         "sheet": {"enum": ["auto", "a4", "a3", "a2", "a1", "a0"], "default": "auto",
@@ -2196,10 +2279,15 @@ def _list_standard_parts(doc_id, args):
 
 
 @operation("list_templates", "query",
-           "The starter parts: a plate, an L-bracket, an open-top enclosure and "
-           "a stepped shaft. Each is an ordinary feature tree with its driving "
-           "dimensions already named as parameters, so the first edit is "
-           "changing a number. Build one with apply_template.",
+           "The starter parts: general ones (a plate, an L-bracket, an "
+           "open-top enclosure, a stepped shaft) and a 1/16 RC toolkit (solid "
+           "axle, differential placeholder, dogbone and universal-joint "
+           "envelopes, a spur/pinion layout plate, a motor mount, a servo tray "
+           "and a steering knuckle). Each is an ordinary feature tree with its "
+           "driving dimensions already named as parameters, so the first edit "
+           "is changing a number, and each RC one arrives with its own "
+           "mechanism notes so a drawing of it carries the rotation arrows. "
+           "Build one with apply_template.",
            {})
 def _list_templates(doc_id, args):
     from app.services import templates
@@ -2209,8 +2297,9 @@ def _list_templates(doc_id, args):
 
 
 @operation("apply_template", "mutate",
-           "Build a starter part into this document — a plate, an L-bracket, an "
-           "enclosure or a shaft, with named driving parameters. The template "
+           "Build a starter part into this document — a plate, a bracket, an "
+           "enclosure, a shaft, or one of the 1/16 RC mechanisms — with named "
+           "driving parameters. The template "
            "is an operation sequence, so what it builds is an ordinary editable "
            "tree and every dimension is a parameter you can change with "
            "set_parameters. Only into a document with no body yet: browse them "
@@ -2244,6 +2333,79 @@ def _apply_template(doc_id, args):
     return {"message": f"built {outcome['name']} with "
                        f"{len(outcome['parameters'])} driving parameters",
             **outcome}
+
+
+@operation("list_rc_presets", "query",
+           "The numbers a 1/16 RC build starts from: wheelbase and track bands, "
+           "3 mm axle stock, MR105/MR115 bearings, M2/M2.5 hardware, module-0.6 "
+           "gears, servo cases. Every row says whether it is a `standard` — a "
+           "different value is a mistake — or a `band`, the range this class of "
+           "vehicle sits in, where a different value is a design decision.",
+           {"group": {"type": "string",
+                      "description": "one of chassis, shaft, bearing, hardware, "
+                                     "gear, servo; omit for all of them"}})
+def _list_rc_presets(doc_id, args):
+    from app.services import rc_presets
+
+    _get(doc_id)
+    group = args.get("group")
+    try:
+        return rc_presets.describe(group)
+    except KeyError:
+        raise BadArgument(
+            f"no preset group {group!r}; one of "
+            f"{', '.join(rc_presets.groups())}", arg="group") from None
+
+
+@operation("steering_geometry", "query",
+           "Where a steering arm's outer ball goes, from the Ackermann guide "
+           "construction: each arm points at the centre of the rear axle, which "
+           "fixes the arm angle and from it the tie-rod length. Returns the "
+           "ball's offset behind and inboard of the kingpin, so the numbers go "
+           "straight into a feature centre rather than being drawn by eye.",
+           {"wheelbase": {"type": "number", "unit": "mm", "required": True,
+                          "exclusiveMinimum": 0,
+                          "description": "front axle to rear axle"},
+            "kingpin_track": {"type": "number", "unit": "mm", "required": True,
+                              "exclusiveMinimum": 0,
+                              "description": "distance between the two kingpin axes"},
+            "arm": {"type": "number", "unit": "mm", "required": True,
+                    "exclusiveMinimum": 0,
+                    "description": "kingpin axis to the tie-rod ball"}})
+def _steering_geometry(doc_id, args):
+    from app.services import rc_presets
+
+    _get(doc_id)
+    try:
+        return rc_presets.ackermann(require(args, "wheelbase"),
+                                    require(args, "kingpin_track"),
+                                    require(args, "arm"))
+    except ValueError as exc:
+        raise BadArgument(str(exc)) from exc
+
+
+@operation("gear_layout", "query",
+           "Pitch diameters, centre distance and reduction for a spur and "
+           "pinion pair. The centre distance is what a motor mount is drilled "
+           "to — `m(z1+z2)/2` — so it is computed rather than measured off a "
+           "layout. Warns when a pinion is small enough to undercut.",
+           {"module": {"type": "number", "unit": "mm", "required": True,
+                       "exclusiveMinimum": 0,
+                       "description": "both gears must share it or they do not mesh"},
+            "pinion_teeth": {"type": "integer", "required": True,
+                             "description": "the small gear, on the motor"},
+            "spur_teeth": {"type": "integer", "required": True,
+                           "description": "the large gear, on the layshaft"}})
+def _gear_layout(doc_id, args):
+    from app.services import rc_presets
+
+    _get(doc_id)
+    try:
+        return rc_presets.spur_pinion(require(args, "module"),
+                                      require(args, "pinion_teeth"),
+                                      require(args, "spur_teeth"))
+    except ValueError as exc:
+        raise BadArgument(str(exc)) from exc
 
 
 def _axis_extent(bbox, axis: Dict[str, float]) -> tuple:

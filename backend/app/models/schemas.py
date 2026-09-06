@@ -356,6 +356,14 @@ class DesignDocument(BaseModel):
     # from anything else, and a mass budget that also knows the pack's energy
     # is what a flight-time or run-time estimate needs. See `add_battery`.
     battery: Optional[Dict[str, Any]] = None
+    # How the part moves: which shaft turns about what, which way a gear runs,
+    # what bearing sits in which pocket, what screw goes in which hole.
+    #
+    # Recorded on the document rather than drawn on the sheet, so one statement
+    # reaches the drawing, the BOM note and anything else that asks. A rotation
+    # arrow retyped onto a sheet is one that disagrees with the model the first
+    # time somebody mirrors the part. See `services/mechanism`.
+    mechanism: List[Dict[str, Any]] = []
     # Named driving parameters/equations (feature 03); resolved into feature
     # params at evaluation. Ordered so later entries may reference earlier ones.
     parameters: List["DocumentParameter"] = []
