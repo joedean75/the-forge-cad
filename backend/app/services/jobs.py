@@ -138,6 +138,33 @@ class Cancelled(Exception):
     """Raised by a handler that noticed `context.cancelled` and stopped."""
 
 
+class NonRetryable(Exception):
+    """A failure a second attempt cannot fix, so it is not given one.
+
+    The retry in `_retry_or_fail` exists for a *killed process* — the work was
+    fine and the worker went away. It is exactly wrong for a failure whose cause
+    is the inputs: a stale optimization result is stale on the retry too, so
+    running it again burns a worker slot to reach the same answer, and does it
+    `MAX_ATTEMPTS` times.
+
+    Carries a code and a remedy for the same reason `op_errors` does: "failed"
+    tells a caller nothing about whether to change something or just try again.
+    """
+
+    def __init__(self, message: str, *, code: str = "PRECONDITION",
+                 remedy: str = "", detail: Optional[dict] = None):
+        super().__init__(message)
+        self.code = code
+        self.remedy = remedy or (
+            "The inputs changed; a retry would fail the same way. "
+            "Re-submit against the current document.")
+        self.detail = detail or {}
+
+    def to_dict(self) -> dict:
+        return {"code": self.code, "message": str(self), "remedy": self.remedy,
+                **self.detail}
+
+
 class Context:
     """What a running handler is given, and how it reports back.
 
@@ -412,6 +439,11 @@ def run(job: Job) -> Job:
             result = fn(context)
     except Cancelled:
         return _finish(job.id, CANCELLED, message="Cancelled")
+    except NonRetryable as stale:
+        # Terminal on the first detection. Not `_retry_or_fail`: the inputs are
+        # the problem, and the second attempt reads the same inputs.
+        _LOGGER.info("job %s (%s) failed without retry: %s", job.id, job.kind, stale)
+        return _finish(job.id, FAILED, error=stale.to_dict(), message=str(stale))
     except Exception as exc:  # noqa: BLE001 — the message is the deliverable
         _LOGGER.warning("job %s (%s) failed: %s", job.id, job.kind, exc, exc_info=True)
         return _retry_or_fail(job.id, exc)
@@ -419,8 +451,17 @@ def run(job: Job) -> Job:
     # alternative is a job reported as succeeded whose work was cut short.
     if context.cancelled:
         return _finish(job.id, CANCELLED, message="Cancelled")
-    return _finish(job.id, SUCCEEDED, result=result if isinstance(result, dict) else {},
-                   message=f"{job.kind} complete")
+    payload = result if isinstance(result, dict) else {}
+    # The handler's own message wins. Optimize says which features the solve ate
+    # and to mark them keep; a package says which revision it built. Overwriting
+    # both with "optimize complete" threw away the only part of the outcome a
+    # person needed to read — the poll showed a green tick and no warning.
+    #
+    # `message` stays inside `result` as well as being lifted onto the job.
+    # Clients already read `result.message`, and a field that moves is a client
+    # that breaks on a deploy for no gain.
+    return _finish(job.id, SUCCEEDED, result=payload,
+                   message=str(payload.get("message") or f"{job.kind} complete"))
 
 
 def _finish(job_id: str, status: str, *, result: Optional[dict] = None,

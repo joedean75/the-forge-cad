@@ -903,28 +903,44 @@ def update_document(
     resolution: int = 128,
     expected_revision: Optional[int] = None,
 ) -> Optional[DesignDocument]:
-    doc = get_document(doc_id)
-    if doc is None:
-        return None
-    check_revision(doc, expected_revision)
+    # The whole read-check-write under one lock, and in the *service* rather
+    # than at the router. The operation path serializes its mutating writes; this
+    # one did not, so two overlapping whole-document PUTs could both read
+    # revision 3, both pass `check_revision`, and both apply — the exact race
+    # the counter exists to stop, on the write most able to clobber, because a
+    # tree PUT replaces everything.
+    #
+    # In the service because the router is not the only caller: `restore_version`,
+    # the rollback path in `cad_operations` and the test helpers all come through
+    # here, and a guarantee that holds only for HTTP is one that holds by
+    # accident. The lock is reentrant, so an operation handler that calls this
+    # while already holding it is unaffected.
+    with writing(doc_id):
+        doc = get_document(doc_id)
+        if doc is None:
+            return None
+        check_revision(doc, expected_revision)
 
-    tree_changed = False
-    if name is not None:
-        doc.name = name
-    if optimization is not None:
-        doc.optimization = optimization
-    if feature_tree is not None and _tree_needs_rebuild(doc, feature_tree):
-        doc.feature_tree = feature_tree
-        tree_changed = True
-        if doc.provenance == "text_to_cad":
-            doc.provenance = "mixed"
+        tree_changed = False
+        if name is not None:
+            doc.name = name
+        if optimization is not None:
+            doc.optimization = optimization
+        if feature_tree is not None and _tree_needs_rebuild(doc, feature_tree):
+            doc.feature_tree = feature_tree
+            tree_changed = True
+            if doc.provenance == "text_to_cad":
+                doc.provenance = "mixed"
 
-    if tree_changed:
-        evaluate_document(doc, resolution=resolution)
-    else:
-        doc.updated_at = _now()
-        _persist(doc)
-    return doc
+        if tree_changed:
+            evaluate_document(doc, resolution=resolution)
+        else:
+            # A metadata-only write — a rename, an optimization setup — still
+            # moves the revision and still has to be inside the lock, or the
+            # cheap writes are the ones that race.
+            doc.updated_at = _now()
+            _persist(doc)
+        return doc
 
 
 def delete_document(doc_id: str) -> bool:

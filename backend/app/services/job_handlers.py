@@ -99,11 +99,23 @@ def run_optimize(context: jobs.Context) -> dict:
         raise jobs.Cancelled() from stopped
     except docs.RevisionConflict as conflict:
         # Not a crash and not worth retrying: the answer was computed correctly
-        # and the question changed. Saying which revision it was about is what
-        # lets the UI offer "re-run against the current part".
-        raise RuntimeError(
+        # and the question changed. It used to raise `RuntimeError`, which the
+        # runner treats as transient — so a stale result was recomputed from the
+        # *same* submitted revision, found the same conflict, and burned a
+        # worker slot doing it. Typed as non-retryable, it is terminal on the
+        # first detection.
+        #
+        # Both revisions are in the detail, which is what lets a client offer
+        # "re-run against the current part" rather than just reporting a failure.
+        raise jobs.NonRetryable(
             f"the part was edited while the study ran, so the result was not "
-            f"applied ({conflict})") from conflict
+            f"applied ({conflict})",
+            code="REVISION_CONFLICT",
+            remedy="Re-run the study against the current part; the geometry it "
+                   "was computed from no longer exists.",
+            detail={"submitted_revision": conflict.expected,
+                    "current_revision": conflict.actual},
+        ) from conflict
     finally:
         stop_polling.set()
         poller.join(timeout=2.0)
@@ -141,8 +153,12 @@ def run_release_package(context: jobs.Context) -> dict:
         context.subject_id,
         revision=context.inputs.get("revision"),
         drawing_spec=context.inputs.get("drawing_spec"))
-    context.progress(1.0, f"Revision {result['revision']} packaged")
-    return result
+    message = f"Revision {result['revision']} packaged"
+    context.progress(1.0, message)
+    # Named in the result, because that is where `jobs.run` reads the message it
+    # stores on the job. A progress note is overwritten by the terminal
+    # transition; only the returned dict survives it.
+    return {**result, "message": message}
 
 
 # ---------------------------------------------------------------------------
