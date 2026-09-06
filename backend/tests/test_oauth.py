@@ -193,8 +193,14 @@ def test_github_identity_requires_verified_email():
 def test_expired_state_is_rejected(monkeypatch):
     _configure_github(monkeypatch)
     state = _state_from(_start_login().headers["location"])
-    # Age the pending login past its TTL.
-    oauth._PENDING[state].expires_at = 0
+    # Age the pending login past its TTL. The state lives in the datastore now
+    # rather than in this process — that is what lets the callback land on a
+    # different API worker than the one that minted the PKCE verifier.
+    from app.services import persistence
+
+    key = oauth._STATE_PREFIX + state
+    pending = persistence.take_ephemeral(key)
+    persistence.save_ephemeral(key, {**pending, "expires_at": 0})
     oauth._purge_expired()
     resp = client.get(
         f"/api/auth/oauth/github/callback?code=c&state={state}", follow_redirects=False

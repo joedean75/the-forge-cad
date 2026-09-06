@@ -29,6 +29,7 @@ _ORDER = "order"  # manufacturing orders / RFQs
 _META = "meta"  # one-time migration markers etc.
 _TRAJECTORY = "trajectory"  # recorded agent interaction sequences (training data)
 _JOB = "job"  # durable background work (see services/jobs.py)
+_EPHEMERAL = "ephemeral"  # short-lived, single-use server-side state (OAuth)
 
 _MIGRATION_MARKER = "json_files_migrated"
 _MESH_STRIP_MARKER = "document_meshes_stripped_v1"
@@ -80,6 +81,84 @@ def save_account(account_id: str, account: dict) -> None:
 
 def load_account(account_id: str) -> Optional[dict]:
     return _load(_ACCOUNT, account_id)
+
+
+# ---------------------------------------------------------------------------
+# Short-lived shared state
+#
+# A row for something that lives for sixty seconds looks like overkill until the
+# second API worker exists: an OAuth callback lands on whichever worker the load
+# balancer picks, and the PKCE verifier was minted on a different one. In memory
+# that flow fails roughly half the time with "unknown or expired sign-in", which
+# reads as a provider problem and is not.
+# ---------------------------------------------------------------------------
+
+def save_ephemeral(key: str, value: dict) -> None:
+    _save(_EPHEMERAL, key, value)
+
+
+def take_ephemeral(key: str) -> Optional[dict]:
+    """Read and delete in one transaction — these are all single-use.
+
+    The delete is what makes it single-use, and it has to be atomic with the
+    read or two concurrent redemptions of one handoff code both succeed. Under
+    SQLite the write lock serializes them; under Postgres the row is locked
+    first, for the same reason `claim_job` does.
+    """
+    with SessionLocal() as s:
+        if engine.dialect.name != "sqlite":
+            s.execute(select(Record)
+                      .where(Record.kind == _EPHEMERAL, Record.id == key)
+                      .with_for_update())
+        row = s.get(Record, {"kind": _EPHEMERAL, "id": key})
+        if row is None:
+            return None
+        data = json.loads(row.data)
+        s.delete(row)
+        s.commit()
+        return data
+
+
+def purge_ephemeral(before_epoch: float) -> int:
+    """Drop entries whose `expires_at` has passed. Bounded by the TTL, not by count."""
+    removed = 0
+    with SessionLocal() as s:
+        rows = s.scalars(select(Record).where(Record.kind == _EPHEMERAL)).all()
+        for row in rows:
+            try:
+                if float(json.loads(row.data).get("expires_at", 0)) < before_epoch:
+                    s.delete(row)
+                    removed += 1
+            except (ValueError, TypeError):
+                s.delete(row)
+                removed += 1
+        s.commit()
+    return removed
+
+
+def count_ephemeral() -> int:
+    with SessionLocal() as s:
+        return len(s.scalars(select(Record.id).where(Record.kind == _EPHEMERAL)).all())
+
+
+# Two functions rather than one taking the field name, and the reason is a test:
+# `test_every_json_field_caller_passes_a_literal` walks the AST and fails any
+# `_rows_by_json_field` call whose field is not a constant. A pass-through would
+# satisfy it only by hiding the interpolation behind one more frame — and the
+# guard exists because a JSON path cannot be bound by a driver, so the first
+# caller that forwards a request field is an injection.
+#
+# Both are filtered in SQL rather than by loading every account: the in-memory
+# indexes are a cache now rather than the source of truth, and a lookup that
+# fell through to a full table scan would make a second worker slower than one
+# rather than merely correct.
+
+def accounts_by_email(email: str) -> List[dict]:
+    return _rows_by_json_field(_ACCOUNT, "email", email)
+
+
+def accounts_by_stripe_customer(customer_id: str) -> List[dict]:
+    return _rows_by_json_field(_ACCOUNT, "stripe_customer_id", customer_id)
 
 
 def list_accounts() -> List[str]:

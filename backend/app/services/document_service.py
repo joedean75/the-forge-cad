@@ -351,6 +351,10 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
         # *looking* at a document through a path that ensures geometry would
         # invalidate somebody else's optimistic write. Mass is the one derived
         # number a material moves, so it is the one thing worth writing for.
+        #
+        # **A caller that changed a field outside the evaluation key must persist
+        # it itself**, because this branch cannot see that it did: `set_material`
+        # learned that the hard way. `set_spec` and `set_tolerances` already do.
         if doc.derived.mass != mass_before:
             doc.updated_at = _now()
             if persist:
@@ -669,6 +673,14 @@ def set_material(doc_id: str, material_id: str, resolution: int = 128) -> Option
         return None
     materials.get_material(material_id)  # validates / falls back
     doc.material_id = material_id
+    # Persisted here rather than left to `evaluate_document`. The material is not
+    # in the evaluation key — correctly, since it cannot move the body — so this
+    # takes the cache-hit path, which writes only when the *mass* changed. Two
+    # aluminium grades have all but identical densities, so binding one to a part
+    # made of the other produced no mass change and the assignment was silently
+    # lost on the next reload. Intermittent, and keyed on the densities involved,
+    # which is the worst way for it to fail.
+    _persist(doc)
     evaluate_document(doc, resolution=resolution)
     return doc
 

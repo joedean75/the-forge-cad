@@ -616,3 +616,12 @@ def summary() -> dict:
 def _json_safe(value: Any) -> Any:
     """Anything a handler returns has to survive a round trip through the row."""
     return json.loads(json.dumps(value, default=str))
+
+
+# Registration by import, at the bottom because `job_handlers` imports `handler`
+# from this module: by the time this line runs everything it needs exists. The
+# same trick `cad_operations` uses for `assembly_operations`, and for the same
+# reason — without it, whether `enqueue` knows about a kind depends on which
+# module happened to be imported first, so a job that submits fine through the
+# router raises `KeyError` from a script or a test.
+from app.services import job_handlers  # noqa: E402,F401  (registers the handlers)

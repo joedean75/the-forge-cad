@@ -60,7 +60,12 @@ def test_splitting_the_planner_out_did_not_change_the_gcode():
     post-processor, and the G-code it emits must be the same program."""
     result = generate_toolpaths(_plate(), TOOL)
     passes = plan_passes(_plate(), TOOL)
-    assert result["gcode_url"].startswith("data:text/plain;base64,")
+    # The planner returns the program itself. Where a generated file *lives* is
+    # the caller's decision — `document_analysis.cam_document` files it as a
+    # content-hash artifact — and a pure geometry module inventing a data URI
+    # for it was how a megabyte of base64 ended up inlined in the document.
+    assert result["gcode"].startswith("; Forge 2.5D CAM")
+    assert "G21 ; mm" in result["gcode"] and "M30 ; end" in result["gcode"]
     assert result["estimated_minutes"] > 0
     # Read off the planner rather than assumed: the margin is widened to
     # `tool diameter + stepover` when the caller's is narrower, because a margin

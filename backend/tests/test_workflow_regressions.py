@@ -100,17 +100,15 @@ def test_an_analysis_that_finishes_after_an_edit_is_not_published_as_current():
     """
     doc_id = _part()
     doc = docs.get_document(doc_id)
-    resolution = doc.derived.resolution or 32
-    taken = derived_cache.analysis_fingerprint(doc, "analysis", resolution, {})
+    taken = derived_cache.analysis_fingerprint(doc, "analysis", {})
 
     _resize(doc_id, 0.2)
 
     doc = docs.get_document(doc_id)
     kept = derived_cache.publish(doc, "analysis", {"max_stress": 42.0},
-                                 resolution=doc.derived.resolution or 32,
                                  settings={}, fingerprint=taken)
     assert kept is False
-    assert derived_cache.freshness(doc, "analysis", doc.derived.resolution or 32) == "missing"
+    assert derived_cache.freshness(doc, "analysis") == "missing"
 
 
 def test_an_undo_landing_after_a_newer_edit_is_refused_when_it_carries_a_revision():

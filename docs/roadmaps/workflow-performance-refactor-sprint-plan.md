@@ -2,7 +2,69 @@
 
 Repository: [joedean75/cad_system](https://github.com/joedean75/cad_system)  
 Prepared: September 5, 2026  
-Status: Proposed backlog, not an implementation commitment
+Status: **Implemented.** All six sprints are on the branch. What differed from
+the plan, and what the work found, is below; the plan itself is unedited.
+
+## What shipped, and where it differed
+
+| Sprint | Landed as | Deviation worth knowing |
+|---|---|---|
+| 1 | `services/instrumentation`, `benchmarks/{fixtures,run}.py`, `tests/test_workflow_regressions.py`, `docs/FINGERPRINTS.md`, a CI benchmark job | The recorder is a module global, not a ContextVar — the harness drives the app through `TestClient`, whose request handling runs on a portal thread that does not inherit the caller's context, so a ContextVar would have recorded nothing under the one thing that uses it. The planned SDF fixture was to be a smooth `FilletFeature` blend; the catalog can no longer build one, so it is a shelled body, which the exact kernel declines for the same reason. |
+| 2 | `services/derived_cache`, `document.revision` + `expected_revision`, `document_service.writing`, the store split into three slices with request tickets | The per-document write lock was not in the plan and is required by it: the concurrency test showed two edits both reading revision 3, both passing the check, and both reporting 4 — so `expected_revision` was returning a number the caller's own write never produced. |
+| 3 | `services/jobs` + `services/job_handlers`, generic `/jobs` routes, `store/document/polling.ts` | `JOB-01` names Redis as a candidate; the queue is the datastore instead, for the reason argued in `jobs.py`. Cross-machine fan-out is a `claim` adapter away and is not needed at this scale. |
+| 4 | `services/blobs` (memory + filesystem adapters), `services/singleflight`, G-code as an artifact | An object-store adapter is the same three methods and is not written: nothing in this deployment has a bucket, and an adapter with no user is an adapter with no test. |
+| 5 | `services/workflow`, FEA on the queue as `start_analysis`, `job_status`/`cancel_job`, `tests/test_shared_types_contract.py` | `ARCH-02` (extracting touched handlers into domain modules) was **not** done. The handlers this work touched are four out of seventy in one registry, and splitting four of them buys a second place to look while leaving the other sixty-six where they are. Deferred deliberately, as the plan's capacity rule allows. |
+| 6 | `docs/SCALING-AUDIT.md`, account/OAuth state moved off-process, `benchmarks/load.py`, `benchmarks/budgets.py` gated in CI, `DEPLOY.md` ops sections | Multi-worker is **not** enabled and the audit says why: the document write lock and the collaboration rooms are still per process. `RELEASE-01` makes that conditional rather than required, which is the outcome. |
+
+## What the work found that the plan did not predict
+
+Each of these was a live defect, found by writing the measurement or the test
+the plan asked for rather than by looking for bugs:
+
+- **`set_material` did not reliably persist.** It relied on the evaluate path to
+  save, and Sprint 2's "an edit that changed nothing is not a write" made that
+  conditional on the *mass* moving. Two aluminium grades have all but identical
+  densities, so binding one to a part made of the other silently lost the
+  assignment on reload — intermittently, keyed on the densities involved.
+- **`dfm`'s `resolution` argument is not the geometry's.** It meshes the additive
+  rows. Fingerprinting the body on it made a report stale the instant anyone
+  asked with a different one, and current when the body had been rebuilt at
+  another. Fingerprints now always use the resolution the body was evaluated at.
+- **The filesystem blob sweep deleted the file and left the cache in front
+  serving it** — a retention policy that applied only to the other instances.
+- **`catalog_ref` had never been mirrored into `shared/types.ts`.** Found by the
+  contract test on its first run, which is what that test is for.
+- **Job handlers registered only if something happened to import them**, so a
+  job that submitted fine through the router raised `KeyError` from a script.
+
+## The measurements
+
+Taken with `benchmarks/run.py --repeat 3` on a 4-core x86_64 container with OCP
+present and the native SDF wheel absent. Not budgets — the numbers a budget
+would be argued from.
+
+| Scenario | Cold | Warm p50 | Warm p95 | Payload |
+|---|---|---|---|---|
+| `exact_plate.evaluate` | 16.2 ms | 1.3 ms | 1.6 ms | 15.9 KiB |
+| `exact_plate.edit` | 7.3 ms | 72.6 ms | 73.4 ms | 21.0 KiB |
+| `feature_tree.edit` (17 features) | 521.9 ms | 459.1 ms | 540.9 ms | 200.3 KiB |
+| `sdf_shell.edit` | 1833.6 ms | 1242.1 ms | 1363.0 ms | 4402.0 KiB |
+| `sdf_shell.export_step` | 13.2 s | 14.4 s | 15.9 s | 272.4 MiB |
+| `library.list` (30 docs) | 2.5 ms | 1.1 ms | 1.1 ms | 12.2 KiB |
+
+Two of those are the prioritised bottleneck list `PERF-01` asked for. On the
+17-feature fold the **kernel is 452 ms of a 461 ms edit** with the B-rep node
+cache hitting 11 of 28 lookups — so the fold, not the tessellation or the
+encode, is where an edit's time goes. And a faceted STEP of the shelled body is
+**272 MiB and fourteen seconds**, which is the pre-generation triangle budget
+`BLOB-04` requires kept, measured rather than asserted.
+
+Under the mixed load (`benchmarks/load.py --seconds 20`, two editors, two mesh
+fetchers, a browser and an analysis job on two workers): edit p50 **956 ms**
+against 459 ms in isolation, mesh fetch p50 **0.04 ms** (a blob-cache hit),
+library listing p50 34 ms, no errors. The ~2x edit contention is the number a
+capacity decision should start from.
+
 
 ## Goal
 

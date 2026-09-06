@@ -78,6 +78,13 @@ jobs:
           name: benchmark-report
           path: backend/benchmark.json
           retention-days: 30
+      # Gated, unlike the timings above. These are byte counts — deterministic
+      # functions of the code rather than of the runner — and they are the ones
+      # that actually regressed: the mesh was once 99% of a 1164 KB document
+      # response, re-sent on every edit, and nobody noticed for months.
+      - name: Payload budgets
+        working-directory: backend
+        run: python -m benchmarks.budgets --json budgets.json
 
   frontend:
     name: Frontend · lint + type-check + build
@@ -98,6 +105,13 @@ jobs:
       - name: Build (type-check gate)
         working-directory: frontend
         run: npm run build
+      # The built entry chunk is what the payload budget measures, so it is
+      # checked here where it already exists rather than by building it twice.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Entry-bundle budget
+        run: python backend/benchmarks/budgets.py --frontend-only
 
   docker:
     name: Docker · build image

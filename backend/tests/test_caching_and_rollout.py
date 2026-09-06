@@ -14,7 +14,7 @@ import pytest
 
 from app.cad_kernel.evaluator import brep
 from conftest import body_id
-from app.services import cad_operations as ops
+from app.services import derived_cache, cad_operations as ops
 from app.services import document_service as docs
 from app.services import rollout
 
@@ -27,9 +27,14 @@ def _doc(size=0.05):
 
 
 # ── the LRU ──
+#
+# It lives in `services/derived_cache` now, alongside the fingerprints that
+# decide what may be reused — one file for "which edit invalidates which
+# result" rather than five call sites. `document_service` still aliases the two
+# geometry caches by their old names, so nothing that reaches for them broke.
 
 def test_the_cache_forgets_its_oldest_entry_rather_than_growing():
-    cache = docs._LruCache(3)
+    cache = derived_cache.LruCache(3)
     for key in "abcd":
         cache[key] = key
 
@@ -38,7 +43,7 @@ def test_the_cache_forgets_its_oldest_entry_rather_than_growing():
 
 
 def test_reading_an_entry_makes_it_recent():
-    cache = docs._LruCache(3)
+    cache = derived_cache.LruCache(3)
     for key in "abc":
         cache[key] = key
     cache["a"]                                     # touch
@@ -49,7 +54,7 @@ def test_reading_an_entry_makes_it_recent():
 
 def test_popping_an_entry_forgets_its_order_too():
     """Otherwise a popped key lingers in the order list and evicts a live one."""
-    cache = docs._LruCache(2)
+    cache = derived_cache.LruCache(2)
     cache["a"] = "a"
     cache.pop("a", None)
     cache["b"] = "b"

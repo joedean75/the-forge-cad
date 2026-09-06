@@ -178,19 +178,19 @@ def test_a_material_change_invalidates_a_solve_but_not_a_dfm_report():
     material change would train people to ignore the staleness marker.
     """
     doc = docs.get_document(_part())
-    analysis_before = derived_cache.analysis_fingerprint(doc, "analysis", 32, {})
-    dfm_before = derived_cache.analysis_fingerprint(doc, "dfm", 32, {"process": "milling"})
+    analysis_before = derived_cache.analysis_fingerprint(doc, "analysis", {})
+    dfm_before = derived_cache.analysis_fingerprint(doc, "dfm", {"process": "milling"})
 
     doc.material_id = "ti-6al-4v"
 
-    assert derived_cache.analysis_fingerprint(doc, "analysis", 32, {}) != analysis_before
-    assert derived_cache.analysis_fingerprint(doc, "dfm", 32, {"process": "milling"}) == dfm_before
+    assert derived_cache.analysis_fingerprint(doc, "analysis", {}) != analysis_before
+    assert derived_cache.analysis_fingerprint(doc, "dfm", {"process": "milling"}) == dfm_before
 
 
 def test_a_products_own_settings_are_part_of_its_fingerprint():
     doc = docs.get_document(_part())
-    milling = derived_cache.analysis_fingerprint(doc, "dfm", 32, {"process": "milling"})
-    additive = derived_cache.analysis_fingerprint(doc, "dfm", 32, {"process": "additive"})
+    milling = derived_cache.analysis_fingerprint(doc, "dfm", {"process": "milling"})
+    additive = derived_cache.analysis_fingerprint(doc, "dfm", {"process": "additive"})
     assert milling != additive
 
 
@@ -198,7 +198,7 @@ def test_an_unknown_product_kind_raises_rather_than_defaulting():
     """Defaulting to the geometry fingerprint would make it look current forever."""
     doc = docs.get_document(_part())
     with pytest.raises(KeyError):
-        derived_cache.analysis_fingerprint(doc, "vibes", 32, {})
+        derived_cache.analysis_fingerprint(doc, "vibes", {})
 
 
 # ---------------------------------------------------------------------------
@@ -208,34 +208,31 @@ def test_an_unknown_product_kind_raises_rather_than_defaulting():
 def test_a_published_result_reads_back_as_current_and_goes_stale_on_an_edit():
     doc_id = _part()
     doc = docs.get_document(doc_id)
-    resolution = doc.derived.resolution or 32
 
-    assert derived_cache.freshness(doc, "spec", resolution) == "missing"
-    derived_cache.publish(doc, "spec", {"score": 1.0}, resolution=resolution)
-    assert derived_cache.freshness(doc, "spec", resolution) == "current"
+    assert derived_cache.freshness(doc, "spec") == "missing"
+    derived_cache.publish(doc, "spec", {"score": 1.0})
+    assert derived_cache.freshness(doc, "spec") == "current"
 
     cad_operations.execute("set_feature_params", doc_id, {
         "feature_id": _box_id(doc_id), "params": {"size": {"x": 0.2, "y": 0.05, "z": 0.01}}})
     doc = docs.get_document(doc_id)
-    assert derived_cache.freshness(doc, "spec", doc.derived.resolution or 32) == "stale"
+    assert derived_cache.freshness(doc, "spec") == "stale"
 
 
 def test_a_result_computed_against_a_document_that_has_since_moved_is_refused():
     """STATE-02. The case a slow job hits every time and no caller handles."""
     doc_id = _part()
     doc = docs.get_document(doc_id)
-    resolution = doc.derived.resolution or 32
-    taken_before = derived_cache.analysis_fingerprint(doc, "analysis", resolution, {})
+    taken_before = derived_cache.analysis_fingerprint(doc, "analysis", {})
 
     cad_operations.execute("set_feature_params", doc_id, {
         "feature_id": _box_id(doc_id), "params": {"size": {"x": 0.3, "y": 0.05, "z": 0.01}}})
     doc = docs.get_document(doc_id)
 
     kept = derived_cache.publish(doc, "analysis", {"max_stress": 1.0},
-                                 resolution=doc.derived.resolution or 32,
                                  settings={}, fingerprint=taken_before)
     assert kept is False
-    assert derived_cache.freshness(doc, "analysis", doc.derived.resolution or 32) == "missing"
+    assert derived_cache.freshness(doc, "analysis") == "missing"
 
 
 def test_running_dfm_files_a_product_the_document_carries():
@@ -246,7 +243,7 @@ def test_running_dfm_files_a_product_the_document_carries():
     assert env["result"]["fingerprint"]
     doc = docs.get_document(doc_id)
     assert derived_cache.freshness(
-        doc, "dfm", 32, {"process": "additive", "build_axis": "auto", "resolution": 32}
+        doc, "dfm", {"process": "additive", "build_axis": "auto", "resolution": 32}
     ) == "current"
 
 
@@ -262,7 +259,7 @@ def test_an_oversized_result_is_recorded_as_truncated_rather_than_inlined():
     """A drawing sheet is an artifact with a URL, not a field on the document."""
     doc = docs.get_document(_part())
     huge = {"svg": "x" * (derived_cache.MAX_RESULT_BYTES + 1)}
-    derived_cache.publish(doc, "drawing", huge, resolution=32, settings={"spec": None})
+    derived_cache.publish(doc, "drawing", huge, settings={"spec": None})
     held = derived_cache.held(doc, "drawing")
     assert held.result == {}
     assert held.truncated is True
