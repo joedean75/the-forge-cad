@@ -2,6 +2,14 @@
 
 _Product strategy and market read, July 2026._
 
+> **Superseded as strategy, kept as a record of what shipped and why.** Forge is
+> now an **internal tool** for RC, drone and robotics work
+> ([docs/roadmaps/RC-DRONE-ROBOTICS.md](docs/roadmaps/RC-DRONE-ROBOTICS.md)),
+> not a product competing for CAD seats. The three waves below did ship and the
+> engineering reasoning under them still holds; the market read, the buyer and
+> the pricing thesis no longer describe anything. Where this document and the
+> RC/drone plan disagree about **what to build next**, the RC/drone plan wins.
+
 Three waves of work, in the order they were done. **All three have shipped**;
 the six programmes that delivered them are archived in
 [docs/roadmaps/](docs/roadmaps/) with what each one measured.

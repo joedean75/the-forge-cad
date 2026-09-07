@@ -70,6 +70,49 @@ docker compose up -d          # brings up postgres + backend (edit compose for p
 # Front it with Caddy/Traefik/nginx for TLS on :443 → :8000.
 ```
 
+## Deploying it internally (the posture this is actually for)
+
+Forge is an **internal tool** — one organisation, private repository, nothing
+offered to anyone outside it. Most of this document is unchanged by that, but
+four things are, and the first is a trap you meet on day one.
+
+- **The default plan is `free`, and that is 3 documents, resolution cap 64 and
+  200 ops a month** (`services/plans.py`). Nothing about an internal deployment
+  changes it: `security._dev_account()` is enterprise, so with
+  `FORGE_AUTH_REQUIRED` unset nobody ever sees the cap — and the first real
+  signup hits a three-document wall and visibly blockier geometry than the demo
+  had. Without `STRIPE_API_KEY` plan changes are local and immediate, so the fix
+  costs nothing; it just has to be *done*, per account, or defaulted. Put
+  everyone on `enterprise`.
+- **One plan for everyone, or geometry stops being comparable.**
+  `capped_resolution` clamps to the account's plan, so the same document meshes
+  at 64 for one engineer and 256 for another — two people looking at the same
+  part and disagreeing about its DFM report. Anything that compares meshes
+  across runs (benchmarks, dataset generation, a differential test) pins
+  resolution through `rollout.rollout(resolution=…)` or `FORGE_ROLLOUT_RESOLUTION`
+  instead of trusting the plan.
+- **Internal is not unauthenticated.** Set `FORGE_AUTH_REQUIRED=1` and
+  `FORGE_JWT_SECRET`. With auth off every request is attributed to one shared
+  dev account: documents are all owned by it, `can_access` has nothing to
+  separate, recorded trajectories name nobody, and `list_standard_parts` returns
+  that one account's supplier imports to everybody. Rate limits stay on for the
+  same practical reason they exist — not hostile users, but an agent loop that
+  runs 300 operations a minute by accident.
+- **Printers live on the LAN**, so `FORGE_ALLOW_PRIVATE_MACHINE_URLS=1` is the
+  expected setting here rather than the exception. Link-local, multicast and
+  reserved addresses are still refused whatever the flag says, so cloud
+  metadata stays unreachable.
+
+Leave the `STRIPE_*` variables unset; plans then behave as local entitlements,
+which is all they are being used for.
+
+One non-deployment consequence, recorded here because this is where someone
+checks before opening the tool up: the parts-catalog licence analysis in
+[`docs/PURCHASED-PARTS-SOURCING.md`](docs/PURCHASED-PARTS-SOURCING.md) rests on
+this exact posture. Copyright obligations trigger on distributing a copy, so
+serving the tool to anyone outside the organisation is the event that revives
+them. That document's last section is the checklist.
+
 ## Required production configuration
 
 | Env var | Why |

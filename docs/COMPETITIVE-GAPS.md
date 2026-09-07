@@ -154,7 +154,7 @@ The assembly holds *references to finished documents*, which is bottom-up only.
 | Sketch entities / constraints | 600 / 600 | `sketch_solver.py:408` | Defensible — it is a DoS bound on an O(rows²·vars) SVD, documented as such. A traced logo or a real weldment layout will still hit it. |
 | Text-to-assembly parts | 6 | `text_to_assembly` | Low ceiling for the marquee demo. |
 | FEA elements (default) | 8 000 | `fea.py:52` | Fine for a bracket, coarse for anything with a fillet that matters. |
-| Resolution cap by plan | 64 / 192 / 256 | `capped_resolution` | Only affects SDF paths; exact bodies are unaffected. Correct design, but a free-tier user optimising a part gets visibly blockier geometry than a paying one. |
+| Resolution cap by plan | 64 / 192 / 256 | `capped_resolution` | Only affects SDF paths; exact bodies are unaffected. Correct design for a product; on an internal deployment it is a footgun, because new accounts default to `free` and two engineers on different plans get different geometry from one document. Put everyone on one plan — [DEPLOY.md](../DEPLOY.md#deploying-it-internally-the-posture-this-is-actually-for). |
 | Import file size | 50 MB | `import_service.py:42` | A real supplier assembly STEP exceeds this routinely. |
 
 None of these is *wrong*. They are all bounds someone will hit on their first

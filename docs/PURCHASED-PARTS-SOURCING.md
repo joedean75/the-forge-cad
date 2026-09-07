@@ -6,18 +6,72 @@ records what was checked, on 2026-08-09, so the next person does not re-derive
 it — and so that if a portal's terms change, there is a baseline to compare
 against.
 
+**Reanalysed 2026-09-07**, when the posture was settled: this is an *internal*
+tool. That is not a footnote. Half the verdicts below were reached by asking
+"may we redistribute this?", which is the wrong question for a tool nobody
+outside the organisation runs — and the other half were reached by asking
+"may we fetch this at all?", which the posture does not change. The two halves
+are now marked as such, because the thing that will eventually make this
+document wrong is the posture changing, not a licence changing.
+
+## The posture this rests on
+
+- **An internal tool for RC, drone and robotics work**
+  ([`roadmaps/RC-DRONE-ROBOTICS.md`](roadmaps/RC-DRONE-ROBOTICS.md)), not a CAD
+  product competing for seats.
+- **The repository is private** and the code is not published. Neither is any
+  part library built inside it.
+- **Nothing is offered to anyone outside the organisation** — not as a hosted
+  service to customers, not as a download, not as a data set.
+
+Every conclusion below is conditional on all three. [If this ever leaves the
+building](#if-this-ever-leaves-the-building) is the checklist for the day one of
+them stops being true, and it is written first-person-plural on purpose: the
+work of unwinding this falls on whoever is here then.
+
+This is engineering judgment about which questions to ask, not legal advice.
+The rule it applies is a boundary anyone can check — *did a copy leave?* — and
+where the answer is close, the entry says so rather than rounding it down.
+
+## The two questions, and why they answer differently
+
+Almost every confusion in this area comes from treating two unrelated
+restrictions as one. They fail at different moments:
+
+| | Triggered by | Internal-only use | Examples here |
+|---|---|---|---|
+| **Copyright licence** (GPL, CC BY, CC BY-SA, MIT, OCL, CERN-OHL) | *Distributing* — conveying a copy to someone outside the licensee. Also *public* performance/sharing. | **Does not trigger.** An organisation using something across its own machines is one licensee, not a distribution chain. Obligations sit dormant, not discharged. | BOLTS, FreeCAD Fasteners, SparkFun, KiCad, Pixhawk |
+| **Contract / terms of use** (a portal's ToU, an API agreement, an account you clicked through) | *Using it at all*, on the terms you accepted. | **Triggers exactly the same.** A contract does not care whether you redistribute; it binds because you agreed to it. | TraceParts, 3Dfindit, McMaster-Carr, GrabCAD |
+
+So the reanalysis moves in one direction only. **Copyleft stopped being a
+barrier; the portals did not.** Anything that was blocked by a licence is now
+available; everything that was blocked by *access* — robots.txt, a client
+certificate, an API agreement — is blocked exactly as hard as it was.
+
+Two riders on the copyright row, because both bite in practice:
+
+- **AGPL is the exception.** Its trigger is network use, not distribution, so a
+  tool serving pages to a browser conveys under it. Nothing considered here is
+  AGPL; check before adding something that is.
+- **Dormant is not discharged.** GPL data mixed into this codebase makes the
+  codebase undistributable until it is removed. That is a decision to accept a
+  future cost, and it is only sane if the cost is recorded where whoever pays it
+  will find it — which is what the provenance fields below are for.
+
 ## The question
 
 `services/parts_catalog.py` generates 210 purchased parts from the published
 dimensional standards. That is a good floor and a hard ceiling: an ISO 4762
 M4×16 is an ISO 4762 M4×16 whoever makes it, but no amount of standards work
 produces *this* Igus bearing, *that* Festo cylinder, or the connector whose
-footprint decides whether the enclosure lid closes.
+footprint decides whether the enclosure lid closes. R2 sharpens it — a
+brushless motor, an ESC, a flight controller and a LiPo are all *this one*, not
+a class.
 
 Those models exist, on 3Dfindit and TraceParts and the manufacturers' own sites.
 The question is whether this system may fetch them.
 
-## 3Dfindit (CADENAS) — no
+## 3Dfindit (CADENAS) — no, and internal use does not change it
 
 | Checked | Result |
 |---|---|
@@ -28,9 +82,12 @@ The question is whether this system may fetch them.
 | Who owns the models | The manufacturers who publish them. CADENAS hosts. |
 
 The robots.txt naming this crawler and the 403 settle it before the licensing
-question is even reached. There is no seeding path here.
+question is even reached — which is precisely why the internal posture does not
+rescue it. **A crawl is a use, not a distribution.** An engineer downloading a
+part through the browser under their own account is the intended path and always
+was; automating it from this system is not.
 
-## TraceParts — a pass-through, never a seed
+## TraceParts — narrower than it looked, still not a seed
 
 TraceParts *does* publish a real REST gateway
 (<https://developers.traceparts.com>): `POST /v3/Product/cadRequest` then
@@ -60,93 +117,104 @@ Two further obligations shape any integration:
 - **Attribution.** Implementations "shall include the text hyperlink, 'powered
   by TraceParts'".
 
-So a legitimate TraceParts integration is a **per-user pass-through**: the user
-is identified to TraceParts, fetches one file for one use, and it is not
-retained as library content. That is a real feature and a different one from
-what a parts catalog is; it is not built, and if it ever is, it must not write
-rows into `supplier_parts`.
+**What the internal posture changes, and what it does not.** Clause (i) turns on
+*external*, and an internal tool is not an external service; clause (iv) turns on
+*competing*, and we are not in that market. Those two relax. Clause (iii) does
+not — "distribute the Data on any storage medium whatsoever" is broad enough to
+read on a shared internal library, and clause (ii) reads on an internal web app
+without much strain. The contact-capture obligation is unaffected and is
+per-downloading-user, which an account-shared cache defeats by construction.
 
-## The open libraries — a copyleft trap
+So the conclusion survives with a different reason under it: a legitimate
+TraceParts integration is a **per-user pass-through** — the user is identified to
+TraceParts, fetches one file for one use, and it is not retained as shared
+library content. It is not built. If it ever is, it must not write rows into
+`supplier_parts` without written consent, because that is the line clause (iii)
+sits on and consent is cheap to ask for compared with unwinding a seeded catalog.
 
-The tempting shortcut is a free parts library's dimension tables:
+## McMaster-Carr — unchanged
 
-| Project | Licence | Verdict |
-|---|---|---|
-| [BOLTS](https://github.com/boltsparts/BOLTS) | GPL-3.0 | Copying its data would put this codebase under GPL-3. |
-| [FreeCAD Fasteners WB](https://github.com/shaise/FreeCAD_FastenersWB) | GPL-2.0 | Same. |
-| NopSCADlib | GPL-3.0 | Same. |
+`robots.txt` disallows `/catalog/*` and the API is gated behind a per-customer
+client certificate (see the `parts_catalog` module docstring). Both are access
+controls, so both are in the column the posture does not move. An engineer with
+an account downloads a part; this system does not.
 
-They look like free data. Transcribing tables out of them is a licence event,
-not a shortcut, and the underlying numbers are available from the standards
-anyway — which is where `parts_catalog` already gets them.
+## The open libraries — the trap was distribution, and we are not distributing
 
-## Vendor libraries on GitHub — the one path that is not closed
+This section previously read "a copyleft trap" and told you to stay away. Under
+the internal posture that was **wrong in the strict sense**: GPL obligations
+attach to conveying a copy, and nothing here is conveyed.
 
-Checked on 2026-09-07, prompted by Adafruit's, which is the well-known one.
-The portals are gated because a portal's product *is* the aggregation; a
-manufacturer publishing its own catalog is doing something else, and a few of
-them publish under licences that permit redistribution outright. This is the
-only source examined so far where seeding is legally available rather than
-merely tempting.
-
-The distinction that decides each row is **redistribution of the models as a
-collection**, which is exactly what a catalog is. A licence that only permits
-*use in a design* — every "design exception", and TraceParts' terms above —
-covers a user putting the part in an assembly and not this system shipping it.
-
-| Publisher | Where | Licence | Redistributable as catalog content? |
+| Project | Licence | Verdict, internal | What it would cost to publish later |
 |---|---|---|---|
-| [Adafruit](https://github.com/adafruit/Adafruit_CAD_Parts) | `adafruit/Adafruit_CAD_Parts` | **MIT** (repo `LICENSE`) | **Yes.** STEP + Fusion 360 + STL, one folder per product, keyed by Adafruit product number. Attribution is the only condition. |
-| [SparkFun](https://github.com/sparkfun/3D_Models) | `sparkfun/3D_Models` | **CC BY-SA 4.0** (hardware/models; MIT for code) | **Yes, share-alike.** STEP/IGES/STL plus SolidWorks and Blender sources, under `products/{id}/{rev}/{type}/`, real scale, mm. Adaptations of a model stay CC BY-SA; the *codebase* is untouched, unlike the GPL tables above — these are data files, not something transcribed into source. |
-| [Framework Computer](https://github.com/FrameworkComputer/Framework-Laptop-16) | `FrameworkComputer/Framework-Laptop-{12,13,16}`, `ExpansionBay`, `ExpansionCards` | **CC BY 4.0** | **Yes, attribution only.** Whole-system and module CAD, published so third parties can build accessories against it. The most permissive mechanical CAD found from a consumer hardware maker. |
-| [KiCad](https://github.com/KiCad/kicad-packages3D) | `KiCad/kicad-packages3D` | CC BY-SA 4.0 **with a design exception** | Yes, but only under CC BY-SA. The exception waives attribution/share-alike *for boards designed with it*; redistributing the library as a collection is explicitly outside it. Thousands of STEP package bodies — generic footprints (SOT-23, TO-220), not products. |
-| [Digi-Key](https://github.com/Digi-Key/digikey-partner-kicad-library) | `Digi-Key/digikey-partner-kicad-library` | CC BY-SA 4.0 with the same exception | Symbols and footprints, not solids. Useful as a part-number spine, not as geometry. |
-| [Seeed Studio](https://github.com/Seeed-Studio/OPL_Kicad_Library) | `Seeed-Studio/OPL_Kicad_Library` | KiCad-style library licence | Same shape as Digi-Key's: OPL symbols/footprints. Seeed's STEP models are scattered across SnapMagic and shareCAD rather than collected in a repo. |
-| [Voron](https://github.com/VoronDesign) | `VoronDesign/*` | GPLv3 | Printer parts as STEP/F3D. GPL on CAD is the same trap as BOLTS: fine to consult, a licence event to absorb. |
-| Prusa | GitHub + prusa3d.com | GPL on older printers; **Open Community License** on CORE One | No. OCL grants inspection, modification and spare parts for personal or internal business use — not redistribution as library content. |
-| Raspberry Pi | [`raspberrypi/documentation`](https://github.com/raspberrypi/documentation/) (CC BY-SA 4.0); STEP on [pip.raspberrypi.com](https://pip.raspberrypi.com/) | Mixed | The repo is prose. The board STEP files sit on the product portal under its own terms, so this is a per-file question, not a library. |
-| Arduino | — | — | No official CAD repo found. Adafruit's covers several Arduino-form boards. |
-| Pololu | Per-product "Resources" tab | Per-file | Official STEP for gearmotors and similar, one product page at a time. No repo, no bulk. |
-| OpenBuilds | [builds.openbuilds.com](https://builds.openbuilds.com/projectresources/step-parts-library.162/) | Unstated | A full V-slot/extrusion STEP set, but community-hosted with no licence declared — which means no permission, not permission by silence. |
+| [BOLTS](https://github.com/boltsparts/BOLTS) | GPL-3.0 | Usable. Consulting or transcribing its dimension tables into a private, undistributed codebase conveys nothing. | The codebase becomes undistributable until the derived tables are removed or the whole is released under GPL-3. |
+| [FreeCAD Fasteners WB](https://github.com/shaise/FreeCAD_FastenersWB) | GPL-2.0 | Same. | Same, under GPL-2. |
+| [NopSCADlib](https://github.com/nophead/NopSCADlib) | GPL-3.0 | Same. Vitamins (motors, bearings, extrusion, fans) are closer to R2's list than the fastener libraries are. | Same. |
 
-Robotics is a separate seam and worth knowing about, because `export_urdf`
-already speaks that language: `UniversalRobots/Universal_Robots_ROS2_Description`
-(BSD-3/Apache-2.0 packages, with UR's own terms on the meshes),
-`frankarobotics/franka_ros` (Apache-2.0) and the Robotiq description packages
-ship arm and gripper geometry with real joint frames. The catch is the format —
-they are STL/DAE visual meshes, so they arrive through `import_service`'s
-voxel path as an opaque `ImportFeature`, not as an addressable `BrepBodyFeature`.
-Vendor STEP, where it exists, is the one worth importing.
+Two things stop this from being a green light:
 
-[SnapMagic Search (SnapEDA)](https://www.snapeda.com/get-api/) is the
-electronics-side analogue of TraceParts, and lands in the same place: real API,
-models under CC BY-SA 4.0 with Design Exception 1.0, and that exception covers
-putting a part in *a board design* rather than republishing the models as a
-library. Read its terms before any integration; treat it as a pass-through.
+- **It is worth less than it looks.** `parts_catalog` already generates from the
+  standards, and a dimension in a standard is a fact — nobody's content, no
+  licence attached, and the reason that generator was the right call whatever
+  the posture. What these libraries add is *coverage* (DIN and ANSI ranges the
+  standards work has not reached) and, more valuable, an **independent
+  cross-check**: two derivations of the same table that disagree have found a
+  bug in one of them. Reading them for verification is the cheapest use and
+  carries the least to unwind.
+- **Every table taken this way is a lien on the codebase.** Dormant, not
+  discharged. Record it (below) or the person who later wants to open-source or
+  spin out this tool has to re-derive which numbers came from where — from a
+  diff, years late, which is exactly the archaeology this document exists to
+  prevent.
 
-### What this changes
+The sorting rule from [`roadmaps/HANDOFF-R2.md`](roadmaps/HANDOFF-R2.md) is
+unaffected and still the one to apply first: *table what is genuinely
+standardised, parameterise what varies by manufacturer, never invent a number to
+fill a table.* Prefer the standard; use the copyleft library to check it.
 
-The floor moves for the first time. `parts_catalog` generates standards
-geometry and `supplier_parts` files what a user brings; between them sat every
-part that is neither a standard nor already on the user's disk — and Adafruit,
-SparkFun and Framework are that gap, under licences that permit shipping the
-geometry rather than linking to it.
+## Vendor libraries on GitHub — now mostly a question of what you record
 
-Three conditions on ever doing it, none of them optional:
+Checked 2026-09-07, prompted by Adafruit's, which is the well-known one. A
+manufacturer publishing its own product CAD is doing something a portal
+structurally cannot: giving away the aggregation. Under the internal posture the
+column that used to decide these rows — *may this be redistributed as a
+collection?* — decides nothing, because we are not redistributing. What is left
+is the licence's weight **if the posture changes**, which is a real cost with a
+known price rather than a barrier.
 
-- **Attribution is a stored field, not a footer.** A seeded row must carry its
-  publisher and licence, because CC BY-SA obliges anything derived from a
-  SparkFun model to stay CC BY-SA and a row that has lost its provenance
-  cannot say so. `supplier_parts` rows already carry `source`/`source_url`;
-  a seeded row needs a `licence` beside them.
-- **Mixed licences cannot be one undifferentiated list.** MIT, CC BY and
-  CC BY-SA impose different obligations downstream, and the listing already
-  states `fidelity` and `geometry` per row for exactly this reason — a field
-  present on only some rows is one a caller eventually reads wrong.
-- **These are boards, not mechanisms.** The catalogue value is enclosure and
-  clearance work: hole patterns, connector positions, the height of the tallest
-  component. That is a real gap in the generated catalog and it is not the
-  fastener/bearing/extrusion gap, which the standards already cover.
+| Publisher | Where | Licence | Internal use | If it ever ships |
+|---|---|---|---|---|
+| [Adafruit](https://github.com/adafruit/Adafruit_CAD_Parts) | `adafruit/Adafruit_CAD_Parts` | **MIT** (verified in the repo's `LICENSE`) | Yes | Free — keep the copyright notice. The cheapest row here. |
+| [SparkFun](https://github.com/sparkfun/3D_Models) | `sparkfun/3D_Models` | **CC BY-SA 4.0** models, MIT code | Yes | Attribution, and adaptations of a model stay CC BY-SA. The *codebase* is unaffected either way: these are data files, not something compiled in. |
+| [Framework Computer](https://github.com/FrameworkComputer/Framework-Laptop-16) | `Framework-Laptop-{12,13,16}`, `ExpansionBay`, `ExpansionCards` | **CC BY 4.0** | Yes | Attribution only. Whole-system STEP, published so third parties can build against it. |
+| [KiCad](https://github.com/KiCad/kicad-packages3D) | `KiCad/kicad-packages3D` | CC BY-SA 4.0 + design exception | Yes | Redistribution as a collection is outside the exception, so CC BY-SA applies. Generic package bodies (SOT-23, TO-220), not products — useful for board-level clearance, not for identifying a part. |
+| [Digi-Key](https://github.com/Digi-Key/digikey-partner-kicad-library) | `Digi-Key/digikey-partner-kicad-library` | CC BY-SA 4.0 + the same exception | Yes | As above. Symbols and footprints, **not solids** — a part-number spine, not geometry. |
+| [Seeed Studio](https://github.com/Seeed-Studio/OPL_Kicad_Library) | `Seeed-Studio/OPL_Kicad_Library` | KiCad-style library licence | Yes | As above. Seeed's STEP models are scattered across SnapMagic and shareCAD rather than collected. |
+| [Voron](https://github.com/VoronDesign) | `VoronDesign/*` | GPLv3 | Yes | A lien, like BOLTS. Printer parts as STEP/F3D. |
+| [Prusa](https://blog.prusa3d.com/core-one-cad-files-release-under-the-new-open-community-license-ocl_127290/) | GitHub + prusa3d.com | GPL (older printers); **Open Community License** (CORE One) | **Yes — and the OCL says so in as many words**, granting inspection, modification and spare parts for *personal or internal business use*. Under the old framing this was the one row that read "No". | No. The OCL grant stops where redistribution starts. |
+| Raspberry Pi | [`raspberrypi/documentation`](https://github.com/raspberrypi/documentation/) (CC BY-SA 4.0); STEP on [pip.raspberrypi.com](https://pip.raspberrypi.com/) | Mixed | Per-file. The repo is prose; the board STEP sits on the product portal under its own terms. | Per-file. |
+| [Pololu](https://www.pololu.com/) | Per-product "Resources" tab | Per-file | Yes, one product page at a time. No repo, no bulk. | Per-file. |
+| [OpenBuilds](https://builds.openbuilds.com/projectresources/step-parts-library.162/) | builds.openbuilds.com, GrabCAD | **Unstated** | Grey, and the honest reading is that silence is not a grant. Using a downloaded V-slot STEP to design a machine is the published intent; folding the set into a shared library is not covered by anything written down. Ask, or model the extrusion from its published section — it is a profile, and `parts_catalog` already builds T-slot. | No. |
+
+[SnapMagic Search (SnapEDA)](https://www.snapeda.com/get-api/) sits with the
+portals rather than here: CC BY-SA 4.0 with Design Exception 1.0 on the models,
+but an account and API terms in front of them. The licence permits internal use;
+read the terms before automating a fetch, for the same reason TraceParts does not
+flip.
+
+## The domain libraries R2 will actually want
+
+The vendor repos above are mostly *boards*. R2 needs brushless motors, ESCs,
+flight controllers, servos, props, LiPos and standoffs, and the open sources for
+those are a different set — worth recording now so R2 does not re-derive it:
+
+| Source | Licence | What it gives |
+|---|---|---|
+| [Pixhawk / PX4 hardware](https://github.com/pixhawk/Hardware) | CC BY-SA 3.0, OSHW 1.1 | FMU reference designs and board outlines. The **30.5×30.5 pattern is a de-facto convention**, i.e. a fact — parameterise it per the R2 rule rather than copying anything. |
+| [Poppy `Robotis-library`](https://github.com/poppy-project/Robotis-library) | CC BY-SA 4.0 | Dynamixel AX/MX/RX servo bodies as SolidWorks parts. The official ROBOTIS drawings are on their download page under their own terms. |
+| [OpenArm](https://github.com/enactic/openarm) | CERN-OHL-S-2.0 | A full 7-DOF arm as STEP/STL/F3D. OHL-S is strongly reciprocal on *conveyed hardware and designs* — same dormant-lien shape as GPL, and worth knowing before it is used as a reference geometry. |
+| ROS description packages — [UR](https://github.com/UniversalRobots/Universal_Robots_ROS2_Description) (BSD-3/Apache-2.0, UR's own terms on the meshes), [franka_ros](https://github.com/frankarobotics/franka_ros) (Apache-2.0), Robotiq | Permissive | Arm and gripper geometry **with real joint frames**, which is the half `export_urdf` cares about. The catch is format: STL/DAE meshes arrive through `import_service`'s voxel path as an opaque `ImportFeature`, so no face is addressable. Vendor STEP, where it exists, is what to import. |
+| [step.parts](https://github.com/earthtojake/step.parts) | MIT for the project, **models keep their own licences** (`THIRD_PARTY_NOTICES.md`) | ~12k aggregated open STEP parts with a public API at `api.step.parts/v1`. Treat it as an index, not a licence: a row's terms are whatever its upstream says, so anything taken from it must carry that upstream through into the provenance fields below. |
 
 ## What is built instead
 
@@ -165,6 +233,56 @@ the STEP under their own account and imports it; it becomes a purchased part
 The portal links in the listing's `sources` are **searches**. A hyperlink is not
 a copy, and nothing in this system reaches into a portal on a user's behalf.
 
+Owner-scoping is worth keeping even internally, and not for licence reasons:
+`add_component` refuses a part its owner cannot open, and a row names a
+`document_id`. Making the import path organisation-wide is a real feature and a
+separate decision from this document.
+
+## What to record on a seeded row
+
+Seeding the catalog from the sources above is now available, and the thing that
+makes it safe is boring: **every seeded row records where it came from and under
+what licence**, whether or not today's posture requires attribution. Three
+conditions, none optional:
+
+- **Provenance is a stored field, not a footer.** `supplier_parts` rows already
+  carry `source` and `source_url`; a seeded row needs `licence` beside them, and
+  for anything from an aggregator, the *upstream* licence rather than the
+  aggregator's. The obligation is dormant, so nothing enforces this — which is
+  exactly why it has to be written down at the moment the row is created, when
+  the answer is known.
+- **Mixed licences cannot be one undifferentiated list.** MIT, CC BY, CC BY-SA,
+  OCL and GPL impose different obligations the day the posture changes, and the
+  listing already states `fidelity` and `geometry` per row for the same reason —
+  a field present on only some rows is one a caller eventually reads wrong.
+- **Vendor board CAD is enclosure work, not mechanism work.** Adafruit's and
+  SparkFun's value is hole patterns, connector positions and the height of the
+  tallest component. That is a real gap and it is not the
+  fastener/bearing/extrusion gap, which the standards already cover, nor the
+  motor/ESC/prop gap, which is R2.
+
+## If this ever leaves the building
+
+The posture changing is what makes this document wrong, so here is the checklist
+in advance. Any of these counts: publishing the repository, open-sourcing part of
+it, offering it to customers as a hosted service, shipping a copy to a partner or
+a contractor working on their own account, or spinning the tool out.
+
+1. **Inventory by licence** from the provenance fields — the reason they exist.
+2. **Remove or release anything copyleft.** GPL-derived tables and CERN-OHL-S
+   derived geometry are the liens: strip them (the standards-generated
+   equivalents are already there, which is the argument for keeping the
+   generator authoritative) or release the whole under that licence.
+3. **Attribute the CC rows,** and keep CC BY-SA derivatives under CC BY-SA.
+4. **Re-read every portal's terms as if new.** Contract terms bound us all along,
+   and the clauses that relaxed under "internal" — *external service*,
+   *competing* — snap back first.
+5. **Ask counsel before, not after.** Everything above is about which questions
+   to ask; the answers are worth money at that point.
+
+Until then the standing rule is unchanged and cheap to hold to: prefer the
+standards, because a fact carries no licence at all.
+
 ## If this is revisited
 
 The thing to check is not "is there an API" — TraceParts has one and it does not
@@ -172,4 +290,5 @@ help. It is whether a supplier will grant *written consent to redistribute*, and
 that is a commercial conversation with a named manufacturer, not an integration.
 A single manufacturer agreeing to have their catalog generated into this system
 would be worth more than any portal, because it comes with the right to keep the
-geometry.
+geometry — and, under the internal posture, it is the one thing that would still
+be worth having if the tool ever ships.

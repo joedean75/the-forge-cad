@@ -101,11 +101,19 @@ in the repo:
 
 - McMaster-Carr — `robots.txt` disallows `/catalog/*`; the API needs a
   per-customer client certificate. See the `parts_catalog` module docstring.
-- 3Dfindit / TraceParts / BOLTS / FreeCAD Fasteners — see
-  [`PURCHASED-PARTS-SOURCING.md`](../PURCHASED-PARTS-SOURCING.md). TraceParts'
-  terms forbid using their files to build a competing catalog; BOLTS is GPL-3
-  and FreeCAD Fasteners GPL-2, so copying their dimension tables would put this
-  codebase under those licences.
+- 3Dfindit / TraceParts — see
+  [`PURCHASED-PARTS-SOURCING.md`](../PURCHASED-PARTS-SOURCING.md). Both are
+  barred by terms you accept on *use*, which an internal tool does not escape:
+  3Dfindit's robots.txt names this crawler, and TraceParts' API terms forbid
+  distributing the data on any storage medium.
+
+- BOLTS (GPL-3) and FreeCAD Fasteners (GPL-2) are **not** barred, and the
+  earlier note here saying they were was wrong: copyleft attaches to conveying
+  a copy, and an internal tool conveys nothing. Reading them to *cross-check* a
+  generated table is the best use — two derivations disagreeing has found a bug
+  in one of them. Transcribing a table wholesale is allowed and leaves a lien:
+  the codebase cannot be published until it comes out, so record the source on
+  anything taken that way.
 
 The existing catalog is generated from **published standards**, on the principle
 that a dimension in a standard is a fact and a fact is not somebody's content.
