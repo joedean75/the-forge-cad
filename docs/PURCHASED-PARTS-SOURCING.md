@@ -80,6 +80,74 @@ They look like free data. Transcribing tables out of them is a licence event,
 not a shortcut, and the underlying numbers are available from the standards
 anyway — which is where `parts_catalog` already gets them.
 
+## Vendor libraries on GitHub — the one path that is not closed
+
+Checked on 2026-09-07, prompted by Adafruit's, which is the well-known one.
+The portals are gated because a portal's product *is* the aggregation; a
+manufacturer publishing its own catalog is doing something else, and a few of
+them publish under licences that permit redistribution outright. This is the
+only source examined so far where seeding is legally available rather than
+merely tempting.
+
+The distinction that decides each row is **redistribution of the models as a
+collection**, which is exactly what a catalog is. A licence that only permits
+*use in a design* — every "design exception", and TraceParts' terms above —
+covers a user putting the part in an assembly and not this system shipping it.
+
+| Publisher | Where | Licence | Redistributable as catalog content? |
+|---|---|---|---|
+| [Adafruit](https://github.com/adafruit/Adafruit_CAD_Parts) | `adafruit/Adafruit_CAD_Parts` | **MIT** (repo `LICENSE`) | **Yes.** STEP + Fusion 360 + STL, one folder per product, keyed by Adafruit product number. Attribution is the only condition. |
+| [SparkFun](https://github.com/sparkfun/3D_Models) | `sparkfun/3D_Models` | **CC BY-SA 4.0** (hardware/models; MIT for code) | **Yes, share-alike.** STEP/IGES/STL plus SolidWorks and Blender sources, under `products/{id}/{rev}/{type}/`, real scale, mm. Adaptations of a model stay CC BY-SA; the *codebase* is untouched, unlike the GPL tables above — these are data files, not something transcribed into source. |
+| [Framework Computer](https://github.com/FrameworkComputer/Framework-Laptop-16) | `FrameworkComputer/Framework-Laptop-{12,13,16}`, `ExpansionBay`, `ExpansionCards` | **CC BY 4.0** | **Yes, attribution only.** Whole-system and module CAD, published so third parties can build accessories against it. The most permissive mechanical CAD found from a consumer hardware maker. |
+| [KiCad](https://github.com/KiCad/kicad-packages3D) | `KiCad/kicad-packages3D` | CC BY-SA 4.0 **with a design exception** | Yes, but only under CC BY-SA. The exception waives attribution/share-alike *for boards designed with it*; redistributing the library as a collection is explicitly outside it. Thousands of STEP package bodies — generic footprints (SOT-23, TO-220), not products. |
+| [Digi-Key](https://github.com/Digi-Key/digikey-partner-kicad-library) | `Digi-Key/digikey-partner-kicad-library` | CC BY-SA 4.0 with the same exception | Symbols and footprints, not solids. Useful as a part-number spine, not as geometry. |
+| [Seeed Studio](https://github.com/Seeed-Studio/OPL_Kicad_Library) | `Seeed-Studio/OPL_Kicad_Library` | KiCad-style library licence | Same shape as Digi-Key's: OPL symbols/footprints. Seeed's STEP models are scattered across SnapMagic and shareCAD rather than collected in a repo. |
+| [Voron](https://github.com/VoronDesign) | `VoronDesign/*` | GPLv3 | Printer parts as STEP/F3D. GPL on CAD is the same trap as BOLTS: fine to consult, a licence event to absorb. |
+| Prusa | GitHub + prusa3d.com | GPL on older printers; **Open Community License** on CORE One | No. OCL grants inspection, modification and spare parts for personal or internal business use — not redistribution as library content. |
+| Raspberry Pi | [`raspberrypi/documentation`](https://github.com/raspberrypi/documentation/) (CC BY-SA 4.0); STEP on [pip.raspberrypi.com](https://pip.raspberrypi.com/) | Mixed | The repo is prose. The board STEP files sit on the product portal under its own terms, so this is a per-file question, not a library. |
+| Arduino | — | — | No official CAD repo found. Adafruit's covers several Arduino-form boards. |
+| Pololu | Per-product "Resources" tab | Per-file | Official STEP for gearmotors and similar, one product page at a time. No repo, no bulk. |
+| OpenBuilds | [builds.openbuilds.com](https://builds.openbuilds.com/projectresources/step-parts-library.162/) | Unstated | A full V-slot/extrusion STEP set, but community-hosted with no licence declared — which means no permission, not permission by silence. |
+
+Robotics is a separate seam and worth knowing about, because `export_urdf`
+already speaks that language: `UniversalRobots/Universal_Robots_ROS2_Description`
+(BSD-3/Apache-2.0 packages, with UR's own terms on the meshes),
+`frankarobotics/franka_ros` (Apache-2.0) and the Robotiq description packages
+ship arm and gripper geometry with real joint frames. The catch is the format —
+they are STL/DAE visual meshes, so they arrive through `import_service`'s
+voxel path as an opaque `ImportFeature`, not as an addressable `BrepBodyFeature`.
+Vendor STEP, where it exists, is the one worth importing.
+
+[SnapMagic Search (SnapEDA)](https://www.snapeda.com/get-api/) is the
+electronics-side analogue of TraceParts, and lands in the same place: real API,
+models under CC BY-SA 4.0 with Design Exception 1.0, and that exception covers
+putting a part in *a board design* rather than republishing the models as a
+library. Read its terms before any integration; treat it as a pass-through.
+
+### What this changes
+
+The floor moves for the first time. `parts_catalog` generates standards
+geometry and `supplier_parts` files what a user brings; between them sat every
+part that is neither a standard nor already on the user's disk — and Adafruit,
+SparkFun and Framework are that gap, under licences that permit shipping the
+geometry rather than linking to it.
+
+Three conditions on ever doing it, none of them optional:
+
+- **Attribution is a stored field, not a footer.** A seeded row must carry its
+  publisher and licence, because CC BY-SA obliges anything derived from a
+  SparkFun model to stay CC BY-SA and a row that has lost its provenance
+  cannot say so. `supplier_parts` rows already carry `source`/`source_url`;
+  a seeded row needs a `licence` beside them.
+- **Mixed licences cannot be one undifferentiated list.** MIT, CC BY and
+  CC BY-SA impose different obligations downstream, and the listing already
+  states `fidelity` and `geometry` per row for exactly this reason — a field
+  present on only some rows is one a caller eventually reads wrong.
+- **These are boards, not mechanisms.** The catalogue value is enclosure and
+  clearance work: hole patterns, connector positions, the height of the tallest
+  component. That is a real gap in the generated catalog and it is not the
+  fastener/bearing/extrusion gap, which the standards already cover.
+
 ## What is built instead
 
 `services/supplier_parts.py`. The person who accepted a portal's terms downloads
