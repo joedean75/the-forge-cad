@@ -5,6 +5,12 @@ parametrically, optimize it generatively, get instant manufacturing quotes, slic
 it, and print it on your own machine — with every one of those steps equally
 available to AI agents through a first-class API.
 
+**An internal tool**, aimed at RC, drone and robotics work rather than at
+competing for CAD seats — see [docs/roadmaps/RC-DRONE-ROBOTICS.md](docs/roadmaps/RC-DRONE-ROBOTICS.md)
+for what that re-ranks, and [DEPLOY.md](DEPLOY.md#deploying-it-internally-the-posture-this-is-actually-for)
+for what it means when you stand one up (starting with: the default plan is
+`free`, and you almost certainly do not want it).
+
 The geometry engine is real, and there are two of them. An **exact B-rep kernel**
 on OpenCascade gives faces and edges you can select, exact dimensions and
 analytic STEP; a from-scratch **SDF kernel** (signed distance fields meshed via

@@ -61,6 +61,15 @@ is CPU-only and where `FORGE_DEVICE` is pinned to `cpu` for exactly that reason.
 A dependency whose entire value is GPU throughput, on a host with no GPU, is a
 fourth way for a deployment to be half-configured.
 
+**Re-checked under the internal posture (2026-09-07): unchanged.** An internal
+box may well have a GPU, which removes the host argument and nothing else — the
+finding above it is that there is no articulated machine model for a physics
+engine to collide, and building that model is the work whether or not CUDA is
+present. This rejection never rested on licensing or distribution, so it is not
+in the class of verdicts the posture moves (see
+[`PURCHASED-PARTS-SOURCING.md`](PURCHASED-PARTS-SOURCING.md) for the ones that
+are).
+
 ## What was built instead — and it exists now
 
 > **Shipped**: `services/cam/verify.py` and the `verify_toolpath` operation.
