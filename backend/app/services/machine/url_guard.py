@@ -101,7 +101,20 @@ def validate_url(url: str) -> str:
     for ip in addresses:
         # Never reachable, whatever the flag says: 169.254.169.254 is link-local,
         # and no printer is the cloud metadata service.
-        if ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+        #
+        # Loopback is held out of that class deliberately, and it is not a
+        # loosening — it still has to clear the flag in the branch below, exactly
+        # as 127.0.0.1 always did. `::1` is *both* loopback and, in Python's
+        # `ipaddress`, `is_reserved`, because it sits inside `::/8`. Testing the
+        # never-permitted class first therefore refused IPv6 loopback outright,
+        # so on any dual-stack host FORGE_ALLOW_PRIVATE_MACHINE_URLS could not
+        # allow `http://localhost:7125` — the printer this app ships as its
+        # default, and the exact case the flag exists for. It passed on an
+        # IPv4-only box, where `localhost` resolves to 127.0.0.1 alone, and
+        # failed everywhere else.
+        if not ip.is_loopback and (
+            ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+        ):
             raise UrlNotAllowed(
                 "machine URL resolves to a link-local, multicast or reserved "
                 "address; those are never permitted"

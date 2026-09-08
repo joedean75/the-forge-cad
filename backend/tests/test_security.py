@@ -135,6 +135,56 @@ def test_a_refusal_says_how_to_allow_it(monkeypatch):
         validate_url("http://localhost:7125")
 
 
+def test_ipv6_loopback_is_treated_exactly_like_ipv4_loopback(monkeypatch):
+    """`::1` must reach the flag, not be refused as "reserved" before it.
+
+    It is *both* loopback and, in Python's `ipaddress`, `is_reserved` — it sits
+    inside `::/8`. So testing the never-permitted class first refused IPv6
+    loopback outright, and `FORGE_ALLOW_PRIVATE_MACHINE_URLS` could not allow
+    `http://localhost:7125` — the printer this app ships as its default.
+
+    **The resolution is pinned here rather than left to the host**, which is the
+    whole point of this test: `localhost` resolves to 127.0.0.1 alone on an
+    IPv4-only box and to `::1` as well on a dual-stack one, so the bug was
+    invisible on some machines and fatal on others. Two tests above it were
+    already failing in CI and passing locally for exactly this reason.
+    """
+    import ipaddress
+
+    monkeypatch.setattr(url_guard, "_resolved_addresses",
+                        lambda host: [ipaddress.ip_address("::1")])
+    monkeypatch.delenv("MOONRAKER_URLS", raising=False)
+    monkeypatch.delenv("FORGE_MACHINE_URL_ALLOWLIST", raising=False)
+
+    # Refused without the flag — and the refusal still names the flag.
+    monkeypatch.delenv("FORGE_ALLOW_PRIVATE_MACHINE_URLS", raising=False)
+    with pytest.raises(UrlNotAllowed, match="FORGE_ALLOW_PRIVATE_MACHINE_URLS"):
+        url_guard.validate_url("http://localhost:7125")
+
+    # Allowed with it, exactly as 127.0.0.1 is.
+    monkeypatch.setenv("FORGE_ALLOW_PRIVATE_MACHINE_URLS", "1")
+    assert url_guard.validate_url("http://localhost:7125") == "http://localhost:7125"
+
+
+def test_holding_loopback_out_of_the_reserved_class_opens_nothing_else(monkeypatch):
+    """The fix above must not become a hole. Every address that is reserved,
+    link-local, multicast or unspecified *without* being loopback stays refused
+    with the flag on — including the IPv6 forms, which is where `is_reserved`
+    does the work that `is_private` alone would not."""
+    import ipaddress
+
+    monkeypatch.delenv("MOONRAKER_URLS", raising=False)
+    monkeypatch.delenv("FORGE_MACHINE_URL_ALLOWLIST", raising=False)
+    monkeypatch.setenv("FORGE_ALLOW_PRIVATE_MACHINE_URLS", "1")
+
+    for never in ("169.254.169.254", "224.0.0.1", "0.0.0.0",
+                  "::", "ff02::1", "100::1"):
+        monkeypatch.setattr(url_guard, "_resolved_addresses",
+                            lambda host, a=never: [ipaddress.ip_address(a)])
+        with pytest.raises(UrlNotAllowed):
+            url_guard.validate_url("http://printer.local:7125")
+
+
 def test_the_csp_hashes_the_spa_inline_script():
     """`index.html` carries one inline script — the `window.onerror` handler that
     paints a readable failure into `#root` when the bundle itself throws. Under
