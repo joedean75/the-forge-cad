@@ -42,6 +42,41 @@ type Tool = 'select' | 'line' | 'rect' | 'circle' | 'arc' | 'trim' | 'extend'
 let _idc = 0
 const nid = (p: string) => `${p}${(_idc += 1)}`
 
+/** Prompt for a dimension figure, rejecting anything that isn't a real number.
+ *
+ * `parseFloat` alone returns NaN for a typo, and a NaN value rides all the way
+ * into the solver, which fails the *whole sketch* with scipy's "Residuals are
+ * not finite in the initial point" — an unreadable message about a number that
+ * was typed several actions ago. Refuse it at the keystroke instead. */
+function askValue(message: string, fallback: string): number | null {
+  const raw = prompt(message, fallback)
+  if (raw == null) return null
+  const v = parseFloat(raw)
+  return Number.isFinite(v) ? v : null
+}
+
+/** What each constraint needs selected, for when the click did nothing. */
+const NEEDS: Record<string, string> = {
+  horizontal: 'Select a line.',
+  vertical: 'Select a line.',
+  coincident: 'Select two points (Shift-click).',
+  distance: 'Select a line, or two points (Shift-click).',
+  parallel: 'Select two lines (Shift-click).',
+  perpendicular: 'Select two lines (Shift-click).',
+  equal_length: 'Select two lines (Shift-click).',
+  radius: 'Select a circle.',
+  arc_radius: 'Select an arc.',
+  fixed: 'Select a point.',
+  tangent: 'Select a line and a curve, or two curves.',
+  concentric: 'Select two circles or arcs (Shift-click).',
+  equal_radius: 'Select two circles or arcs (Shift-click).',
+  symmetric: 'Select two points and the line to mirror across.',
+  angle: 'Select two lines (Shift-click).',
+  midpoint: 'Select a point and a line.',
+  point_on_line: 'Select a point and a line.',
+  point_on_circle: 'Select a point and a circle or arc.',
+}
+
 const TOOLS: { id: Tool; label: string; icon: typeof Square }[] = [
   { id: 'select', label: 'Select', icon: MousePointer2 },
   { id: 'line', label: 'Line', icon: LineIcon },
@@ -419,28 +454,40 @@ export function SketchCanvas() {
     else if (type === 'tangent' && l[0] && curve[0]) con = { id: nid('c'), type, line: l[0], arc: curve[0] }
     else if (type === 'tangent' && curve.length >= 2) con = { id: nid('c'), type, a: curve[0], b: curve[1] }
     else if (type === 'angle' && l.length >= 2) {
-      const v = prompt('Angle between the two lines (degrees):', '90')
+      const v = askValue('Angle between the two lines (degrees):', '90')
       if (v == null) return
-      con = { id: nid('c'), type, line1: l[0], line2: l[1], value: parseFloat(v) }
-    } else if (type === 'distance' && p.length >= 2) {
-      const v = prompt('Distance (mm):', dist(getPt(p[0]), getPt(p[1])).toFixed(1))
+      con = { id: nid('c'), type, line1: l[0], line2: l[1], value: v }
+    } else if (type === 'distance' && (p.length >= 2 || l.length >= 1)) {
+      // Two points, or one line. Dimensioning an edge by picking the edge is
+      // the idiom every CAD uses, and demanding its two endpoints instead is
+      // what made this button look broken. The solver only knows the two-point
+      // form, so a line is resolved to its own endpoints here.
+      let a = p[0], b = p[1]
+      if (p.length < 2) { const ln = lines.find((x) => x.id === l[0])!; a = ln.a; b = ln.b }
+      const v = askValue('Distance (mm):', dist(getPt(a), getPt(b)).toFixed(1))
       if (v == null) return
-      con = { id: nid('c'), type, a: p[0], b: p[1], value: parseFloat(v) }
+      con = { id: nid('c'), type, a, b, value: v }
     } else if (type === 'radius' && c[0]) {
       const cir = circles.find((x) => x.id === c[0])!
-      const v = prompt('Radius (mm):', cir.radius.toFixed(1))
+      const v = askValue('Radius (mm):', cir.radius.toFixed(1))
       if (v == null) return
-      con = { id: nid('c'), type, circle: c[0], value: parseFloat(v) }
+      con = { id: nid('c'), type, circle: c[0], value: v }
     } else if (type === 'arc_radius' && ar[0]) {
       const a = arcs.find((x) => x.id === ar[0])!
       const cur = dist(getPt(a.a), getPt(a.center))
-      const v = prompt('Arc radius (mm):', cur.toFixed(1))
+      const v = askValue('Arc radius (mm):', cur.toFixed(1))
       if (v == null) return
-      con = { id: nid('c'), type, arc: ar[0], value: parseFloat(v) }
+      con = { id: nid('c'), type, arc: ar[0], value: v }
     }
-    if (!con) { setStatus(`Select the right entities for ${type}.`); return }
-    setCons((s) => [...s, con!])
+    if (!con) { setStatus(NEEDS[type] ?? `Select the right entities for ${type}.`); return }
+    const next = [...cons, con]
+    setCons(next)
     setStatus('')
+    // Solve straight away. A dimension that leaves the drawing untouched until
+    // a separate button is pressed is indistinguishable from one that failed —
+    // which is exactly how the distance constraint read. `next` is passed
+    // explicitly because `solve()` would close over the pre-update list.
+    void solveWith(next)
   }
 
   /** Edit a dimension in place, by clicking its figure on the canvas. */
@@ -448,11 +495,12 @@ export function SketchCanvas() {
     const con = cons.find((c) => c.id === constraintId)
     if (!con) return
     const unit = con.type === 'angle' ? 'degrees' : 'mm'
-    const next = prompt(`${con.type} (${unit}):`, String(con.value ?? ''))
-    if (next == null) return
-    const value = parseFloat(next)
-    if (!Number.isFinite(value)) return
-    setCons((s) => s.map((c) => (c.id === constraintId ? { ...c, value } : c)))
+    const value = askValue(`${con.type} (${unit}):`, String(con.value ?? ''))
+    if (value == null) return
+    const next = cons.map((c) => (c.id === constraintId ? { ...c, value } : c))
+    setCons(next)
+    // Re-solve on the edited figure, for the same reason adding one does.
+    void solveWith(next)
   }
 
   const toggleConstruction = () => {
@@ -473,21 +521,19 @@ export function SketchCanvas() {
 
   const doOffset = () => {
     if (!sel.length) { setStatus('Select lines or circles to offset.'); return }
-    const v = prompt('Offset distance (mm, negative for the other side):', '5')
-    if (v == null) return
-    const distance = parseFloat(v)
-    if (!Number.isFinite(distance) || distance === 0) return
+    const distance = askValue('Offset distance (mm, negative for the other side):', '5')
+    if (distance == null || distance === 0) return
     apply(edit.offset(entities(), sel, distance))
     setStatus('')
   }
 
-  // Build the solver spec (metres).
-  const buildSpec = () => ({
+  // Build the solver spec (metres) for a given constraint list.
+  const specFor = (constraints: Con[]) => ({
     points: pts.map((p) => ({ id: p.id, x: p.x / 1000, y: p.y / 1000 })),
     lines,
     arcs,
     circles: circles.map((c) => ({ ...c, radius: c.radius / 1000 })),
-    constraints: cons.map((c) => {
+    constraints: constraints.map((c) => {
       const o: Con = { ...c }
       if (c.type === 'distance' || c.type === 'radius' || c.type === 'arc_radius') o.value = (c.value as number) / 1000
       if (c.type === 'fixed') {
@@ -497,11 +543,12 @@ export function SketchCanvas() {
       return o
     }),
   })
+  const buildSpec = () => specFor(cons)
 
-  const solve = async () => {
+  const solveWith = async (constraints: Con[]) => {
     setBusy(true)
     try {
-      const res = await api.solveSketch(buildSpec() as never)
+      const res = await api.solveSketch(specFor(constraints) as never)
       setPts((s) => s.map((p) => (res.points[p.id] ? { ...p, x: res.points[p.id][0] * 1000, y: res.points[p.id][1] * 1000 } : p)))
       setCircles((s) => s.map((c) => (res.radii[c.id] != null ? { ...c, radius: res.radii[c.id] * 1000 } : c)))
       setSolution(res)
@@ -513,6 +560,7 @@ export function SketchCanvas() {
       setBusy(false)
     }
   }
+  const solve = () => solveWith(cons)
 
   const finish = async () => {
     const drawn = lines.filter((l) => !l.construction).length
@@ -864,7 +912,7 @@ export function SketchCanvas() {
               </button>
             ))}
           </div>
-          <div className="px-3 pb-1 text-[10px] text-cad-text/50">Select entities (Select tool, Shift for multi), then click a constraint. Dimensions are edited on the canvas.</div>
+          <div className="px-3 pb-1 text-[10px] text-cad-text/50">Select entities (Select tool, Shift for multi), then click a constraint. Dist takes a line or two points. Dimensions are edited on the canvas.</div>
           <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
             {cons.map((c) => (
               <div key={c.id} className={`group flex items-center justify-between text-[10px] py-0.5 ${conflicting.has(c.id) ? 'text-cad-danger' : 'text-cad-text'}`}>

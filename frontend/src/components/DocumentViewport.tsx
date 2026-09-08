@@ -280,11 +280,34 @@ export function DocumentViewport() {
   // Fit. Ref holds the camera-controls instance drei forwards.
   const controlsRef = useRef<{
     setLookAt: (px: number, py: number, pz: number, tx: number, ty: number, tz: number, t?: boolean) => void
+    updateCameraUp: () => void
   } | null>(null)
-  const frameModel = (animate: boolean) => controlsRef.current?.setLookAt(2.6, 1.9, 3.4, 0, 0, 0, animate)
+  // Z-up, because the kernel is (the camera's `up` is set on the Canvas below).
+  // `toDisplay` maps part axes straight onto the scene's, so a part's Z — its
+  // height, in every template and every datum — was being drawn along three.js's
+  // *horizontal* Z. A plate hides that; a 145 mm shaft is 7:1 along Z and came
+  // out pointing down the barrel of the lens, foreshortened to a stub that
+  // orbits about the wrong axis. Changing the camera's idea of up (rather than
+  // rotating the scene) keeps display space identical to part space, which
+  // `toPart`, the face-normal mapping, the snap points and MoveHandles all
+  // depend on. Viewed from -Y, so the face the kernel calls `front` faces us.
+  const frameModel = (animate: boolean) => {
+    controlsRef.current?.updateCameraUp()
+    controlsRef.current?.setLookAt(2.6, -3.4, 1.9, 0, 0, 0, animate)
+  }
+  // Once on mount: camera-controls caches the up axis when it initialises, and
+  // a document with no body never reaches `frameModel` — so without this an
+  // empty document (three datum planes) orbits about the old vertical.
+  useEffect(() => { controlsRef.current?.updateCameraUp() }, [])
+  // Frame on document switch and on the *first* geometry only. `mesh_url` is
+  // content-hashed, so it moves on every edit — keying the refit to it snapped
+  // the camera home mid-edit, undoing whatever the user had orbited to look at.
+  const framedFor = useRef<string | null>(null)
   useEffect(() => {
-    // When a document's geometry becomes available, frame it.
-    if (meshUrl) frameModel(false)
+    if (!doc?.id) { framedFor.current = null; return }
+    if (!meshUrl || framedFor.current === doc.id) return
+    framedFor.current = doc.id
+    frameModel(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc?.id, meshUrl])
 
@@ -413,7 +436,7 @@ export function DocumentViewport() {
           viewed from 0.08–50 units with thin/coplanar CAD faces; a linear depth
           buffer z-fights and "glitches" the model at certain distances. Log depth
           + a tighter near/far ratio give stable precision across the whole range. */}
-      <Canvas camera={{ position: [3, 2, 4], fov: 45, near: 0.02, far: 100 }} shadows
+      <Canvas camera={{ position: [2.6, -3.4, 1.9], fov: 45, near: 0.02, far: 100, up: [0, 0, 1] }} shadows
         gl={{ logarithmicDepthBuffer: true }}
         onPointerMissed={() => { if (!measuring && !sketchPick) select(null) }}>
         <Suspense fallback={null}>
@@ -421,8 +444,16 @@ export function DocumentViewport() {
           <directionalLight position={[5, 10, 7]} intensity={1.2} castShadow />
           <directionalLight position={[-5, -5, -5]} intensity={0.4} />
 
+          {/* Rotated onto XY and dropped along -Z: the ground plane has to be
+              the one the part is built on (every template starts at part z=0),
+              not three.js's default XZ. `side` is not decoration — drei's Grid
+              defaults to BackSide, so once it is rotated out of its own default
+              plane the camera ends up on the culled side and the floor simply
+              vanishes. DoubleSide draws it whichever way the orbit goes. */}
           <Grid
-            position={[0, -1, 0]}
+            position={[0, 0, -1]}
+            rotation={[Math.PI / 2, 0, 0]}
+            side={THREE.DoubleSide}
             args={[20, 20]}
             cellSize={0.5}
             cellThickness={0.5}
