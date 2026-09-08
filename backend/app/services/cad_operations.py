@@ -56,6 +56,17 @@ _AXIS = {**_VEC, "description": "direction to cut along; +Z by default"}
 # Listed rather than derived from `parts_catalog` at import: the enum reaches
 # the JSON Schema a constrained decoder is pointed at, and a schema that
 # depends on an import cycle is a schema that is sometimes empty.
+#: Mirrors `mechanism.KINDS`. Named here so the schema is a literal a
+#: constrained decoder can read rather than a value imported at build time.
+_MECHANISM_KINDS = ("shaft", "gear", "bearing", "hardware")
+
+#: Mirrored from `printability.PROCESSES` and `drawing_presets.STYLES` for the
+#: same reason as above: the enum a constrained decoder reads is a literal here,
+#: and a test asserts it still matches the module that owns it.
+_PRINT_PROCESSES = ("additive", "milling", "molding", "casting")
+_DRAWING_STYLES = ("shop", "print", "inspection")
+_PACKAGE_PRESETS = ("standard", "printed")
+
 _METRIC_SIZES = ("M2", "M2.5", "M3", "M4", "M5", "M6", "M8", "M10", "M12")
 # Same reasoning. The generated catalog only fills the first four; the rest
 # exist because an imported supplier part has to be filed somewhere, and
@@ -245,6 +256,45 @@ def _get(doc_id: str):
     if doc is None:
         raise NoSuchDocument(f"no document {doc_id!r}")
     return doc
+
+
+def _load_case_digest(doc) -> list:
+    """The loads and supports a solve reads, as plain data for a fingerprint.
+
+    They live on `document.optimization`, which is a whole setup object — most
+    of it (volume fraction, objective, keep regions) is about a SIMP run and
+    changes nothing about a linear-static solve. Fingerprinting the whole thing
+    would call a stress report stale because somebody moved a slider that FEA
+    never looks at.
+    """
+    setup = getattr(doc, "optimization", None)
+    if setup is None:
+        return []
+    return [lc.model_dump() for lc in (setup.load_cases or [])]
+
+
+def _record(doc, kind: str, result: dict,
+            settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """File a derived reading against the document and stamp the result.
+
+    Two things come back to the caller that the raw report cannot carry: the
+    fingerprint of the inputs it was a reading of, and whether it is still
+    current. Before this the answer lived only in the browser tab that ran the
+    analysis — cleared on the next edit, and simply absent after a reload or for
+    a second viewer, who saw a report with no way to tell what it was about.
+
+    The fingerprint is taken *before* the work in the callers that take time
+    (see `derived_cache.publish`); here the work has already finished
+    synchronously, so the document cannot have moved underneath it.
+    """
+    from app.services import derived_cache
+
+    derived_cache.publish(doc, kind, result, settings=settings)
+    document_service.persist_derived(doc)
+    product = derived_cache.held(doc, kind)
+    return {**result,
+            "fingerprint": product.fingerprint,
+            "computed_at": product.computed_at}
 
 
 # ── handlers ──
@@ -1090,12 +1140,203 @@ def _get_parameters(doc_id, args):
     return {"parameters": [p.model_dump() for p in doc.parameters]}
 
 
-@operation("mass_properties", "query", "Volume, mass, center of mass, surface area and inertia tensor (uses the assigned material).",
+@operation("mass_properties", "query",
+           "Volume, mass, center of mass, surface area and inertia tensor. "
+           "`mass_g` is the mass to use and `mass_source` says where it came "
+           "from: 'geometric' (volume x the assigned material's density), "
+           "'catalog' (the published figure for the purchased part this "
+           "document is), 'override' (a mass somebody measured), or 'unknown'. "
+           "For a purchased component the geometry is a declared envelope, so "
+           "the geometric figure is the wrong one — a NEMA 17 modelled as solid "
+           "steel weighs 669 g against a real 350 g.",
            {})
 def _mass_properties(doc_id, args):
-    from app.services import mass_properties
+    from app.services import mass_properties, part_mass
 
-    return mass_properties.mass_properties(doc_id)
+    doc = _get(doc_id)
+    report = mass_properties.mass_properties(doc_id)
+    fact = part_mass.effective_mass(doc)
+    # `mass_kg` stays exactly what it was — the integrated geometry — because
+    # callers read it and it is a true statement about the body. What is added
+    # is the figure to *use* and the record of why it differs.
+    return {**report, **fact.as_dict()}
+
+
+@operation("annotate_mechanism", "mutate",
+           "Record how the part moves: a shaft and the axis it turns about, a "
+           "gear with its teeth, module and direction, a bearing pocket's "
+           "designation, or the screw a hole takes. Recorded on the document, "
+           "not typed onto a drawing — a drawing annotation then names the note "
+           "(`{mechanism: <id or label>}`) and prints what the note says, so "
+           "mirroring the part cannot leave an arrow pointing the wrong way. A "
+           "gear or shaft with a direction also draws a rotation arrow on the "
+           "sheet. A direction needs an axis: 'clockwise' is a statement about "
+           "where you are looking from.",
+           {"kind": {"enum": list(_MECHANISM_KINDS), "required": True,
+                     "description": "what the note is about"},
+            "label": {"type": "string", "required": True,
+                      "description": "what the drawing prints — 'Pinion', "
+                                     "'Front axle', 'Outer bearing'"},
+            "axis": {**_AXIS, "description": "what it turns about, in part space; "
+                                             "required to give a direction"},
+            "direction": {"enum": ["cw", "ccw"],
+                          "description": "which way it turns looking down `axis`; "
+                                         "shafts and gears only"},
+            "teeth": {"type": "integer", "description": "tooth count, for a gear"},
+            "module_mm": {"type": "number", "unit": "mm",
+                          "description": "gear module"},
+            "designation": {"type": "string",
+                            "description": "the bearing ('5x11x4') or screw ('M2.5') "
+                                           "this note calls out"},
+            "text": {"type": "string", "description": "anything else to print"}})
+def _annotate_mechanism(doc_id, args):
+    from app.services import mechanism
+
+    doc = _get(doc_id)
+    try:
+        entry = mechanism.note(
+            require(args, "kind"), require(args, "label"),
+            axis=args.get("axis"), direction=args.get("direction"),
+            teeth=args.get("teeth"), module_mm=args.get("module_mm"),
+            designation=args.get("designation") or "", text=args.get("text") or "")
+    except mechanism.MechanismError as exc:
+        raise BadArgument(str(exc)) from exc
+
+    doc.mechanism = [*(doc.mechanism or []), entry]
+    document_service.persist_document(doc)
+    return {"message": f"recorded {entry['kind']} note {entry['label']!r}",
+            "note": entry, "prints_as": mechanism.describe(entry),
+            "count": len(doc.mechanism)}
+
+
+@operation("list_mechanism", "query",
+           "The mechanism notes on this part — shaft axes, gear directions, "
+           "bearing and hardware callouts — each with the line a drawing would "
+           "print for it. Pass two gear note ids as `ratio` to get the "
+           "reduction between them and which way the output turns.",
+           {"ratio": {"type": "array",
+                      "description": "[driver, driven] — two gear note ids or labels"}})
+def _list_mechanism(doc_id, args):
+    from app.services import mechanism
+
+    doc = _get(doc_id)
+    notes = list(doc.mechanism or [])
+    out = {"notes": [{**n, "prints_as": mechanism.describe(n)} for n in notes],
+           "count": len(notes)}
+
+    pair = args.get("ratio")
+    if pair:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            raise BadArgument("`ratio` is [driver, driven]", arg="ratio")
+        found = [mechanism.by_id(doc, str(p)) for p in pair]
+        if any(f is None for f in found):
+            raise NoSuchFeature(
+                f"no mechanism note for {[p for p, f in zip(pair, found) if f is None]}")
+        try:
+            out["ratio"] = mechanism.ratio(found[0], found[1])
+        except mechanism.MechanismError as exc:
+            raise BadArgument(str(exc)) from exc
+    return out
+
+
+@operation("add_battery", "mutate",
+           "Add a battery pack as a declared envelope: the dimensions you "
+           "measured and the mass off the label, plus cell count, voltage and "
+           "capacity recorded with it. There is no battery catalog and there "
+           "will not be one — pack dimensions are not standardised, so a "
+           "capacity cannot be turned into a size, and a box of aluminium the "
+           "shape of a guess is worse than asking. Nominal voltage is computed "
+           "from the cell count at 3.7 V/cell for lithium polymer.",
+           {"length": {"type": "number", "required": True, "unit": "m",
+                       "description": "measured pack length"},
+            "width": {"type": "number", "required": True, "unit": "m",
+                      "description": "measured pack width"},
+            "height": {"type": "number", "required": True, "unit": "m",
+                       "description": "measured pack height"},
+            "grams": {"type": "number", "required": True, "unit": "g",
+                      "description": "mass off the label or a scale — this is "
+                                     "what every mass report will use"},
+            "cells": {"type": "integer", "default": 1, "minimum": 1,
+                      "description": "cells in series (the S count)"},
+            "capacity_mah": {"type": "number",
+                             "description": "capacity in mAh, for the record"},
+            "chemistry": {"enum": ["lipo", "li-ion", "lifepo4", "nimh"],
+                          "default": "lipo",
+                          "description": "cell chemistry; sets the nominal "
+                                         "volts per cell"},
+            "center": {**_VEC, "description": "pack centre; defaults to the origin"}})
+def _add_battery(doc_id, args):
+    from app.services import part_mass
+
+    doc = _get(doc_id)
+    length = float(require(args, "length"))
+    width = float(require(args, "width"))
+    height = float(require(args, "height"))
+    grams = float(require(args, "grams"))
+    cells = int(args.get("cells", 1) or 1)
+    chemistry = str(args.get("chemistry", "lipo"))
+
+    centre = args.get("center") or {}
+    box = {"type": "BoxFeature", "name": "Battery", "params": {
+        "size": {"x": length, "y": width, "z": height},
+        "center": {a: float(centre.get(a, 0.0)) for a in "xyz"}}}
+    tree = feature_ops.add_primitive(doc.feature_tree, box,
+                                     target_id=args.get("target"))
+    document_service.update_document(doc_id, feature_tree=tree)
+
+    doc = _get(doc_id)
+    # The declared mass, not the envelope's. A LiPo modelled as a solid box of
+    # anything is wrong by a factor, and this is the number a CG hangs on.
+    doc.mass_override_g = grams
+    doc.battery = {
+        "cells": cells,
+        "chemistry": chemistry,
+        "nominal_v": round(cells * _CELL_VOLTS.get(chemistry, 3.7), 2),
+        "capacity_mah": float(args["capacity_mah"]) if args.get("capacity_mah") else None,
+        "mass_g": grams,
+    }
+    document_service.persist_document(doc)
+    fact = part_mass.effective_mass(doc)
+    return {"message": (f"added a {cells}S {chemistry} pack, "
+                        f"{doc.battery['nominal_v']:g} V nominal, {grams:g} g"),
+            "feature_id": box["id"],
+            "battery": doc.battery,
+            **fact.as_dict()}
+
+
+#: Nominal volts per cell. The figure a pack is *labelled* with, which is what a
+#: "3S 11.1 V" pack means — not the 4.2 V it is charged to nor the 3.0 V it is
+#: flown down to, both of which are real numbers answering different questions.
+_CELL_VOLTS = {"lipo": 3.7, "li-ion": 3.6, "lifepo4": 3.2, "nimh": 1.2}
+
+
+@operation("set_part_mass", "mutate",
+           "Record the real mass of this part, in grams — measured on a scale "
+           "or read off a datasheet. It beats both the geometry and the catalog "
+           "in every mass report, because it is a statement about the actual "
+           "object rather than about a model of it. Use it for a purchased "
+           "component whose body here is a simplified envelope: a motor, an "
+           "ESC, a battery, a servo. Pass 0 or omit `grams` to clear it and go "
+           "back to the geometric figure. Setting it on a part you modelled "
+           "makes the report disagree with its own volume.",
+           {"grams": {"type": "number", "unit": "g", "minimum": 0,
+                      "description": "the real mass; 0 clears the override"}})
+def _set_part_mass(doc_id, args):
+    from app.services import part_mass
+
+    doc = _get(doc_id)
+    grams = args.get("grams")
+    doc.mass_override_g = float(grams) if grams else None
+    # A recorded mass changes no geometry, so it must not invalidate the
+    # evaluation — but it is a real edit to the document, so it persists and
+    # moves the revision like one. `set_material` learned that the hard way:
+    # a field outside the evaluation key persists itself or not at all.
+    document_service.persist_document(doc)
+    fact = part_mass.effective_mass(doc)
+    return {"message": ("recorded a mass of "
+                        f"{fact.grams:.3f} g for this part" if doc.mass_override_g
+                        else "cleared the recorded mass; using the geometry again"),
+            **fact.as_dict()}
 
 
 def _exact_body(doc_id):
@@ -1746,17 +1987,26 @@ def _dfm(doc_id, args):
     build a part but never check whether it could be made."""
     from app.services import document_analysis
 
-    _get(doc_id)  # typed NoSuchDocument rather than the router's HTTPException
+    doc = _get(doc_id)  # typed NoSuchDocument rather than the router's HTTPException
     process = str(args.get("process", "additive"))
+    build_axis = str(args.get("build_axis", "auto"))
+    resolution = int(args.get("resolution", 128))
     try:
         report = document_analysis.dfm_document(
-            doc_id, build_axis=str(args.get("build_axis", "auto")),
-            resolution=int(args.get("resolution", 128)), process=process)
+            doc_id, build_axis=build_axis, resolution=resolution, process=process)
     except ValueError as exc:
         # "this part has no exact form" is a different previous step, not a
         # different argument — model it the way the rest of the catalog does.
         raise PreconditionFailed(str(exc)) from exc
-    return report.model_dump()
+    # The requested process, not `report.process` — that one is a display label
+    # ('LPBF', 'MILLING'), so fingerprinting on it would make an additive report
+    # and a milling report indistinguishable to the freshness check. The
+    # `resolution` argument is a *setting* here, not the geometry's: it meshes
+    # the additive rows, and the body was evaluated at whatever it was
+    # evaluated at.
+    return _record(doc, "dfm", report.model_dump(),
+                   {"process": process, "build_axis": build_axis,
+                    "resolution": resolution})
 
 
 @operation("simulate", "query", "Linear-static FEA: von Mises stress, displacement and safety factor "
@@ -1776,10 +2026,13 @@ def _simulate(doc_id, args):
     belongs in the action space, and the result says which one produced it."""
     from app.services import document_analysis
 
-    _get(doc_id)
-    return document_analysis.analyse_document(
-        doc_id, resolution=int(args.get("resolution", 128)),
-        elements=int(args["elements"]) if args.get("elements") else None)
+    doc = _get(doc_id)
+    resolution = int(args.get("resolution", 128))
+    elements = int(args["elements"]) if args.get("elements") else None
+    report = document_analysis.analyse_document(
+        doc_id, resolution=resolution, elements=elements)
+    return _record(doc, "analysis", report,
+                   {"elements": elements, "load_cases": _load_case_digest(doc)})
 
 
 @operation("verify_toolpath", "query",
@@ -1867,10 +2120,12 @@ _DRAWING_SPEC = {
                                       "'label' and the true model distance is printed."},
         "annotations": {"type": "array",
                         "description": "[{view, at:[h_mm,v_mm], text | gdt_feature | "
-                                       "tolerance_label, dx?, dy?, frame?}] — a leader from "
-                                       "a point on the part to a callout. Naming a "
-                                       "gdt_feature or tolerance_label pulls the text from "
-                                       "the document so it cannot drift."},
+                                       "tolerance_label | mechanism, dx?, dy?, frame?}] — a "
+                                       "leader from a point on the part to a callout. Naming "
+                                       "a gdt_feature, tolerance_label or mechanism note "
+                                       "pulls the text from the document so it cannot drift. "
+                                       "A mechanism note with a direction also draws a "
+                                       "rotation arrow at the anchor."},
         "projection": {"enum": ["first", "third"], "default": "third",
                        "description": "projection angle convention: third angle (ISO A) or first"},
         "sheet": {"enum": ["auto", "a4", "a3", "a2", "a1", "a0"], "default": "auto",
@@ -1991,9 +2246,10 @@ def _verify_against_spec(doc_id, args):
 
     doc = _get(doc_id)
     try:
-        return design_spec.verify(doc)
+        report = design_spec.verify(doc)
     except design_spec.SpecError as exc:
         raise PreconditionFailed(str(exc))
+    return _record(doc, "spec", report)
 
 
 @operation("list_standard_parts", "query",
@@ -2030,10 +2286,15 @@ def _list_standard_parts(doc_id, args):
 
 
 @operation("list_templates", "query",
-           "The starter parts: a plate, an L-bracket, an open-top enclosure and "
-           "a stepped shaft. Each is an ordinary feature tree with its driving "
-           "dimensions already named as parameters, so the first edit is "
-           "changing a number. Build one with apply_template.",
+           "The starter parts: general ones (a plate, an L-bracket, an "
+           "open-top enclosure, a stepped shaft) and a 1/16 RC toolkit (solid "
+           "axle, differential placeholder, dogbone and universal-joint "
+           "envelopes, a spur/pinion layout plate, a motor mount, a servo tray "
+           "and a steering knuckle). Each is an ordinary feature tree with its "
+           "driving dimensions already named as parameters, so the first edit "
+           "is changing a number, and each RC one arrives with its own "
+           "mechanism notes so a drawing of it carries the rotation arrows. "
+           "Build one with apply_template.",
            {})
 def _list_templates(doc_id, args):
     from app.services import templates
@@ -2043,8 +2304,9 @@ def _list_templates(doc_id, args):
 
 
 @operation("apply_template", "mutate",
-           "Build a starter part into this document — a plate, an L-bracket, an "
-           "enclosure or a shaft, with named driving parameters. The template "
+           "Build a starter part into this document — a plate, a bracket, an "
+           "enclosure, a shaft, or one of the 1/16 RC mechanisms — with named "
+           "driving parameters. The template "
            "is an operation sequence, so what it builds is an ordinary editable "
            "tree and every dimension is a parameter you can change with "
            "set_parameters. Only into a document with no body yet: browse them "
@@ -2078,6 +2340,235 @@ def _apply_template(doc_id, args):
     return {"message": f"built {outcome['name']} with "
                        f"{len(outcome['parameters'])} driving parameters",
             **outcome}
+
+
+@operation("set_manufacturing", "mutate",
+           "Record how this part is meant to be made: the process, the "
+           "printer's bed, nozzle and layer height, the screws it is designed "
+           "around and any notes. An intention rather than a measurement, which "
+           "is exactly why it is written down — a release package that does not "
+           "state the nozzle it was drawn for is one whose wall figures nobody "
+           "receiving it can check. `check_printability` and the release "
+           "manifest both read this, so the numbers cannot drift apart.",
+           {"process": {"enum": list(_PRINT_PROCESSES), "default": "additive",
+                        "description": "how the part is meant to be made"},
+            "printer": {"type": "string",
+                        "description": "a machine whose bed is known here "
+                                       "(ender-3, prusa-mk4, bambu-a1, "
+                                       "bambu-x1c, voron-v0), or give bed_mm"},
+            "bed_mm": {**_VEC, "unit": "mm",
+                       "description": "build volume, when the printer is not one "
+                                      "named above"},
+            "nozzle_mm": {"type": "number", "unit": "mm", "exclusiveMinimum": 0,
+                          "description": "sets the minimum printable wall: two "
+                                         "perimeters"},
+            "layer_mm": {"type": "number", "unit": "mm", "exclusiveMinimum": 0},
+            "infill_percent": {"type": "number",
+                               "description": "what the part was designed to be "
+                                              "printed at; it changes the strength, "
+                                              "not the geometry"},
+            "screws": {"type": "array",
+                       "description": "sizes the part is designed around, e.g. "
+                                      "[\"M2.5\"] — what the trap and counterbore "
+                                      "callouts are computed for"},
+            "clearance_mm": {"type": "number", "unit": "mm", "exclusiveMinimum": 0,
+                             "description": "your machine's fit allowance on traps "
+                                            "and counterbores"},
+            "notes": {"type": "string",
+                      "description": "anything the person making it needs"}})
+def _set_manufacturing(doc_id, args):
+    from app.services import printability
+
+    doc = _get(doc_id)
+    try:
+        record = printability.intent(
+            process=args.get("process", "additive"),
+            printer=args.get("printer"), nozzle_mm=args.get("nozzle_mm"),
+            layer_mm=args.get("layer_mm"), bed_mm=args.get("bed_mm"),
+            infill_percent=args.get("infill_percent"),
+            screws=args.get("screws") or (), clearance_mm=args.get("clearance_mm"),
+            notes=args.get("notes") or "")
+    except printability.PrintabilityError as exc:
+        raise BadArgument(str(exc)) from exc
+
+    doc.manufacturing = record
+    # Outside the evaluation key, so nothing rebuilds — and therefore this has
+    # to persist itself. `set_material` did not and lost the assignment on
+    # reload, intermittently, keyed on which two densities were involved.
+    document_service.persist_document(doc)
+    return {"message": f"recorded a {record['process']} intent",
+            "manufacturing": record}
+
+
+@operation("check_printability", "query",
+           "Measure the body against one printer: does it fit the bed in any "
+           "90-degree orientation (and if not, how many pieces it would take), "
+           "is the thinnest wall at least two perimeters, is the smallest bore "
+           "printable, is any cavity sealed. Also identifies every cylindrical "
+           "face — what it matches, a clearance hole or a bearing pocket or a "
+           "shaft bore — and gives the nut-trap and counterbore dimensions for "
+           "the declared screws. The checks are measurements of the body; the "
+           "hardware rows are dimensions to design to. Defaults come from "
+           "set_manufacturing.",
+           {"printer": {"type": "string",
+                        "description": "a machine whose bed is known here; "
+                                       "overrides the recorded one"},
+            "bed_mm": {**_VEC, "unit": "mm", "description": "build volume"},
+            "nozzle_mm": {"type": "number", "unit": "mm", "exclusiveMinimum": 0},
+            "layer_mm": {"type": "number", "unit": "mm", "exclusiveMinimum": 0},
+            "screws": {"type": "array",
+                       "description": "sizes to compute trap and counterbore "
+                                      "callouts for"},
+            "clearance_mm": {"type": "number", "unit": "mm", "exclusiveMinimum": 0},
+            "margin_mm": {"type": "number", "unit": "mm",
+                          "description": "keep-out at the bed edge; a skirt or a "
+                                         "purge tower is not free"}})
+def _check_printability(doc_id, args):
+    from app.services import printability
+
+    doc = _get(doc_id)
+    settings = printability.settings_from(doc)
+
+    bed = settings["bed_mm"]
+    if args.get("printer"):
+        known = printability.BEDS.get(str(args["printer"]).strip().lower())
+        if known is None:
+            raise BadArgument(
+                f"no published bed here for {args['printer']!r}; give bed_mm, or "
+                f"use one of: {', '.join(sorted(printability.BEDS))}", arg="printer")
+        bed = known
+    if args.get("bed_mm"):
+        try:
+            bed = tuple(float(args["bed_mm"][a]) for a in "xyz")
+        except (KeyError, TypeError, ValueError):
+            raise BadArgument("bed_mm needs x, y and z in millimetres",
+                              arg="bed_mm") from None
+
+    try:
+        return printability.check(
+            doc_id, bed_mm=bed,
+            nozzle_mm=float(args.get("nozzle_mm") or settings["nozzle_mm"]),
+            layer_mm=float(args.get("layer_mm") or settings["layer_mm"]),
+            screws=args.get("screws") or settings["screws"],
+            clearance_mm=float(args.get("clearance_mm") or settings["clearance_mm"]),
+            margin_mm=float(args.get("margin_mm", 5.0)))
+    except printability.PrintabilityError as exc:
+        raise BadArgument(str(exc)) from exc
+
+
+@operation("drawing_preset", "query",
+           "A ready-made DrawingSpec — the sheet a drafter would have laid out. "
+           "`shop` is three views, a section, the overall dimensions and every "
+           "mechanism note as a callout; `print` is the footprint and the "
+           "height with no section; `inspection` is all six views dimensioned. "
+           "It returns the spec, which you pass to generate_drawing or edit "
+           "first — it is not a second drawing pipeline, so it can only ask for "
+           "what the open spec could.",
+           {"style": {"enum": list(_DRAWING_STYLES), "default": "shop",
+                      "description": "which sheet to lay out"},
+            "mechanism": {"type": "boolean", "default": True,
+                          "description": "include the document's mechanism notes "
+                                         "as callouts"}})
+def _drawing_preset(doc_id, args):
+    from app.services import drawing_presets
+
+    doc = _get(doc_id)
+    document_service.ensure_derived(doc)
+    try:
+        spec = drawing_presets.spec_for(doc, args.get("style", "shop"),
+                                        mechanism=args.get("mechanism", True))
+    except drawing_presets.PresetError as exc:
+        raise BadArgument(str(exc)) from exc
+    return {"style": args.get("style", "shop"), "spec": spec,
+            "views": spec["views"], "dimensions": len(spec["dimensions"]),
+            "annotations": len(spec["annotations"]),
+            "message": "pass this as generate_drawing's `spec`"}
+
+
+@operation("list_drawing_presets", "query",
+           "What each drawing style lays out, and what is deliberately not "
+           "offered — an exploded view needs more than one body and belongs to "
+           "an assembly drawing; a detail bubble's region is the drafting "
+           "decision the open spec exists to keep with you.",
+           {})
+def _list_drawing_presets(doc_id, args):
+    from app.services import drawing_presets
+
+    _get(doc_id)
+    return drawing_presets.describe()
+
+
+@operation("list_rc_presets", "query",
+           "The numbers a 1/16 RC build starts from: wheelbase and track bands, "
+           "3 mm axle stock, MR105/MR115 bearings, M2/M2.5 hardware, module-0.6 "
+           "gears, servo cases. Every row says whether it is a `standard` — a "
+           "different value is a mistake — or a `band`, the range this class of "
+           "vehicle sits in, where a different value is a design decision.",
+           {"group": {"type": "string",
+                      "description": "one of chassis, shaft, bearing, hardware, "
+                                     "gear, servo; omit for all of them"}})
+def _list_rc_presets(doc_id, args):
+    from app.services import rc_presets
+
+    _get(doc_id)
+    group = args.get("group")
+    try:
+        return rc_presets.describe(group)
+    except KeyError:
+        raise BadArgument(
+            f"no preset group {group!r}; one of "
+            f"{', '.join(rc_presets.groups())}", arg="group") from None
+
+
+@operation("steering_geometry", "query",
+           "Where a steering arm's outer ball goes, from the Ackermann guide "
+           "construction: each arm points at the centre of the rear axle, which "
+           "fixes the arm angle and from it the tie-rod length. Returns the "
+           "ball's offset behind and inboard of the kingpin, so the numbers go "
+           "straight into a feature centre rather than being drawn by eye.",
+           {"wheelbase": {"type": "number", "unit": "mm", "required": True,
+                          "exclusiveMinimum": 0,
+                          "description": "front axle to rear axle"},
+            "kingpin_track": {"type": "number", "unit": "mm", "required": True,
+                              "exclusiveMinimum": 0,
+                              "description": "distance between the two kingpin axes"},
+            "arm": {"type": "number", "unit": "mm", "required": True,
+                    "exclusiveMinimum": 0,
+                    "description": "kingpin axis to the tie-rod ball"}})
+def _steering_geometry(doc_id, args):
+    from app.services import rc_presets
+
+    _get(doc_id)
+    try:
+        return rc_presets.ackermann(require(args, "wheelbase"),
+                                    require(args, "kingpin_track"),
+                                    require(args, "arm"))
+    except ValueError as exc:
+        raise BadArgument(str(exc)) from exc
+
+
+@operation("gear_layout", "query",
+           "Pitch diameters, centre distance and reduction for a spur and "
+           "pinion pair. The centre distance is what a motor mount is drilled "
+           "to — `m(z1+z2)/2` — so it is computed rather than measured off a "
+           "layout. Warns when a pinion is small enough to undercut.",
+           {"module": {"type": "number", "unit": "mm", "required": True,
+                       "exclusiveMinimum": 0,
+                       "description": "both gears must share it or they do not mesh"},
+            "pinion_teeth": {"type": "integer", "required": True,
+                             "description": "the small gear, on the motor"},
+            "spur_teeth": {"type": "integer", "required": True,
+                           "description": "the large gear, on the layshaft"}})
+def _gear_layout(doc_id, args):
+    from app.services import rc_presets
+
+    _get(doc_id)
+    try:
+        return rc_presets.spur_pinion(require(args, "module"),
+                                      require(args, "pinion_teeth"),
+                                      require(args, "spur_teeth"))
+    except ValueError as exc:
+        raise BadArgument(str(exc)) from exc
 
 
 def _axis_extent(bbox, axis: Dict[str, float]) -> tuple:
@@ -2274,6 +2765,106 @@ def _clearance_hole(doc_id, args):
             "counterbored": counterbored}
 
 
+@operation("workflow_status", "query",
+           "What each mode of the editor can do right now, and whether what it "
+           "is showing is still true. One vocabulary for all six: 'blocked' (a "
+           "prerequisite is missing, and it says which and what to do), 'ready', "
+           "'queued', 'running' (with a fraction), 'current' (the held result "
+           "was computed from exactly these inputs), 'stale' (a result is held "
+           "but the inputs moved) and 'failed'. Read this before deciding what "
+           "to run: it distinguishes 'nothing computed yet' from 'nothing to "
+           "compute with', which an empty panel cannot.",
+           {"settings": {"type": "object",
+                         "description": "per-mode call settings that affect freshness, "
+                                        "e.g. {\"make\": {\"process\": \"milling\"}} — a "
+                                        "DFM report for additive is not current for milling"}})
+def _workflow_status(doc_id, args):
+    from app.services import workflow
+
+    doc = _get(doc_id)
+    settings = args.get("settings") or {}
+    return {"modes": workflow.overview(doc, settings),
+            "package": workflow.status(doc, workflow.PACKAGE,
+                                       settings.get("package")).as_dict()}
+
+
+@operation("start_analysis", "mutate",
+           "Queue a linear-static FEA solve as a background job and return its "
+           "id. Use this instead of `simulate` when raising `elements`: above "
+           "roughly 20k free degrees of freedom the direct solve is abandoned "
+           "for conjugate gradient and the wall clock goes to minutes, which is "
+           "longer than a request should hold. Poll with `job_status`. The "
+           "result is published against the document only if the part, the "
+           "material and the load cases have not moved while it ran.",
+           {"elements": {"type": "number",
+                         "description": "element budget; more is slower and resolves "
+                                        "stress further"},
+            "resolution": {"type": "number", "default": 128,
+                           "description": "meshing resolution for the fallback estimate only"}})
+def _start_analysis(doc_id, args):
+    from app.services import derived_cache, job_handlers, jobs
+
+    doc = _get(doc_id)
+    resolution = int(args.get("resolution", 128))
+    elements = args.get("elements")
+    settings = {"elements": elements, "load_cases": _load_case_digest(doc)}
+    fingerprint = derived_cache.analysis_fingerprint(doc, "analysis", settings)
+    try:
+        job = jobs.enqueue(job_handlers.ANALYSIS, doc_id,
+                           {"elements": elements, "resolution": resolution},
+                           owner_id=doc.owner_id, input_fingerprint=fingerprint,
+                           document_revision=doc.revision,
+                           message="Queued linear-static solve")
+    except jobs.QueueFull as full:
+        raise PreconditionFailed(str(full)) from full
+    return {"job_id": job.id, "status": job.status, "kind": job.kind,
+            "input_fingerprint": fingerprint,
+            "message": "queued; poll job_status with this job_id"}
+
+
+@operation("job_status", "query",
+           "The state of one background job on this document: queued, running "
+           "(with a progress fraction), succeeded, failed, cancel_requested or "
+           "cancelled, plus its result or a typed error. Omit `job_id` to list "
+           "every job against the document, newest first — which is how a "
+           "client that lost track of an id finds the work still running.",
+           {"job_id": {"type": "string",
+                       "description": "the job to read; omit to list them all"}})
+def _job_status(doc_id, args):
+    from app.services import jobs
+
+    _get(doc_id)
+    job_id = args.get("job_id")
+    if not job_id:
+        return {"jobs": [j.public() for j in jobs.for_subject(doc_id)]}
+    job = jobs.get(str(job_id))
+    # The subject check is the access check: the router has already decided the
+    # caller may read *this document*, and a job id from another one must not
+    # resolve through it.
+    if job is None or job.subject_id != doc_id:
+        raise NoSuchDocument(f"no job {job_id!r} on this document")
+    return job.public()
+
+
+@operation("cancel_job", "mutate",
+           "Ask a background job to stop. A queued job is cancelled outright; a "
+           "running one is asked, and stops at the next checkpoint its handler "
+           "chooses — a solve already inside a linear factorisation is not "
+           "interruptible, so the state goes to 'cancel_requested' first and "
+           "the result says so rather than pretending otherwise.",
+           {"job_id": {"type": "string", "required": True,
+                       "description": "the job to stop"}})
+def _cancel_job(doc_id, args):
+    from app.services import jobs
+
+    _get(doc_id)
+    job_id = str(require(args, "job_id"))
+    job = jobs.get(job_id)
+    if job is None or job.subject_id != doc_id:
+        raise NoSuchDocument(f"no job {job_id!r} on this document")
+    return (jobs.request_cancel(job_id) or job).public()
+
+
 @operation("export", "query",
            "Write the part out as a file somebody else can open. Returns a URL "
            "keyed by the file's content hash — fetch it with GET, it is never "
@@ -2295,18 +2886,30 @@ def _export(doc_id, args):
 
 @operation("release_package", "query",
            "Build the handover package for a released revision: the exact STEP "
-           "solid, the drawing as PDF and DXF, the mesh, a one-line BOM, and the "
-           "score against the design spec — one zip, pinned to a revision letter. "
-           "Built from the revision snapshot, not from the document as it stands, "
-           "so it is a release rather than a screenshot. Needs a released "
+           "solid, the drawing as PDF and DXF, the mesh, a one-line BOM, the "
+           "manufacturing intent and the score against the design spec — one "
+           "zip, pinned to a revision letter. Built from the revision snapshot, "
+           "not from the document as it stands, so it is a release rather than "
+           "a screenshot. `preset: printed` adds the printability report "
+           "against the recorded machine and a hardware list, and lays the "
+           "drawing out for a slicer rather than a shop. Needs a released "
            "revision: call release_revision first.",
            {"revision": {"type": "string",
-                         "description": "revision letter, e.g. 'A'. Defaults to the latest released."}})
+                         "description": "revision letter, e.g. 'A'. Defaults to the latest released."},
+            "preset": {"enum": list(_PACKAGE_PRESETS), "default": "standard",
+                       "description": "`printed` adds a printability report and a "
+                                      "hardware list; it only ever adds files"}})
 def _release_package(doc_id, args):
     from app.services import release_package
 
     _get(doc_id)
-    return release_package.build(doc_id, revision=args.get("revision"))
+    preset = args.get("preset", "standard")
+    out = release_package.build(doc_id, revision=args.get("revision"), preset=preset)
+    # Filed against the document, the same as the job path does, so
+    # `workflow_status` reports the package `current` rather than `ready`
+    # depending on which door built it.
+    release_package.file_result(doc_id, out, preset)
+    return out
 
 
 @operation("release_revision", "mutate", "Cut an immutable released revision (next letter A/B/C…) from the current geometry.",
@@ -2393,16 +2996,17 @@ def _slice_part(doc_id, args):
     bypassed the editor-access check and the quota meter, and returned
     ``document=None`` — so a caller never saw the G-code it had just produced.
     """
-    import base64
-
     from app.models.schemas import CamResult
-    from app.services import slicer
+    from app.services import artifacts, slicer
 
     settings = slicer.SliceSettings(**(args.get("settings") or {}))
     out = slicer.slice_document(doc_id, settings)
     doc = _get(doc_id)
     doc.derived.cam = CamResult(
-        gcode_url="data:text/plain;base64," + base64.b64encode(out["gcode"].encode("utf-8")).decode("ascii"),
+        # An artifact URL, not a megabyte of base64 riding on the document. The
+        # inline form was stripped on persist, so a reload lost a program the
+        # toolpath behind it had not changed.
+        gcode_url=artifacts.store_gcode(doc_id, out["gcode"], doc.name or "part"),
         operations=[f"fdm {settings.layer_height}mm/{settings.wall_count} walls/{int(settings.infill * 100)}% infill"],
         estimated_minutes=out["stats"]["estimated_minutes"],
     )
@@ -2420,8 +3024,7 @@ def _slice_part(doc_id, args):
            "settings": {"type": "object", "description": "slice settings if slicing is needed"}})
 def _print_part(doc_id, args):
     """Upload the sliced G-code to a Moonraker/Klipper printer (slice first if needed)."""
-    import base64
-
+    from app.services import artifacts
     from app.services.machine import moonraker_client as mr
     from app.services.machine.url_guard import UrlNotAllowed, validate_url
 
@@ -2434,8 +3037,10 @@ def _print_part(doc_id, args):
     if doc.derived.cam is None or not doc.derived.cam.gcode_url:
         _slice_part(doc_id, args)  # defaults (or agent-passed settings)
         doc = _get(doc_id)
-    _, b64 = doc.derived.cam.gcode_url.split(",", 1)
-    gcode = base64.b64decode(b64).decode("utf-8")
+    gcode = artifacts.gcode_text(doc_id, doc.derived.cam.gcode_url)
+    if gcode is None:
+        raise PreconditionFailed(
+            "the sliced G-code is no longer available; slice the part again")
     filename = f"forge_{(doc.name or 'part')[:32].replace(' ', '_')}.gcode"
     start = bool(args.get("start", False))
     try:
@@ -2539,6 +3144,7 @@ def execute(
     include_state: bool = True,
     rollback_on_eval_error: bool = False,
     rationale: str = "",
+    expected_revision: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run one operation and return a full result envelope. Never raises.
 
@@ -2561,7 +3167,7 @@ def execute(
     document is always in a valid state and there are no absorbing failure
     states. Off by default because it would break the parametric workflow above.
     """
-    from app.services import observation, trajectories
+    from app.services import trajectories
 
     started = time.perf_counter()
 
@@ -2576,6 +3182,34 @@ def execute(
         trajectories.record_step(op_name, doc_id, args, env, rationale=rationale)
         return env
 
+    # Mutating operations run under the document's write lock, so the
+    # expected-revision check and the write it guards cannot be separated.
+    # Without that they can be: two edits arriving together both read revision
+    # 3, both pass the check, both apply, and both report revision 4 — handing a
+    # caller that chains `expected_revision` a number its own write never
+    # produced. Queries take no lock; they only read.
+    if op.kind == "mutate":
+        with document_service.writing(doc_id):
+            return _apply(op, op_name, doc_id, args, started,
+                          include_state=include_state,
+                          rollback_on_eval_error=rollback_on_eval_error,
+                          rationale=rationale, expected_revision=expected_revision)
+    return _apply(op, op_name, doc_id, args, started,
+                  include_state=include_state,
+                  rollback_on_eval_error=rollback_on_eval_error,
+                  rationale=rationale, expected_revision=expected_revision)
+
+
+def _apply(op, op_name: str, doc_id: str, args: Dict[str, Any] | None,
+           started: float, *, include_state: bool, rollback_on_eval_error: bool,
+           rationale: str, expected_revision: Optional[int]) -> Dict[str, Any]:
+    """`execute`'s body, so the mutating path can be wrapped in one lock.
+
+    Split out purely to keep the critical section a `with` block rather than
+    ninety lines of re-indented code — the flow is unchanged.
+    """
+    from app.services import trajectories
+
     subject = _SUBJECTS[op.subject]
     doc = subject.fetch(doc_id)
     if doc is None:
@@ -2585,6 +3219,24 @@ def execute(
         return env
 
     mutates = op.kind == "mutate"
+    if mutates and expected_revision is not None:
+        # Checked here, before the handler runs, rather than inside each of the
+        # sixty mutators. A conflict means the caller wrote against a document
+        # somebody else has since moved; the fix is to re-read and decide, not
+        # to change an argument, which is what makes PRECONDITION the right code
+        # and its remedy the right advice.
+        actual = getattr(doc, "revision", 0)
+        if actual != expected_revision:
+            env = {
+                "ok": False, "op": op_name, "result": {}, "warnings": [],
+                "error": PreconditionFailed(
+                    f"{op.subject} {doc_id} is at revision {actual}, not "
+                    f"{expected_revision}; it changed since you read it — "
+                    f"re-read it and re-apply the change").to_dict(),
+                "revision": actual,
+            }
+            trajectories.record_step(op_name, doc_id, args, env, rationale=rationale)
+            return env
     before = subject.snapshot(doc)
     obs_before = subject.summarize(doc)
     # Only a mutating op can need rolling back, and only then is the copy worth it.
@@ -2594,10 +3246,11 @@ def execute(
         return round((time.perf_counter() - started) * 1000, 2)
 
     try:
-        from app.services import op_schema
+        from app.services import instrumentation, op_schema
 
         op_schema.validate(op.params, args, op=op_name)
-        result = op.handler(doc_id, args or {})
+        with instrumentation.span(f"op.{op_name}"):
+            result = op.handler(doc_id, args or {})
     except Exception as exc:  # noqa: BLE001 — classified, never swallowed
         err = _as_operation_error(exc)
         if isinstance(err, InternalError):
@@ -2656,6 +3309,11 @@ def execute(
 
     if after_doc is not None:
         envelope["delta"] = subject.delta(before, subject.snapshot(after_doc))
+        # The revision this call left behind, so a caller chaining writes can
+        # pass it as the next `expected_revision` without a re-read. Absent for
+        # an assembly, which has no revision counter of its own.
+        if hasattr(after_doc, "revision"):
+            envelope["revision"] = after_doc.revision
         if include_state:
             envelope["state"] = subject.summarize(after_doc)
 

@@ -19,6 +19,12 @@ Two things follow from content addressing that are worth stating:
 - **The digest is of the file, not of the document.** Two documents that happen
   to evaluate to identical geometry export to different URLs because the STEP
   header carries the part name — which is correct: they are different files.
+
+Since Sprint 4 the bytes live in `services/blobs` rather than in an LRU here, so
+a URL is valid on whichever instance serves the fetch and survives a restart.
+Nothing about the contract changed: the digest is still the name, the store
+still 404s rather than returning different bytes, and the caller still
+regenerates on a miss.
 """
 
 from __future__ import annotations
@@ -60,36 +66,31 @@ FORMATS: Dict[str, _Format] = {
                    "the drawing sheet as a web image, to look at in a browser"),
 }
 
-_CACHE_SIZE = 64
+def _key(digest: str) -> str:
+    """A blob key inside the document's namespace.
 
-
-class _LruCache(dict):
-    """A dict that forgets its oldest entry past a cap."""
-
-    def __init__(self, cap: int):
-        super().__init__()
-        self._cap = cap
-
-    def __setitem__(self, key, value):
-        super().__setitem__(key, value)
-        while len(self) > self._cap:
-            del self[next(iter(self))]
-
-
-# Exports are big and re-requested rarely, so this is deliberately smaller than
-# the thumbnail cache and larger than one: a release package asks for four
-# formats of the same body in a row.
-_ARTIFACTS: Dict[str, Artifact] = _LruCache(_CACHE_SIZE)
-
-
-def _key(doc_id: str, digest: str) -> str:
-    return f"{doc_id}:{digest}"
+    Prefixed, because the same namespace holds the document's meshes and
+    thumbnails: a mesh hash and an export hash are both hex and could otherwise
+    collide into each other's slot. Which they never would in practice, and
+    "never in practice" is how content-addressed stores serve the wrong bytes.
+    """
+    return f"export-{digest}"
 
 
 def store(doc_id: str, artifact: Artifact) -> Dict[str, object]:
-    """Keep an exported file under its content hash and describe where it is."""
+    """Keep an exported file under its content hash and describe where it is.
+
+    The bytes go to `services/blobs`, which on a configured deployment means a
+    shared volume rather than this process's memory. That is what makes the URL
+    valid on the instance that did not build it — content addressing already
+    made a cross-instance fetch *safe*, in the sense that it could only 404, and
+    this is what makes it work.
+    """
+    from app.services import blobs
+
     digest = hashlib.sha256(artifact.payload).hexdigest()[:16]
-    _ARTIFACTS[_key(doc_id, digest)] = artifact
+    blobs.put(doc_id, _key(digest),
+              blobs.Blob(artifact.payload, artifact.media_type, artifact.filename))
     return {
         "url": f"/api/documents/{doc_id}/artifact/{digest}",
         "hash": digest,
@@ -100,7 +101,48 @@ def store(doc_id: str, artifact: Artifact) -> Dict[str, object]:
 
 
 def fetch(doc_id: str, digest: str) -> Optional[Artifact]:
-    return _ARTIFACTS.get(_key(doc_id, digest))
+    from app.services import blobs
+
+    blob = blobs.get(doc_id, _key(digest))
+    return Artifact(blob.payload, blob.media_type, blob.filename) if blob else None
+
+
+#: G-code is written by the slicer and the CAM planner, and it used to ride in
+#: `CamResult.gcode_url` as a base64 data URI — a megabyte of text inlined into
+#: the document, stripped on persist, and therefore *lost on every reload* even
+#: though the toolpath that produced it had not changed. It is a generated file
+#: like any other, so it gets a content-hash URL like any other.
+GCODE_MEDIA_TYPE = "text/plain"
+
+
+def store_gcode(doc_id: str, gcode: str, name: str) -> str:
+    """File a G-code program as an artifact and return its URL."""
+    payload = gcode.encode("utf-8")
+    return str(store(doc_id, Artifact(payload, GCODE_MEDIA_TYPE,
+                                      _safe_name(name, "gcode")))["url"])
+
+
+def gcode_text(doc_id: str, url: Optional[str]) -> Optional[str]:
+    """Read a G-code program back from whichever form its URL is in.
+
+    Two forms, because documents persisted before this carried the program
+    inline as `data:text/plain;base64,…` and a live process may still be holding
+    one. A reader that understood only the new form would 404 on a part sliced
+    before a deploy — which is the sort of breakage that makes people distrust
+    the whole feature rather than blame the migration.
+    """
+    if not url:
+        return None
+    if url.startswith("data:"):
+        import base64
+
+        try:
+            return base64.b64decode(url.split(",", 1)[1]).decode("utf-8")
+        except (IndexError, ValueError):
+            return None
+    digest = url.rstrip("/").rsplit("/", 1)[-1]
+    artifact = fetch(doc_id, digest)
+    return artifact.payload.decode("utf-8") if artifact else None
 
 
 def _safe_name(name: str, extension: str) -> str:
@@ -129,8 +171,11 @@ def build(doc_id: str, fmt: str, *, resolution: int = 128,
     meta = FORMATS[fmt]
     filename = _safe_name(name or doc.name, meta.extension)
 
+    from app.services import instrumentation
+
     try:
-        payload = _render(doc_id, fmt, resolution=resolution, spec=spec)
+        with instrumentation.span(f"export.{fmt}"):
+            payload = _render(doc_id, fmt, resolution=resolution, spec=spec)
     except (BadArgument, PreconditionFailed):
         raise
     except Exception as exc:  # noqa: BLE001
@@ -141,6 +186,7 @@ def build(doc_id: str, fmt: str, *, resolution: int = 128,
     if not payload:
         raise PreconditionFailed(
             f"the {fmt} export came back empty — the document has no body to export")
+    instrumentation.gauge(f"export.{fmt}.bytes", len(payload))
     return Artifact(payload, meta.media_type, filename)
 
 

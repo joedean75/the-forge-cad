@@ -80,12 +80,23 @@ def _check_production_posture() -> None:
 async def lifespan(app: FastAPI):
     import asyncio
 
-    from app.services import realtime
+    from app.services import job_handlers, jobs, realtime  # noqa: F401 (registers handlers)
 
     realtime.set_loop(asyncio.get_running_loop())
     _load_persisted_data()
     _check_production_posture()
-    yield
+    # Recover anything a previous process left mid-flight before taking new
+    # work: a job whose worker was killed is a row that says `running` and that
+    # nothing will ever move, and a client polling it waits forever.
+    recovered = jobs.sweep()
+    if any(recovered.values()):
+        _LOGGER.info("job sweep on startup: %s", recovered)
+    if os.environ.get("FORGE_JOB_WORKERS", "").strip() != "0":
+        jobs.start_workers()
+    try:
+        yield
+    finally:
+        jobs.stop_workers()
 
 
 app = FastAPI(title="Forge Design Mock API", lifespan=lifespan)

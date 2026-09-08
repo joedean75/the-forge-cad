@@ -283,6 +283,26 @@ class Collaborator(BaseModel):
     added_at: str
 
 
+class AnalysisProduct(BaseModel):
+    """One derived reading of the body, with the inputs it was a reading *of*.
+
+    The panels used to hold these client-side and clear them on every edit,
+    which is right for the tab that made the edit and useless after a reload or
+    for a second viewer. Stored against the document with a fingerprint, the
+    question "is this report about the part I am looking at?" has one answer
+    that everybody gets — see `services/derived_cache`.
+    """
+
+    kind: str                       # analysis | dfm | cam | spec | drawing
+    #: `derived_cache.analysis_fingerprint` of the inputs that produced it.
+    fingerprint: str
+    computed_at: str
+    result: Dict[str, Any] = {}
+    #: True when the result was too large to carry inline. A drawing sheet or a
+    #: G-code program is an artifact with a URL, not a field on the document.
+    truncated: bool = False
+
+
 class DesignDocument(BaseModel):
     id: str
     name: str
@@ -322,6 +342,38 @@ class DesignDocument(BaseModel):
     # Engineering material bound to the part (see services/materials.py); drives
     # mass, mass properties, simulation, DFM and quotes. None => catalog default.
     material_id: Optional[str] = None
+    # A mass someone measured or read off a datasheet, in grams. Beats both the
+    # geometry and the catalog, because it is a statement about the actual
+    # object rather than about a model of it — see `services/part_mass`.
+    #
+    # Only meaningful for a part whose geometry is a deliberate simplification:
+    # a purchased motor, an ESC, a battery. Setting it on a bracket you modelled
+    # is how a printed part comes to disagree with its own volume.
+    mass_override_g: Optional[float] = None
+    # Electrical metadata for a document that *is* a battery pack: cells,
+    # chemistry, nominal volts and capacity. Recorded rather than derived —
+    # pack dimensions are not standardised, so nothing here can be inferred
+    # from anything else, and a mass budget that also knows the pack's energy
+    # is what a flight-time or run-time estimate needs. See `add_battery`.
+    battery: Optional[Dict[str, Any]] = None
+    # How the part moves: which shaft turns about what, which way a gear runs,
+    # what bearing sits in which pocket, what screw goes in which hole.
+    #
+    # Recorded on the document rather than drawn on the sheet, so one statement
+    # reaches the drawing, the BOM note and anything else that asks. A rotation
+    # arrow retyped onto a sheet is one that disagrees with the model the first
+    # time somebody mirrors the part. See `services/mechanism`.
+    mechanism: List[Dict[str, Any]] = []
+    # How the part is meant to be made: the process, the machine's assumptions
+    # (bed, nozzle, layer), the hardware it is designed around and any notes for
+    # whoever makes it.
+    #
+    # An *intention*, not a measurement — which is exactly why it has to be
+    # written down. A release package that does not state the nozzle it was
+    # designed for is a package whose wall-thickness numbers cannot be checked
+    # by the person receiving it. See `set_manufacturing` and
+    # `services/printability`.
+    manufacturing: Optional[Dict[str, Any]] = None
     # Named driving parameters/equations (feature 03); resolved into feature
     # params at evaluation. Ordered so later entries may reference earlier ones.
     parameters: List["DocumentParameter"] = []
@@ -338,6 +390,19 @@ class DesignDocument(BaseModel):
     # revisions (immutable letter snapshots) above working version history.
     lifecycle_state: Literal["draft", "in_review", "released", "obsolete"] = "draft"
     revisions: List["DocumentRevision"] = []
+    # How many times this document has been written. Bumped by every persisted
+    # mutation, including ones that cannot move the body (a rename, a material).
+    #
+    # Distinct from `derived.eval_key`, and the distinction is load-bearing: a
+    # revision counts *writes*, so two clients can tell they saw the same
+    # document and a write can refuse to land on a version it did not read; a
+    # fingerprint hashes *inputs*, so a rename does not recompute geometry.
+    # Conflating them makes either a rename rebuild the body or a lost update
+    # invisible.
+    revision: int = 0
+    # Derived readings of the body (FEA, DFM, CAM, spec), each carrying the
+    # fingerprint of the inputs that produced it. See `services/derived_cache`.
+    analysis: Dict[str, AnalysisProduct] = {}
 
 
 class DocumentParameter(BaseModel):
@@ -425,6 +490,10 @@ class UpdateDocumentRequest(BaseModel):
     feature_tree: Optional[dict] = None
     optimization: Optional[OptimizationSetup] = None
     resolution: int = Field(128, ge=32, le=512)
+    # The revision the caller read before making this edit. When given, the write
+    # is refused with 409 if the document has moved on — a whole-tree PUT is the
+    # write most likely to clobber somebody, because it replaces everything.
+    expected_revision: Optional[int] = None
 
 
 # --------------------------------------------------------------------------

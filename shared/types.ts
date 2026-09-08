@@ -270,6 +270,13 @@ export interface DesignDocument {
   optimization?: OptimizationSetup
   derived: DerivedCache
   provenance: DocumentProvenance
+  /**
+   * Which standard part this document *is*, when it came from the catalog.
+   *
+   * One document per (key, owner), reused — which is what makes eight screws
+   * one BOM line of qty 8 rather than eight lines.
+   */
+  catalog_ref?: string | null
   /** The natural-language request this document came from, when there was one. */
   source_prompt?: string | null
   /** The recorded operation sequence that produced it (copilot run, replay). */
@@ -282,6 +289,44 @@ export interface DesignDocument {
   dimensions: Dimension[]
   /** Engineering material bound to the part (drives mass/sim/DFM/quote). */
   material_id?: string | null
+  /**
+   * A mass someone measured or read off a datasheet, in grams.
+   *
+   * Beats both the geometry and the catalog — it is a statement about the
+   * actual object rather than about a model of it. Only meaningful where the
+   * geometry is a deliberate simplification (a purchased motor, an ESC, a
+   * battery); on a part you modelled it makes the report disagree with its own
+   * volume. See `services/part_mass`.
+   */
+  mass_override_g?: number | null
+  /**
+   * Electrical metadata for a document that *is* a battery pack.
+   *
+   * Recorded, never derived: pack dimensions are not standardised, so a
+   * capacity cannot be turned into a size and nothing here follows from the
+   * geometry. See the `add_battery` operation.
+   */
+  battery?: {
+    cells: number
+    chemistry: string
+    nominal_v: number
+    capacity_mah?: number | null
+    mass_g?: number | null
+  } | null
+  /**
+   * How the part moves — shaft axes, gear directions, bearing and hardware
+   * callouts. Recorded on the document so one statement reaches the drawing
+   * rather than being retyped onto the sheet, where it would disagree with the
+   * model the first time somebody mirrored the part.
+   */
+  mechanism?: MechanismNote[]
+  /**
+   * How the part is meant to be made — process, printer assumptions, the
+   * hardware it is designed around. An intention, not a measurement, which is
+   * why it is recorded: a package that does not state its nozzle is one whose
+   * wall figures cannot be checked by whoever receives it.
+   */
+  manufacturing?: ManufacturingIntent | null
   /** Named driving parameters/equations (design intent). */
   parameters?: DocumentParameter[]
   /** Part-family variants overriding parameters. */
@@ -294,6 +339,129 @@ export interface DesignDocument {
   /** Revision & release (feature 09). */
   lifecycle_state?: 'draft' | 'in_review' | 'released' | 'obsolete'
   revisions?: DocumentRevisionMeta[]
+  /**
+   * How many times this document has been written — bumped by every persisted
+   * mutation, including ones that cannot move the body (a rename, a material).
+   *
+   * Pass it back as `expected_revision` on a write to get a 409 instead of
+   * silently overwriting a change you never saw. Distinct from
+   * `derived.eval_key`, which hashes the *inputs an evaluation reads*: a rename
+   * moves the revision and not the fingerprint, which is what stops renaming a
+   * part from rebuilding its body. See docs/FINGERPRINTS.md.
+   */
+  revision?: number
+  /** Derived readings of the body, each carrying the fingerprint of the inputs
+   *  that produced it. Keyed by kind: analysis | dfm | cam | spec | drawing. */
+  analysis?: Record<string, AnalysisProduct>
+}
+
+/**
+ * One stored reading of the body, and what it was a reading *of*.
+ *
+ * The panels used to hold these client-side and clear them on every edit, which
+ * is right for the tab that made the edit and useless after a reload or for a
+ * second viewer. Stored against the document with a fingerprint, "is this report
+ * about the part I am looking at?" has one answer that everybody gets.
+ */
+/**
+ * A durable background job: a row, not an entry in a process-local dict.
+ *
+ * Six states, because the three the optimize panel reads cannot express the two
+ * that matter operationally — `cancel_requested` (asked to stop, not stopped
+ * yet, because a running solve is only interruptible at a checkpoint it
+ * chooses) and `cancelled` (it did). `queued` is distinct from `running` for
+ * the same reason: a job waiting for a worker and a job in a solve are
+ * different things to a person deciding whether to wait.
+ *
+ * `inputs` is deliberately absent: the client that submitted the job already
+ * has them, and echoing an optimization setup back on every poll is the payload
+ * mistake this codebase keeps undoing.
+ */
+export interface JobRecord {
+  id: string
+  kind: string
+  subject_id: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancel_requested' | 'cancelled'
+  /** 0..1. */
+  progress: number
+  message: string
+  result?: Record<string, unknown> | null
+  error?: { code: string; message: string; remedy?: string } | null
+  attempts: number
+  /** The fingerprint of the inputs the work was asked about. */
+  input_fingerprint?: string | null
+  /** The document revision it was submitted against — a result computed for an
+   *  older one is refused rather than folded in over the edits since. */
+  document_revision?: number | null
+  created_at: string
+  started_at?: string | null
+  finished_at?: string | null
+}
+
+/**
+ * What one editor mode can do right now, and whether what it shows is still true.
+ *
+ * One vocabulary for all six, from `services/workflow`. The distinction the
+ * panels could not previously draw is `blocked` vs `ready`: an Analysis panel
+ * with no load cases and an Analysis panel nobody has run both looked empty,
+ * and only one of them was a button press away.
+ */
+export interface ModeStatus {
+  mode: string
+  state: 'blocked' | 'ready' | 'queued' | 'running' | 'current' | 'stale' | 'failed'
+  /** What to do about it — for `blocked`, the step that unblocks it. */
+  detail: string
+  job_id?: string
+  /** 0..1, while a job is in flight. */
+  progress?: number
+  /** The fingerprint the held result was computed under. */
+  fingerprint?: string
+  computed_at?: string
+  /** Which prerequisites are missing, when the state is `blocked`. */
+  missing?: string[]
+}
+
+/** The manufacturing assumptions a release package records. */
+export interface ManufacturingIntent {
+  process?: string
+  printer?: string | null
+  nozzle_mm?: number | null
+  layer_mm?: number | null
+  bed_mm?: { x: number; y: number; z: number } | null
+  infill_percent?: number | null
+  /** Screw sizes the part is designed around, e.g. `['M2.5']`. */
+  screws?: string[]
+  /** The printer's fit allowance on traps and counterbores, in mm. */
+  clearance_mm?: number | null
+  notes?: string
+}
+
+/** One statement about how the part moves. See `services/mechanism`. */
+export interface MechanismNote {
+  id: string
+  kind: 'shaft' | 'gear' | 'bearing' | 'hardware'
+  label: string
+  /** Unit vector the shaft or gear turns about, in part space. */
+  axis?: { x: number; y: number; z: number } | null
+  /** Which way it turns, looking down `axis`. Gears and shafts only. */
+  direction?: 'cw' | 'ccw' | null
+  /** Gear teeth and module, when the note is a gear. */
+  teeth?: number | null
+  module_mm?: number | null
+  /** The bearing designation or screw size this note calls out. */
+  designation?: string | null
+  note?: string
+}
+
+export interface AnalysisProduct {
+  kind: string
+  /** `derived_cache.analysis_fingerprint` of the inputs that produced it. */
+  fingerprint: string
+  computed_at: string
+  result: Record<string, unknown>
+  /** True when the result was too large to carry inline — a drawing sheet or a
+   *  G-code program is an artifact with a URL, not a field on the document. */
+  truncated?: boolean
 }
 
 /** What the part is supposed to be. Every kind is something the kernel can

@@ -72,7 +72,7 @@ UNIT_BY_NAME: Dict[str, str] = {
     "countersink_angle": "deg", "tip_angle": "deg", "draft": "deg",
     # already named for their unit, and not in metres — never warned about
     "feed_mm_min": "mm", "kerf_mm": "mm", "min_length_mm": "mm",
-    "nominal_mm": "mm", "general_tolerance": "mm",
+    "nominal_mm": "mm", "general_tolerance": "mm", "capacity_mah": "mAh",
 }
 
 #: Vector components. They mean whatever the vector means — metres under
@@ -93,6 +93,26 @@ UNITLESS = frozenset({
     "sketch_b", "spec", "start", "state", "suppressed", "target", "tolerances",
     "count", "annotations", "dimensions", "projection", "sheet", "show_hidden",
     "views", "plane_origin",
+    # background jobs: an opaque id, and the per-mode settings block that
+    # `workflow_status` uses to answer freshness (whose contents are themselves
+    # classified wherever they are declared).
+    "job_id",
+    # a battery pack's electrical record: a count and a chemistry name. The
+    # capacity carries its unit in its own name and is in the map above.
+    "cells", "chemistry",
+    # mechanism notes: a tooth count, the designation of a bought part, free
+    # text, and a pair of note ids. `module_mm` is a length and carries its own
+    # explicit unit on the descriptor, which is why it is not listed here.
+    "teeth", "designation", "text", "ratio",
+    # RC presets: a preset group name and two tooth counts. `module`,
+    # `wheelbase`, `kingpin_track` and `arm` are lengths and carry an explicit
+    # `unit` on their descriptors.
+    "group", "pinion_teeth", "spur_teeth",
+    # manufacturing intent and printability: a machine name, a list of screw
+    # designations, a percentage, a drawing style and a boolean. Every length
+    # among them (`nozzle_mm`, `layer_mm`, `bed_mm`, `clearance_mm`,
+    # `margin_mm`) names its own unit and carries it explicitly.
+    "printer", "screws", "infill_percent", "style", "mechanism", "preset",
     # assembly operations: ids, constraint kinds and bounding-box extremes
     "part_id", "component_id", "mate_id", "type", "base", "moved",
     "base_face", "moved_face",

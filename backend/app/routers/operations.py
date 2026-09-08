@@ -60,6 +60,11 @@ def prune_jobs(store: Dict[str, Any], cap: int = 200) -> None:
 class OperationRequest(BaseModel):
     op: str
     args: Optional[Dict[str, Any]] = None
+    # Optimistic concurrency, opt-in. A caller that passes the revision it read
+    # gets a 409 instead of silently overwriting a change it never saw; one that
+    # omits it keeps the old behaviour, which is right for the single-tab case
+    # that is most of the traffic.
+    expected_revision: Optional[int] = None
 
 
 class OperationError(BaseModel):
@@ -86,6 +91,9 @@ class OperationResponse(BaseModel):
     # does not currently evaluate (e.g. it references a parameter not yet
     # defined). Visible without being reported as a failed call.
     warnings: List[Dict[str, Any]] = []
+    # The document's revision after this call. Pass it back as
+    # `expected_revision` on the next write to chain edits without a re-read.
+    revision: Optional[int] = None
     document: Optional[DesignDocument] = None
 
 
@@ -216,7 +224,8 @@ def run_operation(
     # own imported supplier parts — and on a shared document those are two
     # different accounts. See services/caller.
     with caller.acting_as(acc.id):
-        env = cad_operations.execute(body.op, doc_id, body.args)
+        env = cad_operations.execute(body.op, doc_id, body.args,
+                                     expected_revision=body.expected_revision)
 
     if not env["ok"] and not envelope:
         raise HTTPException(status_code=_http_status(env["error"]), detail=env["error"])
@@ -230,6 +239,7 @@ def run_operation(
         delta=env.get("delta"),
         state=env.get("state"),
         warnings=env.get("warnings") or [],
+        revision=env.get("revision"),
         document=document,
     )
 

@@ -197,6 +197,54 @@ def _index(acc: Account) -> None:
         _OAUTH_INDEX[f"{provider}:{subject}"] = acc.id
 
 
+# ---------------------------------------------------------------------------
+# Falling through to the datastore
+#
+# The five indexes above are a *cache*, and were treated as the source of truth.
+# On one worker that is invisible: `restore_accounts` loads everything at boot
+# and every later account passes through `_index` on its way in. With a second
+# worker it is a bug with no symptom anyone can debug from a log — a signup on
+# worker A is unknown to worker B, so the very next request lands on the wrong
+# process and reports invalid credentials for an account that plainly exists,
+# intermittently, at a rate set by the load balancer.
+#
+# So a miss is not an answer. Every lookup falls through to the datastore, and a
+# row found there is indexed on the way back so the miss is paid once. Reads are
+# in SQL rather than by loading every account row: `_rows_by_json_field` is what
+# the rest of the codebase already uses for exactly this.
+# ---------------------------------------------------------------------------
+
+def _adopt(data: Optional[dict]) -> Optional["Account"]:
+    """Build and index an account from a stored row."""
+    if not data:
+        return None
+    try:
+        acc = Account.from_dict(data)
+    except Exception:  # noqa: BLE001 — a row this process cannot read is a miss
+        return None
+    _index(acc)
+    return acc
+
+
+def _lookup_rows(rows) -> Optional["Account"]:
+    return _adopt(rows[0]) if rows else None
+
+
+def _lookup_nested(field: str, match) -> Optional["Account"]:
+    """A lookup whose key lives inside a list or dict on the row.
+
+    API-key fingerprints and OAuth subjects are not top-level JSON fields, so
+    they cannot be filtered in SQL the way an email can. This is the slow path
+    and it is deliberately only reached on a cache miss — which, on a single
+    worker, is only ever at most once per key per process lifetime.
+    """
+    for acc_id in persistence.list_accounts():
+        data = persistence.load_account(acc_id)
+        if data and match(data):
+            return _adopt(data)
+    return None
+
+
 def restore_accounts() -> None:
     """Rebuild in-memory indexes from disk on startup."""
     for acc_id in persistence.list_accounts():
@@ -246,7 +294,11 @@ def create_oauth_account(email: str) -> Account:
 
 
 def account_by_oauth(provider: str, subject: str) -> Optional[Account]:
-    return _ACCOUNTS.get(_OAUTH_INDEX.get(f"{provider}:{subject}", ""))
+    held = _ACCOUNTS.get(_OAUTH_INDEX.get(f"{provider}:{subject}", ""))
+    if held is not None:
+        return held
+    return _lookup_nested(
+        "oauth_ids", lambda d: (d.get("oauth_ids") or {}).get(provider) == subject)
 
 
 def link_oauth(acc: Account, provider: str, subject: str) -> None:
@@ -277,7 +329,7 @@ _DUMMY_HASH = _hash_secret("invalid", _DUMMY_SALT)
 
 
 def authenticate_password(email: str, password: str) -> Account:
-    acc = _ACCOUNTS.get(_EMAIL_INDEX.get((email or "").strip().lower(), ""))
+    acc = account_by_email(email)
     if acc is None:
         _verify_secret(password or "", _DUMMY_SALT, _DUMMY_HASH)  # constant-time dummy work
         raise AuthError("invalid email or password", status=401)
@@ -287,16 +339,25 @@ def authenticate_password(email: str, password: str) -> Account:
 
 
 def get_account(account_id: str) -> Optional[Account]:
-    return _ACCOUNTS.get(account_id)
+    held = _ACCOUNTS.get(account_id)
+    return held if held is not None else _adopt(persistence.load_account(account_id))
 
 
 def account_by_email(email: str) -> Optional[Account]:
-    return _ACCOUNTS.get(_EMAIL_INDEX.get((email or "").strip().lower(), ""))
+    email = (email or "").strip().lower()
+    held = _ACCOUNTS.get(_EMAIL_INDEX.get(email, ""))
+    return (held if held is not None
+            else _lookup_rows(persistence.accounts_by_email(email)) if email else None)
 
 
 def authenticate_api_key(key: str) -> Account:
-    acc_id = _APIKEY_INDEX.get(_apikey_fingerprint(key or ""))
-    acc = _ACCOUNTS.get(acc_id or "")
+    fingerprint = _apikey_fingerprint(key or "")
+    acc = _ACCOUNTS.get(_APIKEY_INDEX.get(fingerprint, ""))
+    if acc is None:
+        acc = _lookup_nested(
+            "api_keys",
+            lambda d: any(k.get("fingerprint") == fingerprint
+                          for k in (d.get("api_keys") or [])))
     if acc is None:
         raise AuthError("invalid API key", status=401)
     return acc
@@ -340,7 +401,14 @@ def set_plan(acc: Account, plan_id: str) -> Account:
 
 
 def account_by_stripe_customer(customer_id: str) -> Optional[Account]:
-    return _ACCOUNTS.get(_STRIPE_INDEX.get(customer_id or "", ""))
+    held = _ACCOUNTS.get(_STRIPE_INDEX.get(customer_id or "", ""))
+    # A Stripe webhook is the case that makes this mandatory rather than tidy:
+    # it arrives at whichever worker the load balancer picks, and a plan grant
+    # dropped because that worker had not seen the signup is a paid upgrade that
+    # silently does not apply.
+    if held is not None or not customer_id:
+        return held
+    return _lookup_rows(persistence.accounts_by_stripe_customer(customer_id))
 
 
 def link_stripe(acc: Account, customer_id: Optional[str], subscription_id: Optional[str]) -> None:

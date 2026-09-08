@@ -28,6 +28,8 @@ _ASSEMBLY_DOC = "assembly_doc"  # parts-composition assembly
 _ORDER = "order"  # manufacturing orders / RFQs
 _META = "meta"  # one-time migration markers etc.
 _TRAJECTORY = "trajectory"  # recorded agent interaction sequences (training data)
+_JOB = "job"  # durable background work (see services/jobs.py)
+_EPHEMERAL = "ephemeral"  # short-lived, single-use server-side state (OAuth)
 
 _MIGRATION_MARKER = "json_files_migrated"
 _MESH_STRIP_MARKER = "document_meshes_stripped_v1"
@@ -79,6 +81,84 @@ def save_account(account_id: str, account: dict) -> None:
 
 def load_account(account_id: str) -> Optional[dict]:
     return _load(_ACCOUNT, account_id)
+
+
+# ---------------------------------------------------------------------------
+# Short-lived shared state
+#
+# A row for something that lives for sixty seconds looks like overkill until the
+# second API worker exists: an OAuth callback lands on whichever worker the load
+# balancer picks, and the PKCE verifier was minted on a different one. In memory
+# that flow fails roughly half the time with "unknown or expired sign-in", which
+# reads as a provider problem and is not.
+# ---------------------------------------------------------------------------
+
+def save_ephemeral(key: str, value: dict) -> None:
+    _save(_EPHEMERAL, key, value)
+
+
+def take_ephemeral(key: str) -> Optional[dict]:
+    """Read and delete in one transaction — these are all single-use.
+
+    The delete is what makes it single-use, and it has to be atomic with the
+    read or two concurrent redemptions of one handoff code both succeed. Under
+    SQLite the write lock serializes them; under Postgres the row is locked
+    first, for the same reason `claim_job` does.
+    """
+    with SessionLocal() as s:
+        if engine.dialect.name != "sqlite":
+            s.execute(select(Record)
+                      .where(Record.kind == _EPHEMERAL, Record.id == key)
+                      .with_for_update())
+        row = s.get(Record, {"kind": _EPHEMERAL, "id": key})
+        if row is None:
+            return None
+        data = json.loads(row.data)
+        s.delete(row)
+        s.commit()
+        return data
+
+
+def purge_ephemeral(before_epoch: float) -> int:
+    """Drop entries whose `expires_at` has passed. Bounded by the TTL, not by count."""
+    removed = 0
+    with SessionLocal() as s:
+        rows = s.scalars(select(Record).where(Record.kind == _EPHEMERAL)).all()
+        for row in rows:
+            try:
+                if float(json.loads(row.data).get("expires_at", 0)) < before_epoch:
+                    s.delete(row)
+                    removed += 1
+            except (ValueError, TypeError):
+                s.delete(row)
+                removed += 1
+        s.commit()
+    return removed
+
+
+def count_ephemeral() -> int:
+    with SessionLocal() as s:
+        return len(s.scalars(select(Record.id).where(Record.kind == _EPHEMERAL)).all())
+
+
+# Two functions rather than one taking the field name, and the reason is a test:
+# `test_every_json_field_caller_passes_a_literal` walks the AST and fails any
+# `_rows_by_json_field` call whose field is not a constant. A pass-through would
+# satisfy it only by hiding the interpolation behind one more frame — and the
+# guard exists because a JSON path cannot be bound by a driver, so the first
+# caller that forwards a request field is an injection.
+#
+# Both are filtered in SQL rather than by loading every account: the in-memory
+# indexes are a cache now rather than the source of truth, and a lookup that
+# fell through to a full table scan would make a second worker slower than one
+# rather than merely correct.
+
+def accounts_by_email(email: str) -> List[dict]:
+    return _rows_by_json_field(_ACCOUNT, "email", email)
+
+
+def accounts_by_stripe_customer(customer_id: str) -> List[dict]:
+    return _rows_by_json_field(_ACCOUNT, "stripe_customer_id", customer_id)
 
 
 def list_accounts() -> List[str]:
@@ -240,6 +320,77 @@ def delete_trajectory(trajectory_id: str) -> bool:
 def list_trajectories_for_document(document_id: str) -> List[dict]:
     """Trajectories that built one document, filtered in SQL."""
     return _rows_by_json_field(_TRAJECTORY, "doc_id", document_id)
+
+
+# ---------------------------------------------------------------------------
+# Background jobs
+#
+# A job is a row like everything else, which is what makes its status and result
+# survive a restart. `claim_job` is the one function here that is not a plain
+# read or write: it is the queue's compare-and-set, and it has to be in this
+# file because which lock enforces it is a property of the dialect.
+# ---------------------------------------------------------------------------
+
+def save_job(job_id: str, job: dict, owner_id: Optional[str] = None) -> None:
+    _save(_JOB, job_id, job, owner_id=owner_id)
+
+
+def load_job(job_id: str) -> Optional[dict]:
+    return _load(_JOB, job_id)
+
+
+def delete_job(job_id: str) -> bool:
+    return _delete(_JOB, job_id)
+
+
+def list_job_rows() -> List[dict]:
+    """Every job row. The table holds tens of these, not millions.
+
+    Retention prunes finished jobs, so the working set is the queue plus a day
+    of outcomes. If that ever stops being true the fix is a status index, not a
+    cache: a stale view of the queue is a job run twice.
+    """
+    with SessionLocal() as s:
+        rows = s.scalars(select(Record.data).where(Record.kind == _JOB)).all()
+    return [json.loads(r) for r in rows]
+
+
+def list_jobs_for_subject(subject_id: str) -> List[dict]:
+    """Jobs against one document or assembly, filtered in SQL."""
+    return _rows_by_json_field(_JOB, "subject_id", subject_id)
+
+
+def claim_job(job_id: str, *, expect_status: str, patch: dict) -> Optional[dict]:
+    """Apply `patch` to a job, but only while its status is still `expect_status`.
+
+    The queue's whole mutual exclusion. Two workers both list the queue, both
+    see the same oldest job, and both try to take it — exactly one may win, or
+    the job runs twice.
+
+    The read and the write are in one transaction. Under SQLite that is enough
+    on its own: there is a single writer, and the loser's `UPDATE` waits for the
+    winner's commit and then sees `running`. Under Postgres, where two
+    transactions can read concurrently, the row is locked with `FOR UPDATE`
+    first — without it both would read `queued`, both would write, and the
+    second would silently overwrite the first worker's name.
+
+    Returns the updated row to the winner and `None` to everybody else.
+    """
+    with SessionLocal() as s:
+        if engine.dialect.name != "sqlite":
+            s.execute(
+                select(Record).where(Record.kind == _JOB, Record.id == job_id)
+                .with_for_update())
+        row = s.get(Record, {"kind": _JOB, "id": job_id})
+        if row is None:
+            return None
+        data = json.loads(row.data)
+        if data.get("status") != expect_status:
+            return None
+        data.update(patch)
+        row.data = json.dumps(data)
+        s.commit()
+        return data
 
 
 #: A bare JSON key. `field` names a path and so cannot be a bound parameter —

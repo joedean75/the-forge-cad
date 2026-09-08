@@ -1,6 +1,8 @@
 import type {
   AnalysisReport,
   EdgeRef,
+  JobRecord,
+  ModeStatus,
   FaceRef,
   OptimizeJob,
   PartSpec,
@@ -55,6 +57,7 @@ import type {
   StandardPartPage,
   PartTemplate,
 } from '../../../shared/types'
+import { pollJob } from '../store/document/polling'
 
 const API_BASE = '/api'
 
@@ -286,19 +289,52 @@ export const api = {
     id: string,
     revision?: string,
     onProgress?: (job: ReleasePackageJob) => void,
+    /** `standard`, or `printed` to add the printability report and a
+     *  slicer-oriented drawing. A preset only ever adds files. */
+    preset?: string,
   ): Promise<ReleasePackageJob> => {
-    let job = await fetchJson<ReleasePackageJob>(`/documents/${id}/package`, {
+    const started = await fetchJson<ReleasePackageJob>(`/documents/${id}/package`, {
       method: 'POST',
-      body: JSON.stringify({ revision: revision ?? null }),
+      body: JSON.stringify({ revision: revision ?? null, preset: preset ?? 'standard' }),
     })
-    onProgress?.(job)
-    while (job.status === 'running') {
-      await new Promise((r) => setTimeout(r, 700))
-      job = await fetchJson<ReleasePackageJob>(`/documents/${id}/package/${job.id}`)
-      onProgress?.(job)
-    }
-    return job
+    onProgress?.(started)
+    if (started.status !== 'running') return started
+    // One polling loop, with backoff and a deadline (`store/document/polling`).
+    // The old `while (status === 'running') sleep(700)` had no exit but the
+    // terminal status, so a job that vanished left the tab polling for as long
+    // as it stayed open — which, now that a job is a durable row rather than an
+    // entry in a dict that forgets, is a state worth distinguishing from
+    // "still working".
+    return pollJob(
+      () => fetchJson<ReleasePackageJob>(`/documents/${id}/package/${started.id}`),
+      (job) => job.status !== 'running',
+      onProgress,
+    )
   },
+
+  /**
+   * Every job against a document, newest first — how a reload reconnects.
+   *
+   * The browser that submitted a four-minute solve loses its job id to a
+   * refresh; the document does not. Before jobs were rows there was nothing to
+   * ask, because the id lived in a process-local dict that a restart emptied.
+   */
+  listJobs: (id: string) => fetchJson<{ jobs: JobRecord[] }>(`/documents/${id}/jobs`),
+
+  /**
+   * Per-mode readiness and freshness, in one call.
+   *
+   * Through the operation catalog, like every other typed wrapper here, so the
+   * UI asks exactly what an agent asks. `settings` carries the per-mode call
+   * arguments that affect freshness — a DFM report for additive is not current
+   * for milling, and the server cannot know which one the panel has selected.
+   */
+  workflowStatus: (id: string, settings?: Record<string, unknown>) =>
+    api.runOperation<{ modes: ModeStatus[]; package: ModeStatus }>(
+      id, 'workflow_status', { settings: settings ?? {} }),
+  getJob: (id: string, jobId: string) => fetchJson<JobRecord>(`/documents/${id}/jobs/${jobId}`),
+  cancelJob: (id: string, jobId: string) =>
+    fetchJson<JobRecord>(`/documents/${id}/jobs/${jobId}/cancel`, { method: 'POST' }),
   downloadArtifact: (url: string, filename: string) =>
     downloadAuthed(url.replace(API_BASE, ''), filename),
 

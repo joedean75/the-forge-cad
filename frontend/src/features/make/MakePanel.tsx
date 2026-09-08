@@ -202,12 +202,14 @@ function Documentation({ docId, docName }: { docId: string; docName: string }) {
  */
 function ReleasePackage({ docId, revisions }: { docId: string; revisions: DocumentRevisionMeta[] }) {
   const [letter, setLetter] = useState('')
+  const [preset, setPreset] = useState('standard')
   const [job, setJob] = useState<ReleasePackageJob | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const running = job?.status === 'running'
   const built = job?.status === 'done' ? job.result : null
   const manifest = (built?.manifest ?? {}) as Record<string, unknown>
   const score = manifest.spec_score as number | null | undefined
+  const printScore = manifest.printability_score as number | null | undefined
 
   if (!revisions.length) {
     return (
@@ -220,7 +222,7 @@ function ReleasePackage({ docId, revisions }: { docId: string; revisions: Docume
   const build = async () => {
     setErr(null)
     try {
-      const done = await api.buildReleasePackage(docId, letter || undefined, setJob)
+      const done = await api.buildReleasePackage(docId, letter || undefined, setJob, preset)
       if (done.status === 'error') setErr(done.message)
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Package failed')
@@ -234,6 +236,15 @@ function ReleasePackage({ docId, revisions }: { docId: string; revisions: Docume
           className="px-2 py-1.5 rounded-sm bg-cad-bg border border-cad-border text-[11px] text-cad-text outline-none focus:border-cad-accent">
           <option value="">Latest ({revisions[revisions.length - 1].letter})</option>
           {revisions.map((r) => <option key={r.letter} value={r.letter}>Rev {r.letter}</option>)}
+        </select>
+        {/* A preset only ever adds files, so this is safe to change between
+            builds — `printed` adds the machine check and lays the drawing out
+            for a slicer rather than a shop. */}
+        <select value={preset} onChange={(e) => setPreset(e.target.value)}
+          title="printed adds the printability report and a slicer-oriented drawing"
+          className="px-2 py-1.5 rounded-sm bg-cad-bg border border-cad-border text-[11px] text-cad-text outline-none focus:border-cad-accent">
+          <option value="standard">Standard</option>
+          <option value="printed">Printed</option>
         </select>
         <button onClick={build} disabled={running}
           className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-sm border border-cad-accent/50 text-cad-accent-hot hover:bg-cad-accent/10 text-[11px] font-semibold transition disabled:opacity-50">
@@ -254,6 +265,12 @@ function ReleasePackage({ docId, revisions }: { docId: string; revisions: Docume
                 spec {Math.round(score * 100)}%
               </span>
             )}
+            {printScore != null && (
+              <span className={`tabular text-[10px] ${printScore >= 100 ? 'text-cad-success' : 'text-cad-warning'}`}
+                title="checks passed against the recorded printer">
+                print {printScore}%
+              </span>
+            )}
             {manifest.document_matches_revision === false && (
               <span className="text-[10px] text-cad-warning" title="The document has been edited since this revision">
                 document has moved on
@@ -263,6 +280,8 @@ function ReleasePackage({ docId, revisions }: { docId: string; revisions: Docume
           <div className="tabular text-[9px] text-cad-text/50">
             {(manifest.contents as Array<{ format: string }> | undefined)?.map((c) => c.format).join(' · ')}
             {' · manifest · bom · spec-report'}
+            {(manifest.hardware_lines as number | undefined) ? ' · hardware' : ''}
+            {printScore != null ? ' · printability' : ''}
           </div>
           <button onClick={() => api.downloadArtifact(built.url, built.filename).catch(() => {})}
             className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-sm bg-cad-accent text-cad-bg text-[11px] font-semibold hover:bg-cad-accent-hot transition">

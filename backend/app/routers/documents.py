@@ -4,11 +4,9 @@ Thin router over `services.document_service`. CRUD + evaluate here; optimize,
 simulate, DFM and CAM endpoints are added by their respective phases.
 """
 
-import asyncio
-import uuid
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -36,7 +34,6 @@ from app.models.schemas import (
 )
 from app.cad_kernel.io import mesh_binary
 from app.services import document_analysis, document_service as docs, slicer
-from app.services.simp_optimizer import ProgressState
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -218,13 +215,21 @@ def get_document(doc: DesignDocument = Depends(readable_document)):
 def update_document(
     body: UpdateDocumentRequest, doc: DesignDocument = Depends(editable_document)
 ):
-    return docs.update_document(
-        doc.id,
-        name=body.name,
-        feature_tree=body.feature_tree,
-        optimization=body.optimization,
-        resolution=body.resolution,
-    )
+    try:
+        return docs.update_document(
+            doc.id,
+            name=body.name,
+            feature_tree=body.feature_tree,
+            optimization=body.optimization,
+            resolution=body.resolution,
+            expected_revision=body.expected_revision,
+        )
+    except docs.RevisionConflict as conflict:
+        # 409, with both numbers: a client that only learns "conflict" has to
+        # re-read to find out how far behind it was, and the answer is already here.
+        raise HTTPException(status_code=409, detail={
+            "code": "REVISION_CONFLICT", "message": str(conflict),
+            "expected": conflict.expected, "actual": conflict.actual})
 
 
 @router.post("/{doc_id}/evaluate", response_model=DesignDocument)
@@ -395,25 +400,54 @@ def get_document_artifact(
 class ReleasePackageRequest(BaseModel):
     revision: Optional[str] = None
     drawing_spec: Optional[dict] = None
+    #: "standard" or "printed" — the latter adds a printability report and a
+    #: hardware list, and lays the drawing out for a slicer. Validated in
+    #: `release_package.build`, which is the one place that knows the set.
+    preset: str = "standard"
 
 
 class ReleasePackageJob(BaseModel):
+    """The package job, in the shape the existing client already reads.
+
+    The durable job contract underneath has six states; this has three, because
+    that is what was published and a client in the wild is still reading it.
+    `_legacy_status` is the mapping, in one place — see the note there for why
+    `queued` reports as `running`.
+    """
+
     id: str
     status: str                       # "running" | "done" | "error"
     message: str = ""
     result: Optional[dict] = None
 
 
-# Bounded, process-local, and lost on restart — the same shape as the optimize
-# job store, and for the same reason: the *artifact* is the durable thing and it
-# is addressed by its own hash.
-_PACKAGE_JOBS: Dict[str, ReleasePackageJob] = {}
+def _legacy_status(job) -> str:
+    """Six states down to the three the published response model has.
+
+    `queued` reports as `running` deliberately. To the caller the distinction is
+    invisible — nothing it can do differs — and a fourth value would break every
+    client that switches on this field. The full state is available on the
+    generic `/jobs/{id}` route, which has no such history.
+    """
+    from app.services import jobs as job_service
+
+    if job.status == job_service.SUCCEEDED:
+        return "done"
+    if job.status in (job_service.FAILED, job_service.CANCELLED):
+        return "error"
+    return "running"
+
+
+def _as_package_job(job) -> ReleasePackageJob:
+    return ReleasePackageJob(
+        id=job.id, status=_legacy_status(job),
+        message=(job.error or {}).get("message") or job.message,
+        result=job.result)
 
 
 @router.post("/{doc_id}/package", response_model=ReleasePackageJob)
-async def start_release_package(
+def start_release_package(
     body: ReleasePackageRequest,
-    background_tasks: BackgroundTasks,
     _rl: None = Depends(_job_limit),
     doc: DesignDocument = Depends(readable_document),
 ):
@@ -421,39 +455,86 @@ async def start_release_package(
 
     A job rather than a request because a package is a fan-out of every slow
     thing in the system — a drawing render is ~2.9 s, the STEP export is a build
-    and the spec report meshes the body. Poll `GET /{doc_id}/package/{job_id}`.
+    and the spec report meshes the body. Poll `GET /{doc_id}/package/{job_id}`,
+    or the generic `GET /{doc_id}/jobs/{job_id}` for the full state.
+
+    Durable since Sprint 3: the job is a row, so a restart mid-build leaves a
+    recoverable job rather than a poll loop against an id nothing remembers.
     """
-    job_id = str(uuid.uuid4())
-    _PACKAGE_JOBS[job_id] = ReleasePackageJob(
-        id=job_id, status="running", message="Building the release package")
-    while len(_PACKAGE_JOBS) > 200:
-        _PACKAGE_JOBS.pop(next(iter(_PACKAGE_JOBS)), None)
-    background_tasks.add_task(_run_package_job, job_id, doc.id, body.revision,
-                              body.drawing_spec)
-    return _PACKAGE_JOBS[job_id]
-
-
-async def _run_package_job(job_id: str, doc_id: str, revision: Optional[str],
-                           drawing_spec: Optional[dict]):
-    from app.services import release_package
+    from app.services import job_handlers, jobs as job_service
 
     try:
-        result = await asyncio.to_thread(
-            release_package.build, doc_id, revision=revision, drawing_spec=drawing_spec)
-        _PACKAGE_JOBS[job_id] = ReleasePackageJob(
-            id=job_id, status="done",
-            message=f"Revision {result['revision']} packaged", result=result)
-    except Exception as exc:  # noqa: BLE001 — the message is the deliverable here
-        _PACKAGE_JOBS[job_id] = ReleasePackageJob(
-            id=job_id, status="error", message=str(exc))
+        job = job_service.enqueue(
+            job_handlers.RELEASE_PACKAGE, doc.id,
+            {"revision": body.revision, "drawing_spec": body.drawing_spec,
+             "preset": body.preset},
+            owner_id=doc.owner_id, message="Queued release package")
+    except job_service.QueueFull as full:
+        raise HTTPException(status_code=503, detail={
+            "code": "QUEUE_FULL", "message": str(full),
+            "remedy": "Wait for the running jobs to finish and submit again."})
+    return _as_package_job(job)
 
 
 @router.get("/{doc_id}/package/{job_id}", response_model=ReleasePackageJob)
 def get_release_package_job(job_id: str, doc: DesignDocument = Depends(readable_document)):
-    job = _PACKAGE_JOBS.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Package job not found")
+    job = _job_for_document(job_id, doc.id)
+    return _as_package_job(job)
+
+
+# ── Jobs (the generic surface) ──
+
+def _job_for_document(job_id: str, doc_id: str):
+    """A job, but only when it belongs to the document the caller may read.
+
+    The access check is on the *document*, and the job's subject has to match
+    it. Without the second half, knowing a job id would read any tenant's job —
+    including its result, which for a release package is a manifest of their
+    part. 404 rather than 403, like everywhere else here, so a job id cannot be
+    probed for existence.
+    """
+    from app.services import jobs as job_service
+
+    job = job_service.get(job_id)
+    if job is None or job.subject_id != doc_id:
+        raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@router.get("/{doc_id}/jobs")
+def list_document_jobs(doc: DesignDocument = Depends(readable_document)):
+    """Every job against this document, newest first.
+
+    This is how a reloaded page reconnects. The browser no longer has the id it
+    was polling — it was in a closed tab's memory — but the document knows what
+    is running against it, which is the only place that survives a refresh on
+    both sides.
+    """
+    from app.services import jobs as job_service
+
+    return {"jobs": [j.public() for j in job_service.for_subject(doc.id)]}
+
+
+@router.get("/{doc_id}/jobs/{job_id}")
+def get_document_job(job_id: str, doc: DesignDocument = Depends(readable_document)):
+    """One job's full state: the six-value status, progress, result and error."""
+    return _job_for_document(job_id, doc.id).public()
+
+
+@router.post("/{doc_id}/jobs/{job_id}/cancel")
+def cancel_document_job(job_id: str, doc: DesignDocument = Depends(editable_document)):
+    """Ask a job to stop.
+
+    Cooperative, and the response says so: a queued job is cancelled outright,
+    a running one moves to `cancel_requested` and stops at the next checkpoint
+    its handler chooses. Nothing here can interrupt a `spsolve` already inside a
+    Fortran call, and a button that claimed otherwise would be lying.
+    """
+    from app.services import jobs as job_service
+
+    _job_for_document(job_id, doc.id)
+    job = job_service.request_cancel(job_id)
+    return job.public() if job else {"id": job_id, "status": "cancelled"}
 
 
 @router.get("/{doc_id}/step")
@@ -493,83 +574,78 @@ def export_document_step(
 # ── Generative optimization (Phase 3) ──
 
 
-def _progress_to_job(job_id: str, progress: dict) -> OptimizeJob:
-    stage = progress.get("stage", "optimizing")
-    iteration = progress.get("iteration", 0)
-    max_iter = progress.get("max_iter", 1)
-    message = progress.get("message", "Optimizing")
-    if stage == "meshing":
-        status, pct = JobStatus.MESHING, 0.15
-    elif stage == "optimizing":
-        status, pct = JobStatus.OPTIMIZING, 0.2 + 0.6 * min(1.0, iteration / max(max_iter, 1))
-    elif stage == "postprocessing":
-        status, pct = JobStatus.POSTPROCESSING, 0.9
+def _as_optimize_job(job) -> OptimizeJob:
+    """The durable job in the shape the optimize panel already reads.
+
+    `OptimizeJob.status` is a five-value stage enum (pending/meshing/optimizing/
+    postprocessing/done) that a client switches on to draw its bar. The durable
+    contract is a six-value *lifecycle* — the two are different questions, and
+    the stage is not recoverable from the lifecycle. So the stage is carried in
+    the job's progress fraction, which the handler already sets from the
+    solver's own stage, and mapped back here.
+
+    A cancelled job reports `failed` with a message that says it was cancelled.
+    Adding a sixth enum member would break the published response model for a
+    distinction the panel does not act on differently.
+    """
+    from app.services import jobs as job_service
+
+    fraction = job.progress_fraction
+    if job.status == job_service.SUCCEEDED:
+        status = JobStatus.DONE
+    elif job.status in (job_service.FAILED, job_service.CANCELLED):
+        status = JobStatus.FAILED
+    elif job.status == job_service.QUEUED:
+        status = JobStatus.PENDING
+    elif fraction >= 0.9:
+        status = JobStatus.POSTPROCESSING
+    elif fraction >= 0.2:
+        status = JobStatus.OPTIMIZING
     else:
-        status, pct = JobStatus.PENDING, 0.0
-    return OptimizeJob(id=job_id, status=status, progress=round(pct, 2), message=message)
+        status = JobStatus.MESHING
+    message = (job.error or {}).get("message") or job.message
+    if job.status == job_service.CANCELLED:
+        message = message or "Optimization cancelled"
+    return OptimizeJob(
+        id=job.id, status=status, progress=round(fraction, 2), message=message,
+        removed_features=(job.result or {}).get("removed_features", []),
+    )
 
 
 @router.post("/{doc_id}/optimize", response_model=OptimizeJob)
-async def optimize_document(
+def optimize_document(
     body: OptimizeDocumentRequest,
-    background_tasks: BackgroundTasks,
     _rl: None = Depends(_job_limit),
     acc: accounts.Account = Depends(require_entitlement(ENT_OPTIMIZE)),
     doc: DesignDocument = Depends(editable_document),
 ):
+    """Queue a generative study. Poll `GET /{doc_id}/optimize/{job_id}`.
+
+    The job carries the document's revision, and the solve refuses to fold its
+    result in if the part has been edited since — a SIMP result replaces the
+    whole feature tree, so applying it over four minutes of edits deletes them
+    rather than merging with them.
+    """
+    from app.services import job_handlers, jobs as job_service
+
     setup = body.setup or doc.optimization or OptimizationSetup()
     resolution = capped_resolution(acc, body.resolution)
-    job_id = str(uuid.uuid4())
-    docs._OPTIMIZE_JOBS[job_id] = OptimizeJob(
-        id=job_id, status=JobStatus.PENDING, progress=0.0, message="Queued generative study"
-    )
-    # Bound the job store so a long-lived process can't grow it forever.
-    while len(docs._OPTIMIZE_JOBS) > 200:
-        docs._OPTIMIZE_JOBS.pop(next(iter(docs._OPTIMIZE_JOBS)), None)
-    background_tasks.add_task(_run_optimize_job, job_id, doc.id, setup, resolution)
-    return docs._OPTIMIZE_JOBS[job_id]
-
-
-async def _run_optimize_job(job_id: str, doc_id: str, setup: OptimizationSetup, resolution: int):
-    progress = ProgressState()
-
-    async def poll():
-        while True:
-            await asyncio.sleep(0.4)
-            docs._OPTIMIZE_JOBS[job_id] = _progress_to_job(job_id, progress.read())
-
-    poller = asyncio.create_task(poll())
     try:
-        doc = await asyncio.to_thread(docs.run_document_optimize, doc_id, setup, resolution, progress)
-        removed = (doc.feature_tree.get("root", {}).get("params", {})
-                   .get("setup", {}).get("removed_features", []))
-        message = "Optimization complete"
-        if removed:
-            names = ", ".join(r["name"] for r in removed[:3])
-            more = f" +{len(removed) - 3} more" if len(removed) > 3 else ""
-            message = f"Optimization complete — removed {names}{more}. Mark features to keep and re-run."
-        docs._OPTIMIZE_JOBS[job_id] = OptimizeJob(
-            id=job_id, status=JobStatus.DONE, progress=1.0,
-            message=message, removed_features=removed,
-        )
-    except Exception as exc:
-        docs._OPTIMIZE_JOBS[job_id] = OptimizeJob(
-            id=job_id, status=JobStatus.FAILED, progress=0.0, message=f"Optimization failed: {exc}"
-        )
-    finally:
-        poller.cancel()
-        try:
-            await poller
-        except asyncio.CancelledError:
-            pass
+        job = job_service.enqueue(
+            job_handlers.OPTIMIZE, doc.id,
+            {"setup": setup.model_dump(), "resolution": resolution},
+            owner_id=doc.owner_id, document_revision=doc.revision,
+            message="Queued generative study")
+    except job_service.QueueFull as full:
+        raise HTTPException(status_code=503, detail={
+            "code": "QUEUE_FULL", "message": str(full),
+            "remedy": "Wait for the running studies to finish and submit again."})
+    return _as_optimize_job(job)
 
 
 @router.get("/{doc_id}/optimize/{job_id}", response_model=OptimizeJob)
 def get_optimize_job(job_id: str, doc: DesignDocument = Depends(readable_document)):
-    job = docs.get_optimize_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Optimization job not found")
-    return job
+    return _as_optimize_job(_job_for_document(job_id, doc.id))
 
 
 @router.post("/{doc_id}/ai-edit", response_model=DesignDocument)
@@ -931,8 +1007,7 @@ class PostRequest(BaseModel):
 @router.post("/{doc_id}/post")
 def post_gcode(body: PostRequest, doc: DesignDocument = Depends(readable_document)):
     """Post-process a program to a machine's dialect (the last step before dispatch)."""
-    import base64
-
+    from app.services import artifacts
     from app.services.cam import post, profile_cut as pc
 
     src = body.gcode
@@ -941,9 +1016,9 @@ def post_gcode(body: PostRequest, doc: DesignDocument = Depends(readable_documen
             src = pc.profile_cut(doc.id)["gcode"]
         else:
             cam = doc.derived.cam
-            if cam is None or not cam.gcode_url:
+            src = artifacts.gcode_text(doc.id, cam.gcode_url) if cam else None
+            if not src:
                 raise HTTPException(status_code=400, detail="No program yet — slice or cut the part first")
-            src = base64.b64decode(cam.gcode_url.split(",", 1)[1]).decode("utf-8")
     return post.post_process(src, body.machine_id)
 
 
@@ -1027,16 +1102,15 @@ def slice_document_route(
     """Slice the body for FDM printing. Returns stats + a sampled layer preview;
     the full G-code is stored on the document (download via GET /{doc_id}/gcode,
     print via /api/machine/send-document)."""
-    import base64
+    from app.services import artifacts
 
     try:
         out = slicer.slice_document(doc.id, body)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    b64 = base64.b64encode(out["gcode"].encode("utf-8")).decode("ascii")
     doc.derived.cam = CamResult(
-        gcode_url=f"data:text/plain;base64,{b64}",
+        gcode_url=artifacts.store_gcode(doc.id, out["gcode"], doc.name or "part"),
         operations=[f"fdm {body.layer_height}mm/{body.wall_count} walls/{int(body.infill * 100)}% infill"],
         estimated_minutes=out["stats"]["estimated_minutes"],
     )
@@ -1046,14 +1120,14 @@ def slice_document_route(
 @router.get("/{doc_id}/gcode", response_class=PlainTextResponse)
 def download_gcode(doc: DesignDocument = Depends(readable_document)):
     """The last sliced G-code as a downloadable file."""
-    import base64
+    from app.services import artifacts
 
     cam = doc.derived.cam
-    if cam is None or not cam.gcode_url:
+    gcode = artifacts.gcode_text(doc.id, cam.gcode_url) if cam else None
+    if gcode is None:
         raise HTTPException(status_code=404, detail="No G-code — slice the part first")
-    _, b64 = cam.gcode_url.split(",", 1)
     return PlainTextResponse(
-        base64.b64decode(b64).decode("utf-8"),
+        gcode,
         media_type="text/plain",
         headers={"Content-Disposition": f"attachment; filename={doc.name[:40].replace(' ', '_') or 'part'}.gcode"},
     )

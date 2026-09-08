@@ -20,10 +20,43 @@ const STATIONS: { id: EditorMode; label: string; icon: typeof Boxes }[] = [
   { id: 'machine', label: 'Machine', icon: Printer },
 ]
 
+/**
+ * The dot on a station: what that mode can do, and whether it is still true.
+ *
+ * The two that matter most are the two the spine could not previously show at
+ * all. **Blocked** dims the icon: the station is still reachable, but the mode
+ * cannot do anything yet and the tooltip names the step that unblocks it —
+ * previously indistinguishable from "nothing has been run here", which is one
+ * click away rather than three. **Stale** is amber: there is a result, it is on
+ * screen, and it is about a body that has since moved.
+ *
+ * `current` gets no marker on purpose. It is the state everything is in most of
+ * the time, and a badge on every station is a badge on none of them — the same
+ * reason the sketch canvas leaves `under_constrained` uncoloured.
+ */
+const STATE_MARK: Record<string, { colour: string; title: string } | null> = {
+  blocked: null,
+  ready: null,
+  current: null,
+  queued: { colour: 'var(--color-cad-accent)', title: 'queued' },
+  running: { colour: 'var(--color-cad-accent-hot)', title: 'running' },
+  stale: { colour: 'var(--color-stress-warn, #d19a3a)', title: 'out of date' },
+  failed: { colour: 'var(--color-stress-fail, #c2554a)', title: 'failed' },
+}
+
 export function ModeSpine() {
-  const { mode, setMode, doc } = useDocumentStore()
+  const { mode, setMode, doc, workflow, refreshWorkflow, generation, dfmProcess } =
+    useDocumentStore()
   const activeIdx = STATIONS.findIndex((s) => s.id === mode)
   const enabled = !!doc
+
+  // Keyed on the document and its generation rather than on every render: the
+  // answer only changes when the body does, and asking on each keystroke would
+  // put a request behind the typing.
+  const docId = doc?.id
+  useEffect(() => {
+    if (docId) void refreshWorkflow()
+  }, [docId, generation, dfmProcess, refreshWorkflow])
 
   // Number keys 1–5 switch modes (skip while typing or with a modifier held).
   useEffect(() => {
@@ -57,6 +90,9 @@ export function ModeSpine() {
           const active = i === activeIdx
           const loaded = i <= activeIdx // energized up to where you are
           const Icon = s.icon
+          const status = workflow?.[s.id]
+          const blocked = status?.state === 'blocked'
+          const mark = status ? STATE_MARK[status.state] : null
           return (
             <div key={s.id} className="flex flex-col items-center">
               {/* incoming connector segment (skip before the first station) */}
@@ -72,7 +108,9 @@ export function ModeSpine() {
               <button
                 onClick={() => setMode(s.id)}
                 aria-current={active ? 'step' : undefined}
-                title={`${String(i + 1).padStart(2, '0')} · ${s.label}`}
+                title={status
+                  ? `${String(i + 1).padStart(2, '0')} · ${s.label} — ${status.detail}`
+                  : `${String(i + 1).padStart(2, '0')} · ${s.label}`}
                 className="group flex flex-col items-center gap-1 py-1 px-1.5 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-cad-accent/60"
               >
                 {/* node on the spine */}
@@ -86,11 +124,20 @@ export function ModeSpine() {
                   }`}
                   style={active ? { boxShadow: '0 0 0 4px var(--color-cad-accent-glow)' } : undefined}
                 >
-                  <Icon size={16} strokeWidth={active ? 2.2 : 1.8} />
+                  <Icon size={16} strokeWidth={active ? 2.2 : 1.8}
+                        opacity={blocked && !active ? 0.45 : 1} />
                   {active && (
                     <span
                       aria-hidden
                       className="absolute -right-0.5 -top-0.5 w-1.5 h-1.5 rounded-full bg-cad-accent-hot animate-filament"
+                    />
+                  )}
+                  {mark && !active && (
+                    <span
+                      aria-hidden
+                      title={mark.title}
+                      className="absolute -right-0.5 -top-0.5 w-1.5 h-1.5 rounded-full"
+                      style={{ background: mark.colour }}
                     />
                   )}
                 </span>

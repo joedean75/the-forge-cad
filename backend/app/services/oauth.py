@@ -44,7 +44,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from app.services import accounts
+from app.services import accounts, persistence
 
 # ---------------------------------------------------------------------------
 # Provider registry
@@ -146,16 +146,25 @@ class _Handoff:
 
 
 # state -> in-flight login; handoff code -> issued session token. Single-use:
-# entries are popped on first redemption. Process-local like the optimize jobs.
-_PENDING: Dict[str, _PendingLogin] = {}
-_HANDOFFS: Dict[str, _Handoff] = {}
+# an entry is read and deleted in one transaction on first redemption.
+#
+# **In the datastore, not in this process.** The flow spans two requests — the
+# browser leaves for the provider and comes back — and with a second API worker
+# the callback lands on whichever one the load balancer picks. The PKCE verifier
+# was minted on a different one, so sign-in fails roughly half the time with
+# "invalid or expired sign-in attempt", which reads as a provider problem and is
+# not. Sixty seconds of state in a row looks like overkill right up until that.
+#
+# Nothing about the security properties changed: still server-side, still
+# single-use, still never sent to the browser, and the delete is still what
+# makes it single-use — `persistence.take_ephemeral` does the read and the
+# delete atomically so two concurrent redemptions cannot both win.
+_STATE_PREFIX = "oauth-state:"
+_HANDOFF_PREFIX = "oauth-handoff:"
 
 
 def _purge_expired() -> None:
-    now = time.time()
-    for store in (_PENDING, _HANDOFFS):
-        for key in [k for k, v in store.items() if v.expires_at < now]:
-            store.pop(key, None)
+    persistence.purge_ephemeral(time.time())
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +176,7 @@ def begin_login(provider_id: str) -> str:
     """Start a login: mint state + PKCE pair, return the provider redirect URL."""
     provider = _get_provider(provider_id)
     _purge_expired()
-    if len(_PENDING) >= _MAX_PENDING:
+    if persistence.count_ephemeral() >= _MAX_PENDING:
         raise accounts.AuthError("too many login attempts in flight — try again shortly", status=429)
 
     state = secrets.token_urlsafe(32)
@@ -177,11 +186,11 @@ def begin_login(provider_id: str) -> str:
         .rstrip(b"=")
         .decode()
     )
-    _PENDING[state] = _PendingLogin(
-        provider_id=provider.id,
-        code_verifier=code_verifier,
-        expires_at=time.time() + _STATE_TTL_SECONDS,
-    )
+    persistence.save_ephemeral(_STATE_PREFIX + state, {
+        "provider_id": provider.id,
+        "code_verifier": code_verifier,
+        "expires_at": time.time() + _STATE_TTL_SECONDS,
+    })
 
     params = {
         "client_id": _client_id(provider.id),
@@ -203,27 +212,32 @@ def complete_login(provider_id: str, state: str, code: str) -> str:
     provider = _get_provider(provider_id)
     _purge_expired()
 
-    pending = _PENDING.pop(state or "", None)  # single-use, regardless of outcome
-    if pending is None or pending.provider_id != provider.id:
+    # Single-use, regardless of outcome: taken before the provider round trip,
+    # so a replayed callback cannot re-run it.
+    row = persistence.take_ephemeral(_STATE_PREFIX + (state or ""))
+    pending = _PendingLogin(**row) if row else None
+    if (pending is None or pending.provider_id != provider.id
+            or pending.expires_at < time.time()):
         raise accounts.AuthError("invalid or expired sign-in attempt — please retry", status=400)
 
     subject, email = _fetch_identity(provider, code, pending.code_verifier)
     acc = _account_for_identity(provider.id, subject, email)
 
     handoff_code = secrets.token_urlsafe(32)
-    _HANDOFFS[handoff_code] = _Handoff(
-        token=accounts.issue_token(acc),
-        account_id=acc.id,
-        expires_at=time.time() + _HANDOFF_TTL_SECONDS,
-    )
+    persistence.save_ephemeral(_HANDOFF_PREFIX + handoff_code, {
+        "token": accounts.issue_token(acc),
+        "account_id": acc.id,
+        "expires_at": time.time() + _HANDOFF_TTL_SECONDS,
+    })
     return handoff_code
 
 
 def redeem_handoff(code: str) -> Tuple[str, accounts.Account]:
     """Trade a one-time handoff code for the session JWT (single use)."""
     _purge_expired()
-    handoff = _HANDOFFS.pop(code or "", None)
-    if handoff is None:
+    row = persistence.take_ephemeral(_HANDOFF_PREFIX + (code or ""))
+    handoff = _Handoff(**row) if row else None
+    if handoff is None or handoff.expires_at < time.time():
         raise accounts.AuthError("invalid or expired sign-in code — please retry", status=401)
     acc = accounts.get_account(handoff.account_id)
     if acc is None:

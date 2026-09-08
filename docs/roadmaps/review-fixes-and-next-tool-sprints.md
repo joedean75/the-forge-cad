@@ -2,7 +2,7 @@
 
 Repository: [joedean75/cad_system](https://github.com/joedean75/cad_system)
 Prepared: September 6, 2026
-Status: Proposed follow-on plan
+Status: Delivered — Review Fix Sprint and Tool Sprints 1-3
 
 ## Goal
 
@@ -131,3 +131,89 @@ Close the review findings from the workflow/performance refactor commits, then c
 - Prefer measured fixture updates over broad rewrites.
 - Every sprint ends with tests, a demo model, and updated roadmap status notes.
 - If capacity is tight, defer broader catalog coverage before deferring real-mass correctness or revision-safe writes.
+
+
+## Delivery Status
+
+Updated as each sprint lands, per the delivery rule that every sprint ends with
+tests, a demo model and a status note.
+
+### Review Fix Sprint — delivered
+
+| Item | Where it landed | Regression test |
+| --- | --- | --- |
+| FIX-01 | `document_service.update_document` now runs `get -> check_revision -> mutate -> persist/evaluate` inside `writing(doc_id)`, in the service rather than the router, so direct service callers get the guarantee too. | `tests/test_review_fixes.py` — two writers are deterministically overlapped by parking the first inside `_persist` (after its revision check, before its commit) and releasing the second only once the first is known parked. The first version of these tests passed with the lock removed, which is why they are written this way. |
+| FIX-02 | `jobs.run` prefers `result["message"]` and falls back to the generic text; `message` stays inside `job.result` so existing readers are not broken. | Optimize-style and package-style handler results both assert `job.public()["message"]`. |
+| FIX-03 | `jobs.NonRetryable` carries a code, a remedy and the submitted/current revisions; `run_document_optimize` raises it on `RevisionConflict` and `jobs.run` finishes the job `failed` without going through `_retry_or_fail`. | A stale optimization fails once and does not increment an attempt count; worker-loss retry behaviour is unchanged. |
+
+Each fix was verified by reverting it and watching the new test fail
+(`200 == 409`, `'queued' == 'failed'`) before it was kept.
+
+### Tool Sprint 1 — delivered
+
+`services/part_mass.py` is one answer in one place: four ranked sources
+(`override` > `catalog` > `geometric` > `unknown`) with the source travelling
+with the number. `bom`, `assembly_mass` and `mass_properties` all read it, every
+report states `mass_source` and `mass_basis`, and a non-geometric mass scales the
+component's inertia tensor by the mass ratio rather than leaving a tensor
+computed from an envelope beside a corrected mass. `parts_catalog` gained servo,
+BLDC, control-board and ground-shaft entries; `set_part_mass` and `add_battery`
+record what somebody measured. Covered by `tests/test_part_mass.py`.
+
+Deferred deliberately: ESC and receiver entries. Their envelopes are not a
+form factor the way a servo case or a NEMA frame is — they are per-product, so a
+generated entry would be an invented part rather than a standard one, and
+`supplier_parts` is the path for those.
+
+### Tool Sprint 2 — delivered
+
+| Item | Where it landed |
+| --- | --- |
+| TOOL-06 | `rc_axle`, `rc_diff`, `rc_dogbone`, `rc_ujoint`, `rc_spur_pinion`, `rc_motor_mount` in `services/templates.py`. |
+| TOOL-07 | `rc_servo_tray` (case pocket, tab screws, horn relief) and `rc_knuckle` (kingpin bore, stub-axle bore, steering arm placed by the Ackermann construction). |
+| TOOL-08 | `services/mechanism.py` — shaft, gear, bearing and hardware notes on the document; `annotate_mechanism` / `list_mechanism`; `drawing` resolves a `mechanism` annotation and draws a rotation arrow for a note that carries a direction. |
+| TOOL-09 | `services/rc_presets.py` — bands and standards, each labelled; `list_rc_presets`, `steering_geometry`, `gear_layout`. MR-series bearings added to `parts_catalog`, marked as not ISO 15. |
+| TOOL-10 | Every RC template exports STEP and STL and renders an annotated sheet, asserted per template in `tests/test_rc_toolkit.py`. |
+
+Demo: `apply_template rc_spur_pinion` gives a 65.2 × 55.6 × 4 mm plate bored at
+0 and 24 mm — the centre distance `gear_layout` computes for module 0.6, 16T and
+64T — carrying three mechanism notes, of which the two gears draw opposite
+rotation arrows on the sheet.
+
+### Tool Sprint 3 — delivered
+
+| Item | Where it landed |
+| --- | --- |
+| TOOL-11 | `release_package.build(preset="printed")` — adds the printability report against the recorded machine and lays the drawing out with `drawing_presets.spec_for(..., "print")`. A preset only ever *adds* files; the hardware list rides in both presets because it comes off the document's mechanism notes. |
+| TOOL-12 | `services/printability.py` — bed fit across the six 90-degree orientations (with a piece count and a named split axis when none fits), wall against two perimeters, smallest bore against the nozzle, trapped voids, and every cylindrical face identified as a bore or a boss with what it matches. |
+| TOOL-13 | `services/drawing_presets.py` — `shop` / `print` / `inspection`, reachable as `drawing_preset` and `list_drawing_presets`. |
+| TOOL-14 | `DesignDocument.manufacturing` and `set_manufacturing`; the release manifest states the intent on every preset, `recorded: false` with a remedy when there is none. |
+| TOOL-15 | `workflow.PACKAGE` gained the material as a prerequisite and the `package` derived product, so it answers `blocked` / `ready` / `queued` / `running` / `current` / `stale` / `failed` like the six modes. |
+
+Three decisions worth recording, because each is a place the obvious
+implementation is wrong:
+
+- **A cylinder's diameter does not say whether it is a pocket.** The first
+  report matched on diameter alone and called the outer surface of an axle
+  housing an MR148 bearing seat. The face's outward normal settles it — on a
+  bore it points at the axis.
+- **Nut traps are callouts, not checks.** Recognising a hexagonal pocket in a
+  B-rep is a heuristic that fails on exactly the parts where it matters, and a
+  wrong finding is worse than a stated dimension. The figures come from
+  `parts_catalog.METRIC` rather than a second transcription of ISO 4032.
+- **The package's preset is not a freshness input.** Unlike `dfm`'s process — an
+  additive report does not answer the milling question — a `printed` package
+  holds the same facts as a `standard` one plus two files, so calling a standard
+  package stale because somebody now wants a printed one would be a false
+  negative in the one vocabulary the editor uses for everything.
+
+Fixed on the way through: `generate_drawing`'s legacy `section=True` shorthand
+added a mid-body section whenever `spec.sections` was empty, so "no section" was
+something a `DrawingSpec` could not express. A spec that names `sections` — an
+empty list included — is now honoured.
+
+Demo: `rc_axle` with PLA and a Bambu A1 intent recorded, released as revision A
+and packaged with `preset: printed` — nine files including `printability.json`
+(80%, warning on the Ø10 mm nominal bearing pockets) and `hardware.csv` from the
+part's own mechanism notes. `workflow_status` reports the package `current`, and
+`stale` after the tube is lengthened.

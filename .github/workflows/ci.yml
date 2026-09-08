@@ -48,6 +48,44 @@ jobs:
         # Uses the default embedded SQLite (conftest points at an isolated temp DB).
         run: python -m pytest -q
 
+  benchmark:
+    name: Backend · benchmark report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install deps
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      # Reported, not gated. A timing threshold invented on the first run fails
+      # the next reviewer's laptop and teaches the team to re-run CI until it
+      # passes; a gate needs a noise tolerance agreed against repeated samples
+      # on a fixed runner, which is CI-02's job. What this catches today is a
+      # fixture that stops building and an order-of-magnitude regression a human
+      # can see in the log.
+      - name: Run the fixture benchmarks
+        working-directory: backend
+        run: python -m benchmarks.run --repeat 5 --json benchmark.json
+      - name: Publish the report
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: backend/benchmark.json
+          retention-days: 30
+      # Gated, unlike the timings above. These are byte counts — deterministic
+      # functions of the code rather than of the runner — and they are the ones
+      # that actually regressed: the mesh was once 99% of a 1164 KB document
+      # response, re-sent on every edit, and nobody noticed for months.
+      - name: Payload budgets
+        working-directory: backend
+        run: python -m benchmarks.budgets --json budgets.json
+
   frontend:
     name: Frontend · lint + type-check + build
     runs-on: ubuntu-latest
@@ -67,6 +105,13 @@ jobs:
       - name: Build (type-check gate)
         working-directory: frontend
         run: npm run build
+      # The built entry chunk is what the payload budget measures, so it is
+      # checked here where it already exists rather than by building it twice.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Entry-bundle budget
+        run: python backend/benchmarks/budgets.py --frontend-only
 
   docker:
     name: Docker · build image
