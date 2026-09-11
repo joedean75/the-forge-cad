@@ -425,7 +425,19 @@ def _cone(f):
 # --------------------------------------------------------------- booleans --
 
 def _boolean(f):
-    children = [brep_from_feature(c) for c in f.children]
+    children = []
+    for child in f.children:
+        shape = brep_from_feature(child)
+        if shape is None and requires_exact(child):
+            # `brep_from_feature` swallows a child's real reason so the SDF can
+            # take the whole body over — which is right for something the field
+            # kernel *can* build, and wrong for something only this one can. A
+            # 60-turn thread came back as "boolean child has no exact form"
+            # instead of "60 turns is more helical sweep than OCC builds
+            # reliably", and the second is the one a caller can act on.
+            # Rebuilding the child here lets what it actually said escape.
+            _build(child)
+        children.append(shape)
     if not children or any(c is None for c in children):
         raise BrepUnsupported("boolean child has no exact form")
 
@@ -798,6 +810,310 @@ def _profile_wire(profile: dict, normal: str, w: float, u0: float, v0: float):
     return polygon.Wire()
 
 
+def _surface_wires(f, normal: str, w: float):
+    """The profile's wires at height `w` — the outline, not the face it bounds."""
+    from app.cad_kernel.geom import profile2d
+
+    profile = getattr(f, "profile", None) or {}
+    if profile2d.is_loops(profile):
+        place, _ = _extrude_place(normal, w, 0.0, 0.0)
+        wires = [_loop_wire(loop, place) for loop in profile2d.loops_of(profile)]
+    else:
+        wires = [_profile_wire(profile, normal, w, 0.0, 0.0)]
+    if not wires:
+        raise BrepUnsupported("the profile has no curves to sweep")
+    return wires
+
+
+def _compound(parts):
+    """Several sheets as one body, unsewn.
+
+    Compounded rather than fused: joining sheets is what `KnitFeature` is for,
+    and doing it here would knit two disjoint outlines that were never meant to
+    meet.
+    """
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    compound = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(compound)
+    for part in parts:
+        builder.Add(compound, part)
+    return compound
+
+
+def _surface_fill(f, normal: str):
+    """The flat cap a closed outline bounds — the face, on its own."""
+    faces = []
+    for wire in _surface_wires(f, normal, float(f.offset)):
+        made = BRepBuilderAPI_MakeFace(wire)
+        if not made.IsDone():
+            raise BrepUnsupported(
+                "this outline does not bound a flat face, so there is nothing "
+                "to fill — a fill caps a closed, planar loop")
+        faces.append(made.Face())
+    return faces[0] if len(faces) == 1 else _compound(faces)
+
+
+def _surface_revolve(f, normal: str):
+    """The outline swept about an axis: a surface of revolution."""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeRevol
+
+    angle = math.radians(float(f.angle))
+    if abs(angle) < 1e-9:
+        raise BrepUnsupported("a revolved surface needs a non-zero angle")
+    axis_vec = (float(f.axis.get("x", 0.0)), float(f.axis.get("y", 1.0)),
+                float(f.axis.get("z", 0.0)))
+    if math.sqrt(sum(c * c for c in axis_vec)) < 1e-12:
+        raise BrepUnsupported("the revolve axis has no length")
+    spin = gp_Ax1(gp_Pnt(float(f.center.get("x", 0.0)),
+                         float(f.center.get("y", 0.0)),
+                         float(f.center.get("z", 0.0))),
+                  gp_Dir(*axis_vec))
+    parts = [BRepPrimAPI_MakeRevol(wire, spin, angle).Shape()
+             for wire in _surface_wires(f, normal, float(f.offset))]
+    return parts[0] if len(parts) == 1 else _compound(parts)
+
+
+def _surface_loft(f, normal: str):
+    """A surface between two outlines — `ThruSections` asked for a shell.
+
+    The one argument that matters is the first: `False` builds a shell rather
+    than a solid, so the ends are left open. `RuledLoftFeature` next door passes
+    `True` and is the solid form of the same sweep.
+    """
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
+
+    if not f.profile_b:
+        raise BrepUnsupported(
+            "a lofted surface needs a second section — pass `profile_b`")
+    if abs(float(f.offset_b) - float(f.offset)) < 1e-12:
+        raise BrepUnsupported("the two sections are at the same height")
+
+    near = _surface_wires(f, normal, float(f.offset))
+    far = _surface_wires(_Section(f.profile_b), normal, float(f.offset_b))
+    if len(near) != 1 or len(far) != 1:
+        raise BrepUnsupported(
+            "a loft pairs one outline with one other; a section with a hole or "
+            "two islands has no single correspondence with the far end, and "
+            "guessing one would loft to an invented shape")
+    builder = BRepOffsetAPI_ThruSections(False, bool(f.ruled))
+    builder.AddWire(near[0])
+    builder.AddWire(far[0])
+    builder.Build()
+    if not builder.IsDone():
+        raise BrepUnsupported("OCC could not loft a surface between those two "
+                              "outlines")
+    return builder.Shape()
+
+
+class _Section:
+    """Just enough of a feature for `_surface_wires` to read one profile."""
+
+    def __init__(self, profile):
+        self.profile = profile
+
+
+def _surface(f):
+    """A sheet: the profile's **wire** swept, not its face.
+
+    One line different from `_extrude` and a different kind of body. Prisming
+    the face gives a solid prism; prisming the wire gives the walls without the
+    caps — an open tube, which is the body you cap, knit and thicken. A closed
+    profile therefore yields an open sheet, and that is the point rather than an
+    omission: the caps are a separate decision and a separate feature.
+
+    `body_kind` is not set here. It is read back off the shape by
+    `brep.body_kind`, because OCC already knows — a shape with no `TopAbs_SOLID`
+    in it is a sheet — and a second declaration here would be a second answer
+    that could disagree with the geometry.
+    """
+    from app.cad_kernel.core.planes import plane_normal
+
+    normal = plane_normal(getattr(f, "plane", "xy"))
+    kind = str(getattr(f, "kind", "extrude"))
+    if kind == "fill":
+        return _surface_fill(f, normal)
+    if kind == "revolve":
+        return _surface_revolve(f, normal)
+    if kind == "loft":
+        return _surface_loft(f, normal)
+    if kind != "extrude":
+        raise BrepUnsupported(f"unknown surface kind {kind!r}")
+
+    depth = float(f.depth)
+    if abs(depth) < 1e-12:
+        raise BrepUnsupported("a surface needs a non-zero depth to sweep")
+
+    base_w = float(f.offset) - depth / 2.0
+    iu, iv, iw = _EXTRUDE_AXES[normal]
+    direction = [0.0, 0.0, 0.0]
+    direction[iw] = depth
+
+    parts = [BRepPrimAPI_MakePrism(wire, gp_Vec(*direction)).Shape()
+             for wire in _surface_wires(f, normal, base_w)]
+    return parts[0] if len(parts) == 1 else _compound(parts)
+
+
+def _knit(f):
+    """Sew a child's sheets into one shell, and into a solid when it closes.
+
+    **Becoming a solid is the point.** A shell with no open edges *is* a
+    boundary representation of a volume, so the moment the caps go on, the body
+    stops being surface and starts being material — and `body_kind` reports
+    that, so `mass_properties` starts answering and a volume requirement stops
+    refusing. Nothing here has to declare the change: it is read back off the
+    topology by `brep.body_kind`, which is the only way the answer cannot
+    disagree with the geometry.
+
+    An unclosed result is returned as the shell it is, not as an error. Knitting
+    two walls of three is a real step on the way to the third, and the open edge
+    count in `geometry_check` says exactly how far off it is.
+    """
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
+    from OCP.TopAbs import TopAbs_ShapeEnum
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    child = _child_shape(f, "knit")
+    tolerance = float(getattr(f, "tolerance", 1e-5))
+    if tolerance <= 0:
+        raise BrepUnsupported("a knit tolerance must be positive")
+
+    sewing = BRepBuilderAPI_Sewing(tolerance)
+    sewing.Add(child)
+    sewing.Perform()
+    sewn = sewing.SewedShape()
+    if sewn is None or sewn.IsNull():
+        raise BrepUnsupported("OCC could not sew those sheets together")
+
+    solids = []
+    explorer = TopExp_Explorer(sewn, TopAbs_ShapeEnum.TopAbs_SHELL)
+    while explorer.More():
+        shell = TopoDS.Shell_s(explorer.Current())
+        # A shell with a free edge is not a boundary, and `MakeSolid` on one
+        # succeeds anyway — it reported a cone missing its top cap as a solid,
+        # which is the quietly wrong number the whole kind distinction exists to
+        # stop. `ShapeAnalysis_Shell.HasFreeEdges` does not answer this either
+        # without its own check run first; counting the edges is direct and
+        # cannot be half-initialised.
+        if free_edges(shell):
+            solids = []
+            break
+        made = BRepBuilderAPI_MakeSolid(shell)
+        if not made.IsDone():
+            solids = []
+            break
+        solids.append(made.Solid())
+        explorer.Next()
+    if solids:
+        return solids[0] if len(solids) == 1 else _compound(solids)
+    return sewn
+
+
+def _thicken(f):
+    """Offset a sheet to one side by `thickness`, giving a solid.
+
+    To one side rather than split about the surface, so the original sheet is
+    one face of the result and a datum taken on it still means something. A
+    negative thickness offsets the other way.
+    """
+    from OCP.BRepOffset import BRepOffset_MakeOffset, BRepOffset_Mode
+    from OCP.GeomAbs import GeomAbs_JoinType
+
+    child = _child_shape(f, "thicken")
+    thickness = float(getattr(f, "thickness", 0.002))
+    if abs(thickness) < 1e-12:
+        raise BrepUnsupported("a thickness of zero leaves the sheet a sheet")
+    if body_kind(child) == "solid":
+        raise BrepUnsupported(
+            "this body is already a solid — thicken turns a surface into "
+            "material, and there is no surface here to give a thickness to. "
+            "shell_faces hollows a solid; that is the other question")
+
+    builder = BRepOffset_MakeOffset()
+    builder.Initialize(child, thickness, 1e-6, BRepOffset_Mode.BRepOffset_Skin,
+                       False, False, GeomAbs_JoinType.GeomAbs_Intersection,
+                       True)
+    builder.MakeOffsetShape()
+    if not builder.IsDone():
+        raise BrepUnsupported(
+            f"OCC could not thicken that surface by {abs(thickness) * 1000:g} mm "
+            f"— a thickness larger than the sheet's own curvature radius folds "
+            f"the offset through itself")
+    return builder.Shape()
+
+
+def _trim(f):
+    """Keep the part of a sheet on one side of a plane.
+
+    Cut against a **box** rather than an OCC half-space: a half-space is
+    unbounded, and a boolean against one leaves the result's extent decided by
+    tolerances rather than by the body. The box is sized from the child's own
+    bounding box, so it is a half-space everywhere the body reaches and finite
+    everywhere it does not.
+    """
+    from app.cad_kernel.core.planes import plane_normal
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+    child = _child_shape(f, "trim")
+    keep = str(getattr(f, "keep", "below"))
+    if keep not in ("below", "above"):
+        raise BrepUnsupported(f"trim keeps 'below' or 'above', not {keep!r}")
+    normal = plane_normal(getattr(f, "plane", "xy"))
+    axis = {"z": 2, "y": 1, "x": 0}[normal]
+    cut = float(getattr(f, "offset", 0.0))
+
+    lo, hi = _extent_of(child)
+    reach = max(float(hi[i] - lo[i]) for i in range(3)) + 1.0
+    low = [lo[i] - reach for i in range(3)]
+    high = [hi[i] + reach for i in range(3)]
+    if keep == "below":
+        high[axis] = cut
+    else:
+        low[axis] = cut
+    if high[axis] <= low[axis]:
+        raise BrepUnsupported(
+            f"the trim plane at {cut * 1000:g} mm is outside the body, so "
+            f"keeping the {keep} side keeps nothing")
+
+    box = BRepPrimAPI_MakeBox(gp_Pnt(*low), gp_Pnt(*high)).Shape()
+    common = BRepAlgoAPI_Common(child, box)
+    if not common.IsDone():
+        raise BrepUnsupported("OCC could not trim that body against the plane")
+    result = common.Shape()
+    if surface_area(result) <= 0.0:
+        raise BrepUnsupported(
+            f"trimming to the {keep} of {cut * 1000:g} mm left nothing")
+    return result
+
+
+def _child_shape(f, what: str):
+    """The one body a surface modifier acts on."""
+    children = getattr(f, "children", None) or []
+    if len(children) != 1:
+        raise BrepUnsupported(
+            f"{what} acts on exactly one body, and this one has "
+            f"{len(children)}")
+    return _build(children[0])
+
+
+def _extent_of(shape):
+    """A shape's extent, from its tessellation rather than from `Bnd_Box`.
+
+    `Bnd_Box` on a swept BSpline bounds the control points, not the surface —
+    the finding that cost S3 two hours — and a lofted sheet is exactly such a
+    surface. A trim box sized from that box would be sized from a body 60 mm
+    across that is really 10.
+    """
+    verts, _ = tessellate(shape, resolution=48)
+    if not len(verts):
+        raise BrepUnsupported("that body has no geometry to trim")
+    return verts.min(axis=0), verts.max(axis=0)
+
+
 def _extrude(f):
     """A profile extruded symmetrically about `offset`, matching ExtrudeSDF."""
     from app.cad_kernel.core.planes import plane_normal
@@ -1073,6 +1389,171 @@ def _helix(f):
             f"at {pitch * 1000:g} mm pitch on a {radius * 2000:g} mm coil")
     # A leaf, so `_build` seeds its entities — the same path a primitive takes.
     return builder.Shape()
+
+
+#: How many turns of helical sweep `BRepOffsetAPI_MakePipeShell` builds before
+#: it starts losing material. Measured, not guessed: an M8x1.25 rib is exact
+#: against the closed form at 30 and 34 turns, 4% light at 38 and 2% at 42, and
+#: an M3x0.5 rib is 43% light at 62 turns and fails outright past 92. The
+#: failure is in the *sweep*, not in the fuse after it — the rib is already
+#: wrong when it is measured on its own — so no boolean strategy rescues it, and
+#: chunking the spine into short segments was tried and is worse: it trades an
+#: exact result for a 0.1% one, takes four times as long, and still degrades.
+#: 32 keeps a comfortable margin under the first measured loss.
+_MAX_THREAD_TURNS = 32.0
+
+#: The ISO 68-1 fundamental triangle is `H = P sqrt(3)/2` tall, and the external
+#: thread's basic minor diameter sits `5H/8` inside the major one on each side.
+_ISO_H = math.sqrt(3.0) / 2.0
+_ROOT3 = math.sqrt(3.0)
+
+
+def _thread(f):
+    """An ISO 68-1 metric thread, as a threaded cylinder.
+
+    **Built as a rib fused onto a minor-diameter core, not as a groove cut from
+    a major-diameter one.** That is the whole finding. Cutting the groove is the
+    obvious construction and it is what S3 tried; it leaves a body that still
+    measures the full major cylinder. Fusing outward gives a solid that matches
+    the closed form to 0.000% across M2 to M12.
+
+    Three details, each of which was wrong first:
+
+    * **The rib is buried a twentieth of its own depth into the core, along its
+      own flanks.** A rib whose inner face sits exactly *on* the core surface is
+      a coincident-face boolean, and OCC returns an empty result for an M4 built
+      that way — zero solids, no error — while taking six times as long on the
+      sizes it does manage. Extending the trapezoid inward along its 30 degree
+      flanks (rather than sliding the inner edge in at a fixed width) leaves
+      everything outside the core exactly the ISO form, which is why the volume
+      comes out exact rather than one percent light.
+    * **The profile is given in the axial plane**, which is where ISO 68-1
+      defines it and what makes the sweep a screw motion of the stated section.
+    * **The ends are trimmed against a box, never against a cylinder.** A
+      cylinder of the major diameter would put a coincident boolean face along
+      every crest; a box only meets the body at the two end planes.
+
+    **And it is built in millimetres and scaled down, which is the one place in
+    this kernel that departs from metres.** OCC's sweep and boolean tolerances
+    are absolute, not relative: an M8's crest flat is 78 microns and its root
+    flats tens of microns, and expressed in metres those are 7.8e-5 and 3e-5 —
+    close enough to the 1e-7 the shapes carry that the pipe shell and the fuse
+    lose them. The identical construction returns a solid of **zero volume** at
+    metre scale and the exact 827.1935 mm3 at millimetre scale. Scaling at the
+    end takes the tolerances down with the geometry, so what the rest of the
+    tree booleans against is an ordinary metre-scale body.
+
+    S3's two warnings still apply and are why this is verified by volume rather
+    than by `Bnd_Box`: that box bounds a swept BSpline's control points, not its
+    surface, and only Frenet mode places a profile correctly on a helical spine.
+    """
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Fuse
+    from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeWire,
+                                    BRepBuilderAPI_MakePolygon)
+    from OCP.BRepLib import BRepLib
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
+    from OCP.GCE2d import GCE2d_MakeSegment
+    from OCP.Geom import Geom_CylindricalSurface
+    from OCP.gp import gp_Ax3, gp_Pnt2d
+
+    diameter = float(f.diameter)
+    pitch = float(f.pitch)
+    length = float(f.length)
+    if diameter <= 0 or pitch <= 0 or length <= 0:
+        raise BrepUnsupported(
+            "a thread needs a positive diameter, pitch and length")
+
+    # Millimetres from here to the final transform — see the docstring. Every
+    # figure below is in them, including the messages, which is why they read in
+    # millimetres without a conversion.
+    scale = 1000.0
+    diameter *= scale
+    pitch *= scale
+    length *= scale
+
+    major_r = diameter / 2.0
+    height = pitch * _ISO_H                      # H, the fundamental triangle
+    minor_r = major_r - 5.0 * height / 8.0       # d1/2, the basic flat root
+    if minor_r <= 0:
+        raise BrepUnsupported(
+            f"a pitch of {pitch:g} mm on a {diameter:g} mm thread cuts past the "
+            f"axis — the root would be inside out. ISO coarse pitch for this "
+            f"diameter is far smaller")
+
+    # Two turns of overshoot, half trimmed off each end, so the thread runs out
+    # at the ends of the stated length rather than starting mid-flank.
+    turns = length / pitch + 2.0
+    if turns > _MAX_THREAD_TURNS:
+        raise BrepUnsupported(
+            f"{length / pitch:.1f} turns of {pitch:g} mm pitch is more "
+            f"helical sweep than OCC builds reliably: past about "
+            f"{_MAX_THREAD_TURNS - 2:.0f} turns the rib comes back quietly short "
+            f"of material — 4% at 36 turns and 43% at 60 — rather than failing. "
+            f"Shorten the threaded length, or use a coarser pitch")
+
+    origin = gp_Pnt(float(f.center.get("x", 0.0)), float(f.center.get("y", 0.0)),
+                    float(f.center.get("z", 0.0)))
+    axis_vec = (float(f.axis.get("x", 0.0)), float(f.axis.get("y", 0.0)),
+                float(f.axis.get("z", 1.0)))
+    if math.sqrt(sum(c * c for c in axis_vec)) < 1e-12:
+        raise BrepUnsupported("the thread axis has no length")
+    direction = gp_Dir(*axis_vec)
+
+    # Everything is built about +Z at the origin and moved onto the axis at the
+    # end: the spine, the profile and the trim box all have to agree about which
+    # way is up, and one placement is one chance to get that wrong instead of
+    # three.
+    base = gp_Ax3(gp_Pnt(0.0, 0.0, -pitch), gp_Dir(0.0, 0.0, 1.0))
+    surface = Geom_CylindricalSurface(base, minor_r)
+    sweep = 2.0 * math.pi * turns * (1.0 if f.right_handed else -1.0)
+    segment = GCE2d_MakeSegment(gp_Pnt2d(0.0, 0.0),
+                                gp_Pnt2d(sweep, pitch * turns)).Value()
+    edge = BRepBuilderAPI_MakeEdge(segment, surface).Edge()
+    BRepLib.BuildCurves3d_s(edge)
+    spine = BRepBuilderAPI_MakeWire(edge).Wire()
+
+    sink = (major_r - minor_r) * 0.05
+    inner_r = minor_r - sink
+    inner_w = 0.75 * pitch + 2.0 * sink / _ROOT3   # along the flanks, not across
+    profile = BRepBuilderAPI_MakePolygon()
+    for radius, rise in ((inner_r, -inner_w / 2.0), (major_r, -pitch / 16.0),
+                         (major_r, pitch / 16.0), (inner_r, inner_w / 2.0)):
+        profile.Add(gp_Pnt(radius, 0.0, -pitch + rise))
+    profile.Close()
+
+    builder = BRepOffsetAPI_MakePipeShell(spine)
+    builder.SetMode(True)                          # Frenet — see `_helix`
+    builder.Add(profile.Wire(), False, False)
+    builder.Build()
+    if not builder.IsDone() or not builder.MakeSolid():
+        raise BrepUnsupported(
+            f"OCC could not wind a {length / pitch:.1f}-turn thread of "
+            f"{pitch:g} mm pitch on a {diameter:g} mm diameter")
+
+    core = BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0.0, 0.0, -2.0 * pitch), gp_Dir(0.0, 0.0, 1.0)),
+        minor_r, length + 4.0 * pitch).Shape()
+    fused = BRepAlgoAPI_Fuse(core, builder.Shape())
+    if not fused.IsDone():
+        raise BrepUnsupported("OCC could not fuse the thread to its core")
+
+    reach = diameter * 2.0
+    box = BRepPrimAPI_MakeBox(gp_Pnt(-reach, -reach, 0.0),
+                              gp_Pnt(reach, reach, length)).Shape()
+    trimmed = BRepAlgoAPI_Common(fused.Shape(), box)
+    if not trimmed.IsDone():
+        raise BrepUnsupported("OCC could not trim the thread to length")
+
+    # One transform, always: back to metres, and onto the axis the caller asked
+    # for. Two would be two chances to get the order wrong, and the order
+    # matters — the shape is built about +Z at the origin, so it has to shrink
+    # about that origin before it is placed anywhere else.
+    shrink = gp_Trsf()
+    shrink.SetScale(gp_Pnt(0.0, 0.0, 0.0), 1.0 / scale)
+    placement = gp_Trsf()
+    placement.SetTransformation(gp_Ax3(origin, direction), gp_Ax3())
+    return _transformed(trimmed.Shape(), placement.Multiplied(shrink))
 
 
 def _draft(f):
@@ -1467,6 +1948,11 @@ _BUILDERS = {
     "RibFeature": _rib,
     "DraftFeature": _draft,
     "HelixFeature": _helix,
+    "ThreadFeature": _thread,
+    "SurfaceFeature": _surface,
+    "KnitFeature": _knit,
+    "ThickenFeature": _thicken,
+    "TrimFeature": _trim,
     "TransformFeature": _transform,
     "MirrorFeature": _mirror,
     "PatternFeature": _pattern,
@@ -1480,7 +1966,8 @@ _BUILDERS = {
 # for that edge"), replacing it with a generic "needs the exact kernel".
 EXACT_ONLY = {"EdgeFilletFeature", "EdgeChamferFeature", "FaceShellFeature",
               "BrepBodyFeature", "RuledLoftFeature", "DraftFeature",
-              "HelixFeature"}
+              "HelixFeature", "ThreadFeature", "SurfaceFeature",
+              "KnitFeature", "ThickenFeature", "TrimFeature"}
 
 
 def requires_exact(feature) -> bool:
@@ -1839,6 +2326,61 @@ def _weld(vertices: np.ndarray, faces: np.ndarray, decimals: int = 9):
     # carrying anything per-triangle can drop the same rows.
     keep = (faces[:, 0] != faces[:, 1]) & (faces[:, 1] != faces[:, 2]) & (faces[:, 0] != faces[:, 2])
     return merged, faces[keep], keep
+
+
+#: What kind of body a shape is. A `solid` bounds a volume; a `sheet` is
+#: surface with no inside, and that is the point of it rather than a defect.
+#: Every consumer that divides by, integrates over or reasons about a volume has
+#: to know which it is holding — a sheet leaking into one of those paths gives a
+#: plausible wrong number rather than an error, which is the risk this whole
+#: distinction exists to close.
+BODY_KINDS = ("solid", "sheet")
+
+
+def free_edges(shape) -> int:
+    """Edges belonging to exactly one face — the shape's open boundary.
+
+    Asked of the topology directly rather than through a helper: this is what
+    decides whether a knitted shell becomes a solid, and a wrong answer there is
+    a body that reports a volume it does not enclose. Degenerate edges — a
+    cone's apex seam, a sphere's poles — are skipped, because they bound nothing
+    and would make every revolved surface look open.
+    """
+    from OCP.BRep import BRep_Tool
+    from OCP.TopAbs import TopAbs_ShapeEnum
+    from OCP.TopExp import TopExp
+    from OCP.TopTools import (TopTools_IndexedDataMapOfShapeListOfShape)
+    from OCP.TopoDS import TopoDS
+
+    mapping = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE,
+                                   TopAbs_ShapeEnum.TopAbs_FACE, mapping)
+    open_count = 0
+    for i in range(1, mapping.Extent() + 1):
+        edge = TopoDS.Edge_s(mapping.FindKey(i))
+        if BRep_Tool.Degenerated_s(edge):
+            continue
+        if mapping.FindFromIndex(i).Extent() < 2:
+            open_count += 1
+    return open_count
+
+
+def body_kind(shape) -> str:
+    """`solid` or `sheet`, asked of OCC rather than inferred from a mesh.
+
+    Read from the topology, because a *mesh* cannot answer it: an open shell and
+    a closed one are both triangle soup, and "is it watertight" conflates a
+    sheet body with a solid whose skin has a hole in it — one is the intent and
+    the other is a defect. A shape containing at least one `TopAbs_SOLID` is a
+    solid; anything made only of faces and shells is a sheet.
+    """
+    from OCP.TopAbs import TopAbs_ShapeEnum
+    from OCP.TopExp import TopExp_Explorer
+
+    if shape is None:
+        return "solid"
+    explorer = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_SOLID)
+    return "solid" if explorer.More() else "sheet"
 
 
 def volume(shape) -> float:

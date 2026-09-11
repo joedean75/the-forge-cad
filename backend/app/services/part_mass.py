@@ -125,10 +125,19 @@ def catalog_mass(doc) -> tuple[Optional[float], str]:
 
     from app.services import parts_catalog
 
-    entry = parts_catalog.by_key(ref)
-    if entry is not None and entry.typical_mass_g:
-        return float(entry.typical_mass_g) / G, (
-            f"published typical mass for {entry.designation}")
+    # Through `published_mass_g`, not `Entry.typical_mass_g` directly. A
+    # reference carries its *configuration* — `lipo?mass_g=320` is a different
+    # part from the default pack — and for a family whose mass is a declared
+    # parameter the configured figure is the label on the object, which beats a
+    # typical for the class. Reading the entry's default instead reported the
+    # 165 g pack's weight for a 320 g one that had said so.
+    grams = parts_catalog.published_mass_g(ref)
+    if grams:
+        key, given = parts_catalog.parse_ref(ref)
+        entry = parts_catalog.by_key(key)
+        name = (parts_catalog.designation_of(entry, given) if entry is not None
+                else str(ref))
+        return float(grams) / G, f"published typical mass for {name}"
 
     # A supplier part the user filed. Looked up second because the generated
     # catalog is the smaller, cheaper lookup.

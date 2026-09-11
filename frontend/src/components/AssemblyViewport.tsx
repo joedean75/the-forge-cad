@@ -1,9 +1,10 @@
-import { Suspense, useEffect, useMemo, useRef } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useLoader } from '@react-three/fiber'
 import { CameraControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei'
 import { ForgeMeshLoader } from '../util/forgeMesh'
-import { Boxes } from 'lucide-react'
-import type { AssemblyComponent, BBox, Vector3 } from '../../../shared/types'
+import { Boxes, Link2 } from 'lucide-react'
+import { MoveHandles } from './MoveHandles'
+import type { AssemblyComponent, BBox, ComponentTransform, Vector3 } from '../../../shared/types'
 
 type Vec3 = [number, number, number]
 const DEG = Math.PI / 180
@@ -81,16 +82,34 @@ export function AssemblyViewport({
   bbox,
   selectedId,
   isolate,
+  driven,
   onSelect,
+  onMove,
 }: {
   components: AssemblyComponent[]
   bbox: BBox | null | undefined
   selectedId: string | null
   isolate: boolean
+  /** Components a mate positions. Their placement is an output, not an input. */
+  driven: Set<string>
   onSelect: (id: string | null) => void
+  onMove: (componentId: string, transform: ComponentTransform) => void
 }) {
   const fit = useFit(bbox)
+  const [orbit, setOrbit] = useState(true)
+  // Where the dragged component is *right now*, in assembly metres. Held here
+  // rather than pushed at the store because nothing outside this viewport can
+  // act on a placement that is still under the pointer — and the store write is
+  // a server round trip, which is what the one-commit-on-release rule is about.
+  const [dragOffset, setDragOffset] = useState<Vector3 | null>(null)
   const placed = components.filter((c) => c.mesh_url && !c.missing)
+  const selected = placed.find((c) => c.id === selectedId) ?? null
+  // A mate writes this component's translation, so a drag is a number the next
+  // solve overwrites — the user drags, watches it snap back, and concludes the
+  // tool is broken. The same reason the placement fields are disabled, and the
+  // handles are simply not drawn rather than being drawn and ignored.
+  const drivenSelection = !!selected && driven.has(selected.id)
+  const draggable = selected && !drivenSelection ? selected : null
   // CameraControls doesn't auto-frame — explicitly frame the origin-normalized
   // assembly once components are placed, so it isn't an empty viewport on open.
   const controlsRef = useRef<{ setLookAt: (px: number, py: number, pz: number, tx: number, ty: number, tz: number, t?: boolean) => void } | null>(null)
@@ -123,20 +142,44 @@ export function AssemblyViewport({
             infiniteGrid
           />
           {fit &&
-            placed.map((c) => (
-              <ComponentMesh
-                key={c.id}
-                url={c.mesh_url as string}
-                position={fit.toDisplay(c.transform.translate)}
-                scale={fit.s * (c.transform.scale || 1)}
-                rotation={[c.transform.rotate_deg.x * DEG, c.transform.rotate_deg.y * DEG, c.transform.rotate_deg.z * DEG]}
-                selected={c.id === selectedId}
-                dim={isolate && selectedId != null && c.id !== selectedId}
-                onSelect={() => onSelect(c.id)}
-              />
-            ))}
+            placed.map((c) => {
+              // **The preview moves the component itself**, which is the one
+              // place this differs from the part editor. There a feature is
+              // moving and the union of it with everything else is not that
+              // mesh translated, so the outline moves instead; here a component
+              // is a rigid body and its mesh translating *is* what happens.
+              const live = dragOffset && c.id === draggable?.id
+                ? { x: c.transform.translate.x + dragOffset.x,
+                    y: c.transform.translate.y + dragOffset.y,
+                    z: c.transform.translate.z + dragOffset.z }
+                : c.transform.translate
+              return (
+                <ComponentMesh
+                  key={c.id}
+                  url={c.mesh_url as string}
+                  position={fit.toDisplay(live)}
+                  scale={fit.s * (c.transform.scale || 1)}
+                  rotation={[c.transform.rotate_deg.x * DEG, c.transform.rotate_deg.y * DEG, c.transform.rotate_deg.z * DEG]}
+                  selected={c.id === selectedId}
+                  dim={isolate && selectedId != null && c.id !== selectedId}
+                  onSelect={() => onSelect(c.id)}
+                />
+              )
+            })}
+          {fit && draggable && (
+            <MoveHandles
+              at={draggable.transform.translate}
+              fit={fit}
+              onPreview={setDragOffset}
+              onCommit={(next) => onMove(draggable.id, {
+                ...draggable.transform, translate: next,
+              })}
+              setControlsEnabled={setOrbit}
+            />
+          )}
           <CameraControls
             ref={controlsRef as never}
+            enabled={orbit}
             makeDefault
             minDistance={0.08}
             maxDistance={50}
@@ -160,8 +203,19 @@ export function AssemblyViewport({
         </div>
       )}
 
+      {/* Said where the handles would have been, rather than left as an
+          absence: a selected part with no gizmo reads as a broken gizmo. */}
+      {drivenSelection && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5
+                        text-[10px] text-cad-accent-hot bg-cad-panel/85 backdrop-blur-sm
+                        px-2.5 py-1 rounded-sm border border-cad-accent/30 pointer-events-none">
+          <Link2 size={11} /> A mate positions this part — remove the mate to drag it
+        </div>
+      )}
+
       <div className="tabular absolute bottom-3 left-3 text-[10px] text-cad-text bg-cad-panel/70 backdrop-blur-sm px-2.5 py-1 rounded-sm border border-cad-border">
         L-drag rotate · R-drag pan · scroll zoom · click a part to select
+        {selected && !drivenSelection && ' · drag an arrow to move it'}
       </div>
     </div>
   )

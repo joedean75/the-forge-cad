@@ -52,6 +52,10 @@ _UNIT_SUFFIX = {"m": "metres", "deg": "degrees", "mm": "millimetres"}
 UNIT_BY_NAME: Dict[str, str] = {
     # lengths, metres
     "radius": "m", "base_radius": "m", "bend_radius": "m", "depth": "m",
+    # A thread is named by its major *diameter* — M8 is 8 mm across, not 8 mm
+    # of radius — so `add_thread` takes the number everybody already knows
+    # rather than renaming it to match the primitives next door.
+    "diameter": "m",
     "height": "m", "thickness": "m", "size": "m", "width": "m", "length": "m",
     "offset": "m", "offset_a": "m", "offset_b": "m", "spacing": "m",
     "center": "m", "distance": "m", "translate": "m", "path": "m",
@@ -65,6 +69,8 @@ UNIT_BY_NAME: Dict[str, str] = {
     "radius_end": "m", "neutral_offset": "m",
     # helices: the coil, the wire wound on it, and the rise per turn
     "helix_radius": "m", "wire_radius": "m", "pitch": "m",
+    # knit: how far apart two edges may be and still be the same edge
+    "tolerance": "m",
     # a mate connector's frame origin, in part space
     "origin": "m",
     # angles
@@ -152,6 +158,20 @@ UNITLESS = frozenset({
     "template",
     # the purchased-parts listing: which portal an imported part came from
     "source",
+    # in-context design: the document a reference reads, which of its features
+    # it names, and which released revision it is pinned to. Ids and a letter,
+    # like `part_id` and `revision` above — `entities` is a list of ids, not of
+    # lengths, which is why it belongs here and not in `COMPONENTS`.
+    "document_id", "entities",
+    # `mounting_pattern`: which named bolt pattern to drill. A name, like
+    # `template` and `kind` above — the dimensions behind it are the catalog's.
+    "pattern",
+    # `prop_clearance`: component ids to treat as rotors. A list of ids, like
+    # `edges` and `faces` — what it names carries the dimension, not this.
+    "props",
+    # `trim`: which side of the plane survives. A name, and deliberately not a
+    # sign — see the operation.
+    "keep",
 })
 
 

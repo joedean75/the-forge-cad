@@ -20,6 +20,23 @@ Three pieces of arithmetic, none of them optional:
   when nothing is turned, which is exactly the case the mate connectors were
   added to stop being true.
 
+**A purchased part weighs what the catalog says, not what its envelope does.**
+A catalog part is a solid envelope, and for a motor — laminations, windings and
+air — that envelope weighs nearly twice the motor. `mass_budget` is the number
+an airframe is checked against, so `part_mass` decides which figure to trust and
+every row states its `mass_source` and `mass_basis`.
+
+**The tensor is scaled with the mass, and that is a choice with a rejected
+alternative.** For a body of fixed geometry the inertia is linear in density, so
+correcting a motor from its steel-block envelope to its published mass is
+exactly a multiply by the ratio — under a uniform-density assumption the
+envelope had already made. Leaving the tensor alone was the other candidate, on
+the grounds that a motor's mass sits in its stator rather than spread through
+the bell; it was rejected because it is the incoherent middle, a 350 g motor
+carrying a 669 g motor's second moment. Neither is the truth, which needs a mass
+distribution the catalog does not carry — so the scale factor is reported per
+row (`inertia_scale`) and noted, rather than being silent either way.
+
 **Scale is refused rather than approximated.** A component scaled by `s` has
 `s³` the mass and `s⁵` the inertia, and the material density is a property of
 the material rather than of the instance — so a scaled instance is a different

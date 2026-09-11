@@ -195,6 +195,16 @@ class DerivedCache(BaseModel):
     # "brep" is exact OpenCascade geometry; "native"/"numpy" are the two
     # signed-distance-field samplers.
     sampler: Optional[Literal["brep", "native", "numpy"]] = None
+    # What kind of body this is. A `solid` bounds a volume; a `sheet` is surface
+    # with no inside, which is the point of it rather than a defect. Defaulted
+    # rather than optional, deliberately: every document stored before surfaces
+    # existed holds a solid, and a reader that takes `None` for "unknown" would
+    # have to decide what to do about it on every path.
+    body_kind: Literal["solid", "sheet"] = "solid"
+    # Surface area of the tessellation, m². The number that stands in for volume
+    # on a sheet, and worth having on a solid too — it is what a coating, a
+    # finish or a heat-transfer estimate is quoted against.
+    area: float = 0.0
     mesh_hash: Optional[str] = None
     # The feature tree with its parameter *expressions* substituted — the same
     # nodes and the same ids, but every `"=length/2"` replaced by the number it
@@ -552,6 +562,16 @@ class AssemblyMate(BaseModel):
     base_face: Literal["min", "max", "center"] = "max"
     moved_face: Literal["min", "max", "center"] = "min"
     offset_mm: float = 0.0
+    #: Where the mate sits inside the rotation it leaves free, in degrees about
+    #: the connectors' shared axis. A revolute mate is a hinge, and a hinge has
+    #: a position; without this it always landed at the connectors' own
+    #: alignment, so a door could be mated but never opened. Only meaningful
+    #: for a connector mate whose type leaves a rotation about that axis free
+    #: (`assembly_mates.DRIVEN_ROTATION`) — anywhere else it would be a
+    #: violation of the constraint rather than a pose within it, and `add_mate`
+    #: refuses it. Driving it does **not** consume the degree of freedom: it
+    #: picks a value inside one.
+    angle_deg: float = 0.0
     #: Feature ids of a `MateConnectorFeature` in each part. Both or neither:
     #: one alone has nothing to align against, so the mate falls back to the
     #: bounding-box path and the caller is told rather than left guessing.

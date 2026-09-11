@@ -1,10 +1,12 @@
 # Tier 1 roadmap — eight sprints against the competitive gaps
 
-> **S1–S6 shipped; the remaining order is superseded.** The product is now aimed
-> at RC, drone and robotics work, which re-ranks what is left —
-> see [`RC-DRONE-ROBOTICS.md`](RC-DRONE-ROBOTICS.md). Surfacing (S7) and
-> in-context design (S8) are still real gaps and are still planned in full
-> below; they are no longer next.
+> **All eight sprints have shipped.** The order below was superseded partway
+> through — the product is now aimed at RC, drone and robotics work, which
+> re-ranked what was left (see [`RC-DRONE-ROBOTICS.md`](RC-DRONE-ROBOTICS.md)) —
+> so S7 and S8 landed after that roadmap's first sprints rather than before
+> them. The plans are kept as written, because what each sprint was *for* is
+> still the argument for the code that exists; the Progress table at the bottom
+> records what actually landed.
 
 Source: [`docs/COMPETITIVE-GAPS.md`](../COMPETITIVE-GAPS.md). Tier 1 is the set
 of gaps that make real parts **impossible to build** — not merely awkward. This
@@ -329,12 +331,12 @@ one that is not.
 |---|---|---|
 | S1 Hole types | **done** | Counterbore, countersink, drill point, through, tapped; `add_hole`; `clearance_hole` rebuilt as one feature. Geometry enumerated once in `geom/holes.py` for all three samplers. |
 | S2 Draft, rib, variable fillet | **done** | `DraftFeature` (exact-only, frustum-exact to 1e-5), `RibFeature` (both kernels, `geom/ribs.py`), `radius_end` on `EdgeFilletFeature`. |
-| S3 Helix and thread | **part** | `HelixFeature` + `add_helix`, exact to 0.1%. Thread deferred — see the section above for the two OCC findings. |
+| S3 Helix and thread | **done** | `HelixFeature` + `add_helix`, exact to 0.1%. `ThreadFeature` + `add_thread` landed later: a helical rib fused onto a minor-diameter core, exact to 2e-4 from M2 to M12, built in millimetres because the identical construction returns a zero-volume solid at metre scale. |
 | S4 Pattern types | **done** | `curve` and `table` kinds; placements unified into `geom/patterns.py`, which removes the "the SDF does it this way so we match" duplication. |
 | S5 Mate connectors | **done** | `MateConnectorFeature` (bodyless), `add_mate_connector` / `list_mate_connectors`, six kinematic mate types built on frame alignment, and a `dof` operation. The legacy four are byte-identical. |
 | S6 Ceilings | **done** | Sketch bound re-shaped onto `entities × constraints` with a warning band; FEA budget scaled to the thinnest dimension; text-to-assembly 6→16 parts and its truncation reported; STEP/IGES to 128 MB. |
-| S7 Surfacing | — | |
-| S8 In-context design | — | |
+| S7 Surfacing | **done** | `body_kind` (`solid` \| `sheet`) carried on `Solid.attrs` and `DerivedCache` and honoured by `mass_properties`, `geometry_check`, `design_spec` and `observation`; `SurfaceFeature` (extrude/revolve/loft/fill) plus `knit` / `thicken` / `trim`. `brep.free_edges` counts edges belonging to one face, because `ShapeAnalysis_Shell.HasFreeEdges` says a shell with a missing cap is closed. |
+| S8 In-context design | **done** | `DerivedFeature` + `add_derived` / `list_derived`, resolved into the source's own features before evaluation; ids prefixed `{derived_id}~{source_id}` with references rewritten; cycles refused at the operation *and* at resolution; `_evaluation_key` folds in each unpinned source's key recursively; access checked against the deriving document's owner. Exit met: an enclosure top and bottom extruding one shared sketch at their own thicknesses, both following an edit to the parent. |
 
 **A pattern across S1, S2 and S4 worth naming.** Each sprint ended by moving
 geometry that two kernels had been computing separately into one `geom/` module

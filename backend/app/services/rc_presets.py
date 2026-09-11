@@ -115,14 +115,18 @@ GROUPS: Dict[str, List[Dict[str, Any]]] = {
               "with the pinion this sets the reduction; larger spurs need the "
               "centre distance checked against the chassis"),
     ],
+    # The values are `parts_catalog.SERVOS` keys, and the test holds them to
+    # it: a preset naming a class the catalog cannot build is a suggestion
+    # nobody can place.
     "servo": [
-        _std("micro", "micro-9g", "form factor", "de-facto case standard",
-             "the 9 g micro case: 22.8 x 12.2 x 22.5 mm, tabs 32.5 mm apart"),
-        _std("sub_micro", "sub-micro", "form factor", "de-facto case standard",
-             "smaller again, for a 1/24 or a tight 1/16 front end"),
-        _std("standard_case", "standard", "form factor", "de-facto case standard",
-             "the Futaba-derived case; heavy for 1/16 but it is what a "
-             "high-torque steering servo comes in"),
+        _std("micro", "micro", "servo class", "de-facto case standard",
+             "the 9 g micro class: 22.8 x 12.2 mm case, ears 28 mm apart"),
+        _std("mini", "mini", "servo class", "de-facto case standard",
+             "32.5 x 16.8 mm case, ears 41 mm apart — for a 1/16 or a tight "
+             "1/10 front end"),
+        _std("standard_case", "standard", "servo class", "de-facto case standard",
+             "the 40.5 x 20 mm Futaba-derived case, ears 49.5 mm apart; heavy "
+             "for 1/16 but it is what a high-torque steering servo comes in"),
     ],
 }
 

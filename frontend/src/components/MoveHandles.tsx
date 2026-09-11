@@ -9,17 +9,18 @@ type Vec3 = [number, number, number]
 type Fit = { s: number; toDisplay: (p: Vector3) => Vec3 }
 
 /**
- * Drag the selected feature along an axis, and commit **one** operation.
+ * Drag something along an axis, and commit **one** operation.
  *
- * The whole edit was already expressible — `set_feature_params` with a new
- * centre — and what was missing was a way to say it with a mouse. Three
- * decisions carry the rest of the design:
+ * Used by both viewports, and deliberately knows about neither. What it is
+ * handed is a point in the subject's own metres and a callback taking the point
+ * it ends at; a *feature's* centre and a *component's* placement are the same
+ * question asked of two different things, and writing the gizmo twice would
+ * mean two answers to "how far did that go" that agree until one of them is
+ * touched. The caller supplies the preview, because that is where the two
+ * genuinely differ — see `DocumentViewport` and `AssemblyViewport`.
  *
- * - **The drag previews the selection outline, not the body.** Moving the
- *   rendered mesh would be a lie: one feature is moving, and the union of it
- *   with everything else is not that mesh translated. The proxy outline the
- *   selection already draws *is* that feature, so it moves and the body follows
- *   on release.
+ * Three decisions carry the rest of the design:
+ *
  * - **One operation on release, never one per mouse-move.** A drag is hundreds
  *   of pointer events; committing each would be hundreds of server round trips
  *   and, worse, hundreds of rows in the trajectory recording — a corpus in
@@ -28,6 +29,9 @@ type Fit = { s: number; toDisplay: (p: Vector3) => Vec3 }
  *   a 60-pixel arrow is the normal case, not the exception, and scene-graph
  *   pointer events stop arriving the moment it does. Only the *grab* comes from
  *   the scene; after that the ray is rebuilt from the raw client coordinates.
+ * - **Nothing is committed for a drag that did not move.** A click on a handle
+ *   that never travels is a click, and an operation whose delta is zero is a
+ *   row in the history saying nothing happened.
  */
 
 /** Which param holds this feature's position, and what it currently is. */
@@ -63,34 +67,35 @@ function alongAxis(ray: THREE.Ray, origin: THREE.Vector3, dir: THREE.Vector3): n
 type Drag = { axis: 'x' | 'y' | 'z'; dir: Vec3; from: number; delta: number }
 
 export function MoveHandles({
-  node,
+  at,
   fit,
   onPreview,
   onCommit,
   setControlsEnabled,
 }: {
-  node: FeatureNode
+  /** Where the thing being moved currently is, in the subject's own metres. */
+  at: Vector3
   fit: Fit
-  /** Live offset in part metres while dragging, or null when it ends. */
+  /** Live offset in those metres while dragging, or null when it ends. */
   onPreview: (offset: Vector3 | null) => void
-  onCommit: (key: string, next: Vector3) => void
+  /** Where it ended up. Called once, on release, and never for a zero drag. */
+  onCommit: (next: Vector3) => void
   setControlsEnabled: (on: boolean) => void
 }) {
   const { camera, gl } = useThree()
-  const anchor = movableCenter(node)
   const [drag, setDrag] = useState<Drag | null>(null)
 
   const origin = useMemo<Vec3>(
-    () => (anchor ? fit.toDisplay(anchor.at) : [0, 0, 0]),
+    () => fit.toDisplay(at),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [anchor?.at.x, anchor?.at.y, anchor?.at.z, fit],
+    [at.x, at.y, at.z, fit],
   )
 
   // Held in refs because the window listeners below are installed once per drag
   // and must see the current values without being torn down and rebuilt on
   // every pointer move.
-  const state = useRef({ drag, origin, anchor, fit, onPreview, onCommit, setControlsEnabled })
-  state.current = { drag, origin, anchor, fit, onPreview, onCommit, setControlsEnabled }
+  const state = useRef({ drag, origin, at, fit, onPreview, onCommit, setControlsEnabled })
+  state.current = { drag, origin, at, fit, onPreview, onCommit, setControlsEnabled }
 
   useEffect(() => {
     if (!drag) return
@@ -108,10 +113,10 @@ export function MoveHandles({
     const onMove = (event: PointerEvent) => {
       const now = state.current
       if (!now.drag) return
-      const at = alongAxis(rayAt(event), new THREE.Vector3(...now.origin),
-                           new THREE.Vector3(...now.drag.dir))
-      if (at === null) return
-      const delta = at - now.drag.from
+      const along = alongAxis(rayAt(event), new THREE.Vector3(...now.origin),
+                              new THREE.Vector3(...now.drag.dir))
+      if (along === null) return
+      const delta = along - now.drag.from
       setDrag({ ...now.drag, delta })
       const shift = delta / now.fit.s
       now.onPreview({
@@ -127,12 +132,12 @@ export function MoveHandles({
       now.onPreview(null)
       now.setControlsEnabled(true)
       document.body.style.cursor = ''
-      if (!now.drag || !now.anchor || Math.abs(now.drag.delta) < 1e-9) return
+      if (!now.drag || Math.abs(now.drag.delta) < 1e-9) return
       const shift = now.drag.delta / now.fit.s
-      now.onCommit(now.anchor.key, {
-        x: now.anchor.at.x + (now.drag.axis === 'x' ? shift : 0),
-        y: now.anchor.at.y + (now.drag.axis === 'y' ? shift : 0),
-        z: now.anchor.at.z + (now.drag.axis === 'z' ? shift : 0),
+      now.onCommit({
+        x: now.at.x + (now.drag.axis === 'x' ? shift : 0),
+        y: now.at.y + (now.drag.axis === 'y' ? shift : 0),
+        z: now.at.z + (now.drag.axis === 'z' ? shift : 0),
       })
     }
 
@@ -147,8 +152,6 @@ export function MoveHandles({
     // Installed once when a drag starts; `state` carries everything that moves.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [!!drag, camera, gl])
-
-  if (!anchor) return null
 
   // Sized in display units so the handles stay the same size on screen whatever
   // the part measures — the same reason the sketch canvas scales its strokes by
@@ -169,11 +172,11 @@ export function MoveHandles({
 
   const begin = (axis: 'x' | 'y' | 'z', dir: Vec3) => (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation()
-    const at = alongAxis(event.ray, new THREE.Vector3(...origin), new THREE.Vector3(...dir))
-    if (at === null) return
+    const along = alongAxis(event.ray, new THREE.Vector3(...origin), new THREE.Vector3(...dir))
+    if (along === null) return
     setControlsEnabled(false)
     document.body.style.cursor = 'grabbing'
-    setDrag({ axis, dir, from: at, delta: 0 })
+    setDrag({ axis, dir, from: along, delta: 0 })
   }
 
   return (

@@ -9,6 +9,7 @@ import { CopilotPanel } from '../components/CopilotPanel'
 import { FailureNotice } from '../components/FailureNotice'
 import { ShortcutSheet } from '../components/ShortcutSheet'
 import { ModeSpine } from '../components/ModeSpine'
+import { PanelRail, usePanelCollapse } from '../components/PanelRail'
 import { DocumentViewport } from '../components/DocumentViewport'
 import { FeatureTreePanel } from '../features/tree/FeatureTreePanel'
 import { ModelInspector } from '../features/model/ModelInspector'
@@ -174,6 +175,8 @@ export function EditorScreen() {
   const peers = useCollab(docId)
   const narrow = useNarrow()
   const [pane, setPane] = useState<Pane>('model')
+  const [treeHidden, toggleTree] = usePanelCollapse('editor.tree')
+  const [inspectorHidden, toggleInspector] = usePanelCollapse('editor.inspector')
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const runOp = useDocumentStore((s) => s.runOp)
   const startSketchPick = useDocumentStore((s) => s.startSketchPick)
@@ -198,9 +201,23 @@ export function EditorScreen() {
       {narrow && <PaneSwitcher pane={pane} onPick={setPane} />}
       <div className="relative flex flex-1 min-h-0">
         <ModeSpine />
-        <Column show={pane === 'tree'} fill={narrow}><FeatureTreePanel /></Column>
+        {/* Collapsing is a *wide*-screen answer and narrow mode already has its
+            own: one pane at a time. Offering both would let someone collapse
+            the only column on screen. */}
+        <Column show={pane === 'tree'} fill={narrow}>
+          {(narrow || !treeHidden) && <FeatureTreePanel />}
+        </Column>
+        {!narrow && (
+          <PanelRail side="left" label="Tree" collapsed={treeHidden} onToggle={toggleTree} />
+        )}
         <Column show={pane === 'model'} fill={narrow}><DocumentViewport /></Column>
-        <Column show={pane === 'inspector'} fill={narrow}><RightPanel /></Column>
+        {!narrow && (
+          <PanelRail side="right" label="Inspector" collapsed={inspectorHidden}
+                     onToggle={toggleInspector} />
+        )}
+        <Column show={pane === 'inspector'} fill={narrow}>
+          {(narrow || !inspectorHidden) && <RightPanel />}
+        </Column>
         {/* Over the whole editor row rather than inside a panel: a failure from
             the ribbon and one from the inspector are the same kind of news. */}
         <FailureNotice />

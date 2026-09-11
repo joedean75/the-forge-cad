@@ -61,12 +61,28 @@ def owners_for(solid: Any, mesh: Any, tree: dict, resolution: int = 128
     """One feature id (or None) per triangle of ``mesh``, or None if unknowable."""
     recorded = (getattr(solid, "attrs", None) or {}).get("triangle_owners")
     if recorded is not None and len(recorded) == len(mesh.faces):
-        return list(recorded)
+        return _attributed(list(recorded))
     try:
-        return _owners_from_fields(tree, mesh, resolution)
+        return _attributed(_owners_from_fields(tree, mesh, resolution))
     except Exception as exc:  # noqa: BLE001 — provenance is a nicety, never a failure
         _LOGGER.debug("triangle ownership unavailable: %s", exc)
         return None
+
+
+def _attributed(owners: Optional[List[Optional[str]]]) -> Optional[List[Optional[str]]]:
+    """Read a grafted id back to the reference that brought it in.
+
+    A `DerivedFeature` resolves to features of *another* document, so a triangle
+    honestly owned by one of them names an id this document's tree does not
+    contain — and a selection that finds nothing is worse than a coarser one
+    that finds the feature a user can actually edit. The prefix is exactly that
+    feature (`derived_service.source_feature`).
+    """
+    from app.services.derived_service import source_feature
+
+    if owners is None:
+        return None
+    return [(source_feature(o) or o) if o else o for o in owners]
 
 
 def _leaves(tree: dict) -> List[dict]:

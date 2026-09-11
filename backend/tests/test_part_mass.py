@@ -13,6 +13,8 @@ together**, and `unknown` is a real answer rather than a confident zero.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -247,8 +249,8 @@ def test_the_cg_moves_when_a_heavy_component_is_weighed_correctly():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("key", [
-    "servo-micro-9g", "servo-standard", "bldc-2205", "bldc-2807",
-    "board-30x30-flight", "board-20x20-esc", "shaft-3-50",
+    "servo-micro", "servo-standard", "bldc-2207", "bldc-2807",
+    "fc-30.5", "esc-4in1-20", "shaft-3-50",
 ])
 def test_every_new_rc_entry_builds_a_body(key):
     entry = parts_catalog.by_key(key)
@@ -259,33 +261,40 @@ def test_every_new_rc_entry_builds_a_body(key):
     assert doc.derived.volume > 0
 
 
-def test_a_form_factor_carries_a_mass_only_where_its_name_states_one():
-    """A "9 g servo" is called that because of what it weighs. A 2205 motor's
-    mass is set by the winding, and two of them differ by 40% — a figure there
-    would be a guess with a decimal point on it."""
-    assert parts_catalog.by_key("servo-micro-9g").typical_mass_g == 9.0
-    assert parts_catalog.by_key("bldc-2205").typical_mass_g is None
+def test_a_class_mass_is_a_default_and_the_configured_one_wins():
+    """A servo class and a motor size both carry a typical mass — as a
+    parameter default, not a fact, because two 2207s differ by more than a
+    tenth with the winding. So the figure a reference *configures* is the one
+    that answers: `bldc-2207?mass_g=35` is a 35 g motor, and reading the
+    entry's 32 g default for it would report the class instead of the part."""
+    assert parts_catalog.by_key("servo-micro").typical_mass_g == 9.0
+    assert parts_catalog.by_key("bldc-2207").typical_mass_g == 32.0
 
-    motor = standard_parts.document_for_key("bldc-2205", owner_id=None)
-    fact = part_mass.for_document(motor)
-    # It has a body, so the geometric figure is what there is — and the report
-    # says that is what it is rather than implying it is the motor's mass.
-    assert fact.source == part_mass.GEOMETRIC
-    assert "record" in parts_catalog.by_key("bldc-2205").notes
-
-
-def test_the_servo_case_matches_the_form_factor_it_names():
-    size = parts_catalog.envelope_mm(parts_catalog.by_key("servo-micro-9g"))
-    v = parts_catalog.SERVOS["micro-9g"]
-    # The tabs are the widest thing on the case, so they set the long extent.
-    assert size["x"] == pytest.approx(v.tab_span + 8.0, abs=0.1)
-    assert size["y"] == pytest.approx(v.body_w, abs=0.1)
+    ref = parts_catalog.make_ref("bldc-2207", {"mass_g": 35})
+    assert parts_catalog.published_mass_g(ref) == 35.0
+    kg, basis = part_mass.catalog_mass(SimpleNamespace(catalog_ref=ref, owner_id=None))
+    assert kg * 1000.0 == pytest.approx(35.0)
+    assert "2207" in basis
 
 
-def test_a_bldc_envelope_is_built_from_its_stator_code():
-    assert parts_catalog.BLDC["2205"].stator_dia == 22.0
-    assert parts_catalog.BLDC["2205"].stator_h == 5.0
-    assert parts_catalog.BLDC["2807"].stator_dia == 28.0
+def test_the_servo_case_matches_the_class_it_names():
+    size = parts_catalog.envelope_mm(parts_catalog.by_key("servo-micro"))
+    s = parts_catalog.SERVOS["micro"]
+    # The ears are the widest thing on the case, so they set the long extent.
+    assert size["x"] == pytest.approx(s.overall_l, abs=0.1)
+    assert size["y"] == pytest.approx(s.body_w, abs=0.1)
+
+
+def test_a_bldc_envelope_is_the_bell_not_the_stator_its_code_names():
+    """The code names the stator — 22 mm for a 2207 — and the stator sits inside
+    the bell. An envelope sized from the code would let a clearance check pass
+    a prop guard straight through the can."""
+    size = parts_catalog.envelope_mm(parts_catalog.by_key("bldc-2207"))
+    m = parts_catalog.MOTORS["2207"]
+    assert size["x"] == pytest.approx(m.bell_dia, abs=0.1)
+    assert size["y"] == pytest.approx(m.bell_dia, abs=0.1)
+    assert m.bell_dia > 22.0
+    assert parts_catalog.MOTORS["2807"].bell_dia > m.bell_dia
 
 
 def test_a_battery_is_a_declared_envelope_with_its_electrical_record():

@@ -949,6 +949,15 @@ def _sdf_import(f):
 # Feature type name -> builder. Keyed by name rather than class so this table
 # needs no imports and cannot drift from the feature registry; adding a feature
 # means adding one line here.
+def _sdf_derived(f) -> SDF:
+    from app.cad_kernel.ops.derived import DerivedNotResolved
+
+    raise DerivedNotResolved(
+        f"derived feature {getattr(f, 'id', '?')} reached the evaluator — it "
+        f"names geometry in document {getattr(f, 'document_id', '?')!r} and is "
+        f"resolved into that document's own features before evaluation")
+
+
 _SDF_BUILDERS = {
     "BoxFeature": _sdf_box,
     "SphereFeature": _sdf_sphere,
@@ -985,6 +994,19 @@ _SDF_BUILDERS = {
     # unwraps the point into helical coordinates and drops the tangential term,
     # which is an approximation that is worst exactly where the pitch matters.
     "HelixFeature": _sdf_needs_exact_kernel,
+    # A thread is a helical surface, and the field-side approximation drops the
+    # tangential term exactly where the pitch is the interesting part.
+    "ThreadFeature": _sdf_needs_exact_kernel,
+    # A sheet has no field form at all, and that is not a gap in this table. A
+    # signed distance field has a sign everywhere, so it always bounds a volume;
+    # a surface with no inside is exactly what it cannot describe.
+    "SurfaceFeature": _sdf_needs_exact_kernel,
+    # Sewing, offsetting and trimming a surface are all questions about faces
+    # and edges, which a sampled field does not have — the same reason the edge
+    # treatments are here.
+    "KnitFeature": _sdf_needs_exact_kernel,
+    "ThickenFeature": _sdf_needs_exact_kernel,
+    "TrimFeature": _sdf_needs_exact_kernel,
     "FaceShellFeature": _sdf_needs_exact_kernel,
     "BrepBodyFeature": _sdf_needs_exact_kernel,
     "RuledLoftFeature": _sdf_needs_exact_kernel,
@@ -1001,6 +1023,12 @@ _SDF_BUILDERS = {
     # Same contract: a coordinate frame, pruned before evaluation, and this
     # entry exists to name it if the pruning is ever missed.
     "MateConnectorFeature": _sdf_datum_plane,
+    # A derived reference names geometry in *another* document, which
+    # `services/derived_service.resolve` splices in as ordinary features before
+    # anything evaluates. Same reason as the three above: reaching here means
+    # the resolution was skipped, and a builder that invented a body would hide
+    # that behind a part which is quietly not the one that was asked for.
+    "DerivedFeature": _sdf_derived,
 }
 
 

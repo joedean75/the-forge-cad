@@ -24,6 +24,18 @@ spherical. Those are reported as unsupported and emitted `fixed`, with the
 substitution named in the result — a joint that silently loses a degree of
 freedom is a robot that behaves differently in simulation than the one on the
 bench, which is the single failure this whole file exists to avoid.
+
+**A driven `angle_deg` is a joint state on an articulated joint and part of the
+geometry on a fixed one, and it is written to whichever of those it is.** A
+URDF joint's `<origin>` is its *zero* configuration; baking a hinge's current
+angle into it would move the zero of the machine every time somebody swung the
+door in the viewport, and the simulator commanding q=0 would then get the door
+open. So for `continuous`, `prismatic` and `planar` the origin stays at the
+connectors' alignment and the angle is reported in `driven`, which is where a
+caller writing a `joint_states` message finds it. A `cylindrical` or `ball` mate
+is emitted `fixed` and a fixed joint has no state to carry anything, so there
+the angle **is** baked in — dropping it would put the part somewhere the
+assembly says it is not, permanently and with no way to correct it downstream.
 """
 
 from __future__ import annotations
@@ -79,6 +91,18 @@ def _rpy(rotation: np.ndarray) -> Tuple[float, float, float]:
     return tuple(math.radians(v) for v in _euler_degrees(rotation))     # type: ignore[return-value]
 
 
+def _spin(angle_deg: float) -> np.ndarray:
+    """The mate's driven rotation about its own axis, in the base frame.
+
+    The same rotation `assembly_mates._spin` composes. Imported rather than
+    re-derived, so a change to the joint convention cannot land in one file and
+    not the other.
+    """
+    from app.services.assembly_mates import _spin as spin
+
+    return spin(angle_deg)
+
+
 def _frames(asm) -> Dict[str, Dict[str, Any]]:
     return assembly_service.connector_frames(asm)
 
@@ -126,6 +150,10 @@ def export_urdf(asm_id: str, *, name: Optional[str] = None,
 
     warnings: List[str] = []
     unsupported: List[Dict[str, str]] = []
+    #: Joints whose mate is driven to a non-zero pose. Not a warning and not
+    #: unsupported — the URDF is correct, it just describes the zero pose, and
+    #: this is the state a caller has to send to see the assembly it exported.
+    driven: List[Dict[str, Any]] = []
 
     # ---- links -------------------------------------------------------------
     links: List[str] = []
@@ -206,11 +234,27 @@ def export_urdf(asm_id: str, *, name: Optional[str] = None,
         if base_frame is not None and moved_frame is not None:
             (base_origin, base_rotation) = base_frame
             (moved_origin, moved_rotation) = moved_frame
-            rotation = base_rotation @ moved_rotation.T
+            # An articulated joint's origin is its zero pose and the driven
+            # angle is state; a `fixed` joint has nowhere to put state, so the
+            # angle has to go into the geometry or be lost. See the module
+            # docstring — this is the one line that decides which.
+            angle = float(getattr(mate, "angle_deg", 0.0) or 0.0)
+            spin = _spin(angle if urdf_type == "fixed" else 0.0)
+            placed = base_rotation @ spin
+            rotation = placed @ moved_rotation.T
             origin = (base_origin
-                      + base_rotation @ np.array([0.0, 0.0, mate.offset_mm / MM])
+                      + placed @ np.array([0.0, 0.0, mate.offset_mm / MM])
                       - rotation @ moved_origin)
             rpy = _rpy(rotation)
+            if angle and urdf_type != "fixed":
+                driven.append({
+                    "joint": _safe(mate.id, f"joint_{len(joints)}"),
+                    "mate_id": mate.id, "type": mate.type,
+                    "urdf_type": urdf_type,
+                    "angle_deg": angle,
+                    "note": ("the URDF origin is this joint's zero pose; the "
+                             "angle is a joint state, not part of the model"),
+                })
             # `<axis>` is expressed in the joint frame, and the joint frame is
             # the child's — so the mate axis reduces to the *moved* connector's
             # own z, which is what makes this a one-column read rather than a
@@ -272,5 +316,6 @@ def export_urdf(asm_id: str, *, name: Optional[str] = None,
         "links": len(links),
         "joints": len(joints),
         "unsupported": unsupported,
+        "driven": driven,
         "warnings": warnings,
     }

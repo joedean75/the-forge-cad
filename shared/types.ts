@@ -194,6 +194,15 @@ export interface DerivedCache {
   bbox?: BBox
   mass: number
   volume: number
+  /** What kind of body this is. A sheet's `mass` and `volume` are zero because
+   *  it has neither, not because nothing is assigned — read this before either.
+   *  Defaulted rather than optional: every document stored before surfaces
+   *  existed holds a solid, and a reader taking `undefined` for "unknown" would
+   *  have to decide what to do about it on every path. */
+  body_kind: BodyKind
+  /** Surface area of the tessellation, m². The number that stands in for volume
+   *  on a sheet, and worth having on a solid too. */
+  area: number
   /** The conditions the geometry was produced under. Two meshes are only
    *  comparable when these match. */
   resolution?: number
@@ -763,7 +772,16 @@ export interface MaterialCategory {
   count: number
 }
 
+/** What a body is. A `solid` bounds a volume; a `sheet` is surface with no
+ *  inside, which is the point of it rather than a defect. Stated on every body
+ *  rather than inferred: an open shell and a closed one are the same triangles,
+ *  and reading a zero mass as "no material assigned" is the wrong conclusion. */
+export type BodyKind = 'solid' | 'sheet'
+
+/** Mass properties of a solid. A sheet answers with `SheetProperties` instead —
+ *  switch on `kind`, never on whether `mass_kg` is present. */
 export interface MassProperties {
+  kind: 'solid'
   material: { id: string; name: string; density: number }
   volume_cm3: number
   mass_kg: number
@@ -771,6 +789,20 @@ export interface MassProperties {
   center_of_mass_mm: number[]
   inertia_kg_mm2: number[][]
   bbox_mm: { min: number[]; max: number[]; size: number[] }
+}
+
+/** A body with no enclosed volume has no volume, no mass and no inertia tensor.
+ *  Those keys are absent rather than zero — a zero mass invites "assign a
+ *  material", and there is no material that gives a surface a weight. */
+export interface SheetProperties {
+  kind: 'sheet'
+  material: { id: string; name: string; density: number }
+  surface_area_cm2: number
+  /** Of the *area*: a sheet has no mass to have a centre of. */
+  centroid_mm: number[]
+  bbox_mm: { min: number[]; max: number[]; size: number[] }
+  exact: boolean
+  note: string
 }
 
 export interface DocumentSummary {
@@ -1000,6 +1032,14 @@ export interface AssemblyMate {
   base_face: 'min' | 'max' | 'center'
   moved_face: 'min' | 'max' | 'center'
   offset_mm: number
+  /**
+   * Where the mate sits inside the rotation it leaves free, about the
+   * connectors' shared axis. A hinge has an angle; without this one a door
+   * could be mated and never opened. Only for a type that leaves a rotation
+   * about that axis free (revolute, cylindrical, planar, ball, parallel), and
+   * driving it does not consume the degree of freedom.
+   */
+  angle_deg: number
   /** Feature ids of a MateConnectorFeature in each part. Both or neither. */
   base_connector?: string | null
   moved_connector?: string | null
@@ -1019,6 +1059,40 @@ export interface DofReport {
   dof: number
   over_constrained: string[]
   grounded: string[]
+}
+
+/**
+ * One reference this document makes to another document's geometry, from
+ * `list_derived`. `resolves` is the interesting half: a reference that works is
+ * invisible — the body is simply right — but a source that was deleted, had the
+ * named feature removed, or was un-shared leaves a document that still opens
+ * and no longer means what it says.
+ */
+export interface DerivedReference {
+  feature_id: string
+  name?: string | null
+  document_id: string
+  /** A released revision letter, or null to follow the source as it stands. */
+  revision?: string | null
+  kind: 'body' | 'sketch'
+  /** Feature ids in the *source*. Empty means its whole body. */
+  entities: string[]
+  resolves: boolean
+  reason?: string | null
+  source_name?: string | null
+}
+
+/** A document that reads this one, from `list_derived`. */
+export interface DerivedDependent {
+  document_id: string
+  name?: string | null
+  owner_id?: string | null
+  references: { revision?: string | null }[]
+}
+
+export interface DerivedReport {
+  derives_from: DerivedReference[]
+  used_by: DerivedDependent[]
 }
 
 /** A named coordinate frame on a part, from `list_mate_connectors`. */
@@ -1051,6 +1125,8 @@ export interface InterferenceReport {
   clear: boolean
 }
 
+export type MassSource = 'override' | 'catalog' | 'geometric' | 'unknown'
+
 export interface BomLine {
   item: number
   part_number: string
@@ -1061,6 +1137,18 @@ export interface BomLine {
   unit_mass_g: number
   ext_mass_g: number
   ext_material_cost_usd: number
+  /** Where `unit_mass_g` came from, ranked most to least trustworthy — see
+   *  `services/part_mass.py`. `override` is a mass someone recorded on the part;
+   *  `catalog` is the published figure for a purchased part whose envelope
+   *  over-states it (a NEMA 17 modelled as solid steel weighs 672 g against a
+   *  real 350 g); `geometric` is volume times density; `unknown` is reported as
+   *  zero *with a reason* rather than as a confident 0.0. */
+  mass_source: MassSource
+  /** One readable line saying what the figure is based on. */
+  mass_basis: string
+  /** The geometric mass, when geometry exists and the source is not
+   *  `geometric` — so the size of the correction can be checked. */
+  geometric_mass_g?: number
   /** The referenced part document was deleted; the line is a placeholder. */
   missing: boolean
 }
@@ -1100,6 +1188,12 @@ export interface StandardPart {
   size_mm: Vector3
   /** Published mass, where the solid envelope is known to over-state it. */
   typical_mass_g?: number
+  /** What varies by manufacturer on this row, where tabling it would be
+   *  inventing it — a motor's bell diameter, a board's outline, a LiPo's
+   *  envelope. Pass values under `params` to `insertStandardPart`; anything
+   *  omitted takes the default. Absent on a row with one configuration, which
+   *  is everything generated from an ISO table. */
+  params?: Record<string, StandardPartParam>
   /** A search — deliberately not a claimed part number. */
   supplier_search: string
   // ── imported parts only ──
@@ -1111,9 +1205,26 @@ export interface StandardPart {
   created_at?: string
 }
 
+/** One configurable dimension of a catalog row. The unit is carried by the
+ *  parameter's name — `…_mm` millimetres, `…_in` inches, `mass_g` grams — and
+ *  repeated here so nothing has to parse it. `default` is a figure typical for
+ *  the class rather than a published dimension; `description` says so. */
+export interface StandardPartParam {
+  default: number
+  unit: string
+  min: number | null
+  max: number | null
+  /** Present when the parameter is a *choice* rather than a size — `threaded`
+   *  is 0 or 1. A range is no use to a caller whose only two answers are those,
+   *  and a number field would let them type a third. */
+  choices?: number[]
+  description: string
+}
+
 export type PartCategory =
   | 'fastener' | 'bearing' | 'motor' | 'extrusion'
-  | 'electronics' | 'pneumatic' | 'hardware' | 'other'
+  | 'electronics' | 'battery' | 'propeller' | 'stock'
+  | 'pneumatic' | 'hardware' | 'other'
 
 /** A portal an imported part can have come from. `search` is a query URL — a
  *  hyperlink out, never a fetch: no path in this system reaches into a portal

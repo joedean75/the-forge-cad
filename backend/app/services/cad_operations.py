@@ -71,8 +71,14 @@ _METRIC_SIZES = ("M2", "M2.5", "M3", "M4", "M5", "M6", "M8", "M10", "M12")
 # Same reasoning. The generated catalog only fills the first four; the rest
 # exist because an imported supplier part has to be filed somewhere, and
 # "electronics" is where a connector goes.
+# `battery`, `propeller` and `stock` are here because nothing already in the
+# list is what they are: a LiPo pack is not electronics, a propeller is not
+# hardware, and carbon sheet and tube are neither. Everything else in the RC
+# catalog fits — a brushless motor and a servo are motors, a flight controller
+# and an ESC are electronics, a standoff is hardware.
 _PART_CATEGORIES = ("fastener", "bearing", "motor", "extrusion", "electronics",
-                    "pneumatic", "hardware", "other")
+                    "battery", "propeller", "stock", "pneumatic", "hardware",
+                    "other")
 _PART_SOURCES = ("3dfindit", "traceparts", "grabcad", "manufacturer", "other")
 
 # `add_primitive` and `add_modifier` used to declare `params: {"type": "object"}`
@@ -100,6 +106,17 @@ _MODIFIER_TARGET = {"type": "string",
 
 #: The recess a hole has at its mouth. `simple` is a plain bore.
 _HOLE_TYPES = ("simple", "counterbore", "countersink")
+
+#: Named bolt patterns `mounting_pattern` can drill. Listed rather than derived
+#: from `parts_catalog` for the same reason `_METRIC_SIZES` is: the enum reaches
+#: the JSON Schema a constrained decoder is pointed at, and a schema that
+#: depends on an import cycle is a schema that is sometimes empty.
+#: `test_mounting_pattern` asserts the two lists still agree.
+_BOLT_PATTERN_NAMES = ("fc-30.5", "fc-20", "fc-16",
+                       "motor-12", "motor-16", "motor-19", "motor-25",
+                       "nema8", "nema11", "nema14", "nema17", "nema23",
+                       "nema34",
+                       "servo-standard", "servo-mini", "servo-micro")
 
 #: How a pattern places its copies. Imported rather than restated so the enum a
 #: constrained decoder reads and the kernel's own table cannot drift apart.
@@ -386,6 +403,186 @@ def _add_primitive(doc_id, args):
     return _combined(doc_id, prim, args, str(args["shape"]))
 
 
+@operation("add_surface", "mutate",
+           "Sweep a profile's outline into a **sheet** — surface with no "
+           "inside. add_extrude sweeps the profile's *face* and gives a solid "
+           "prism; this sweeps its *wire* and gives the walls without the caps, "
+           "which is the body you cap, knit and thicken. A document holding one "
+           "reports `body_kind: sheet`, and everything that needs an enclosed "
+           "volume — mass, inertia, a volume requirement in a spec — refuses it "
+           "by name rather than measuring a zero. Requires the exact kernel: a "
+           "distance field has a sign everywhere, so it always bounds a volume "
+           "and cannot describe a surface.",
+           {"kind": {"enum": ["extrude", "revolve", "loft", "fill"],
+                     "default": "extrude",
+                     "description": "extrude sweeps the outline along the plane "
+                                    "normal; revolve sweeps it about an axis; "
+                                    "loft runs a surface to a second outline; "
+                                    "fill is the flat cap a closed outline "
+                                    "bounds, which is what closes a tube"},
+            "profile": {"type": "object",
+                        "description": "{type:rect|circle|polygon|loops, ...} in "
+                                       "metres — the same profile add_extrude "
+                                       "takes"},
+            "profile_b": {"type": "object",
+                          "description": "loft only: the far section"},
+            "sketch": {"type": "string",
+                       "description": "a SketchFeature id from create_sketch, "
+                                      "in place of 'profile'"},
+            "plane": {"enum": ["xy", "xz", "yz"], "default": "xy",
+                      "description": "the base plane the 2D profile is drawn on"},
+            "offset": {"type": "number",
+                       "description": "where the outline sits along the plane "
+                                      "normal — for an extrude, where the sweep "
+                                      "is centred"},
+            "offset_b": {"type": "number", "default": 0.02,
+                         "description": "loft only: where the far section sits"},
+            "depth": {"type": "number", "default": 0.02,
+                      "description": "extrude only: how far the outline is swept"},
+            "axis": {**_VEC, "description": "revolve only: what it turns about"},
+            "center": {**_VEC, "description": "revolve only: a point on the axis"},
+            "angle": {"type": "number", "default": 360.0,
+                      "description": "revolve only: how far round"},
+            "ruled": {"type": "boolean", "default": True,
+                      "description": "loft only: straight between the sections, "
+                                     "or a smooth surface through them"},
+            "target": _COMBINE_TARGET})
+def _add_surface(doc_id, args):
+    doc = _get(doc_id)
+    _one_of(args, ["profile", "sketch"], op="add_surface",
+            what="a 2D outline to sweep")
+    kind = str(args.get("kind", "extrude"))
+    if kind == "loft" and args.get("profile_b") is None:
+        # A `required` list cannot say "only when kind is loft", so this is a
+        # handler check — and it has to be one, because the alternative is
+        # lofting to a section nobody named.
+        raise MissingArgument(
+            "a lofted surface needs a second section: pass 'profile_b'.",
+            arg="profile_b")
+    params = {
+        "kind": kind,
+        "profile": args.get("profile", {"type": "rect", "width": 0.05,
+                                        "height": 0.03, "cx": 0.0, "cy": 0.0}),
+        "profile_b": args.get("profile_b"),
+        "plane": args.get("plane", "xy"),
+        "offset": float(args.get("offset") or 0.0),
+        "offset_b": float(args.get("offset_b") or 0.02),
+        "depth": float(args.get("depth") or 0.02),
+        "axis": args.get("axis") or {"x": 0.0, "y": 1.0, "z": 0.0},
+        "center": args.get("center") or {"x": 0.0, "y": 0.0, "z": 0.0},
+        "angle": float(args.get("angle") or 360.0),
+        "ruled": bool(args.get("ruled", True)),
+    }
+    _sketch_reference(doc_id, args, params, "sketch_ref")
+    node = {"type": "SurfaceFeature", "name": f"Surface ({kind})",
+            "params": params}
+    # Union, always: a sheet has no inside, so subtracting one removes nothing
+    # and intersecting with one keeps nothing. Offering either would be offering
+    # an operation whose only outcome is a no-op reported as a success.
+    tree = feature_ops.add_primitive(doc.feature_tree, node, "union",
+                                     target_id=args.get("target"))
+    _apply_exact(doc_id, doc.feature_tree, tree, f"a {kind} surface")
+    return {"message": f"added a {kind} surface", "feature_id": node["id"],
+            **_body_state(doc_id)}
+
+
+def _body_state(doc_id: str) -> dict:
+    """What the body is now — the two numbers a surface operation moves.
+
+    Reported on every one of them, because the whole point of the sheet/solid
+    distinction is that a caller can see which it is holding, and knitting the
+    last cap on is exactly the moment it changes.
+    """
+    updated = document_service.get_document(doc_id)
+    return {"body_kind": updated.derived.body_kind,
+            "area_mm2": round(float(updated.derived.area) * 1e6, 3),
+            "volume_mm3": round(float(updated.derived.volume) * 1e9, 3)}
+
+
+@operation("knit", "mutate",
+           "Sew the body's sheets into one shell — and into a **solid** the "
+           "moment that shell has no open edges, because a closed shell is a "
+           "boundary representation of a volume. That is the point rather than "
+           "a side effect: knit the walls to the caps and mass, inertia and a "
+           "volume requirement all start answering. Knitting two walls of three "
+           "returns the sheet it is; check_geometry's open edge count says how "
+           "far off it is. Requires the exact kernel.",
+           {"tolerance": {"type": "number", "default": 1e-5, "unit": "m",
+                          "description": "how far apart two edges may be and "
+                                         "still be treated as the same edge"},
+            "target": _MODIFIER_TARGET})
+def _knit(doc_id, args):
+    doc = _get(doc_id)
+    tolerance = float(args.get("tolerance") or 1e-5)
+    if tolerance <= 0:
+        raise BadArgument("a knit tolerance must be positive", arg="tolerance")
+    node = {"type": "KnitFeature", "name": "Knit",
+            "params": {"tolerance": tolerance}}
+    tree = feature_ops.add_modifier(doc.feature_tree, node,
+                                    target_id=args.get("target"))
+    _apply_exact(doc_id, doc.feature_tree, tree, "a knit")
+    state = _body_state(doc_id)
+    return {"message": "sewn into a solid" if state["body_kind"] == "solid"
+                       else "sewn — still open, so still a sheet",
+            "feature_id": node["id"], **state}
+
+
+@operation("thicken", "mutate",
+           "Give a sheet a thickness, which turns it into a solid. The other "
+           "way a surface becomes material, and the one for a sheet that is not "
+           "closed: a lofted canopy, a swept wall, a traced plate. Offset to "
+           "one side rather than split about the surface, so the original sheet "
+           "is one face of the result and a datum on it still means something. "
+           "shell_faces is the opposite operation — it hollows a solid. "
+           "Requires the exact kernel.",
+           {"thickness": {"type": "number", "default": 0.002, "required": True,
+                          "description": "how thick; negative offsets the other "
+                                         "way"},
+            "target": _MODIFIER_TARGET})
+def _thicken(doc_id, args):
+    doc = _get(doc_id)
+    thickness = float(require(args, "thickness"))
+    if abs(thickness) < 1e-12:
+        raise BadArgument("a thickness of zero leaves the sheet a sheet",
+                          arg="thickness")
+    node = {"type": "ThickenFeature", "name": "Thicken",
+            "params": {"thickness": thickness}}
+    tree = feature_ops.add_modifier(doc.feature_tree, node,
+                                    target_id=args.get("target"))
+    _apply_exact(doc_id, doc.feature_tree, tree,
+                 f"a {abs(thickness) * 1000:g} mm thicken")
+    return {"message": f"thickened by {abs(thickness) * 1000:g} mm",
+            "feature_id": node["id"], **_body_state(doc_id)}
+
+
+@operation("trim", "mutate",
+           "Cut the body back to one side of a plane. A surface is built "
+           "oversized and trimmed — that is the working method, because a "
+           "lofted or swept surface is easy to make big and hard to land "
+           "exactly on a boundary. `keep` is named rather than signed: 'above' "
+           "and 'below' are what somebody means, and a sign convention is a "
+           "thing to get backwards. Requires the exact kernel.",
+           {"plane": {"enum": ["xy", "xz", "yz"], "default": "xy",
+                      "description": "the cutting plane's orientation"},
+            "offset": {"type": "number", "default": 0.0,
+                       "description": "where it sits along its own normal"},
+            "keep": {"enum": ["below", "above"], "default": "below",
+                     "description": "which side survives"},
+            "target": _MODIFIER_TARGET})
+def _trim(doc_id, args):
+    doc = _get(doc_id)
+    node = {"type": "TrimFeature", "name": "Trim", "params": {
+        "plane": str(args.get("plane", "xy")),
+        "offset": float(args.get("offset") or 0.0),
+        "keep": str(args.get("keep", "below"))}}
+    tree = feature_ops.add_modifier(doc.feature_tree, node,
+                                    target_id=args.get("target"))
+    _apply_exact(doc_id, doc.feature_tree, tree, "a trim")
+    return {"message": f"trimmed to the {node['params']['keep']} of "
+                       f"{node['params']['offset'] * 1000:g} mm",
+            "feature_id": node["id"], **_body_state(doc_id)}
+
+
 _SKETCH_REF = {"type": "string",
                "description": "a SketchFeature id from create_sketch, in place of 'profile'. "
                               "Several features can read one sketch; editing it moves all of them"}
@@ -398,15 +595,29 @@ def _sketch_reference(doc_id: str, args: dict, params: dict, ref_key: str,
     The profile is substituted at evaluation time (`feature_ops.resolve_sketches`)
     rather than copied here, which is what makes the sharing real: a copy would
     drift the moment the sketch was edited, and nothing would notice.
+
+    A `DerivedFeature` reading a sketch out of another document is accepted for
+    the same reason: it *becomes* a `SketchFeature` with this id before anything
+    evaluates, so the reference is to a sketch — one that happens to be
+    maintained elsewhere, which is the whole point of in-context design.
     """
     sketch_id = args.get(arg_key)
     if not sketch_id:
         return
     node = feature_ops.find_node(_get(doc_id).feature_tree, sketch_id)
-    if node is None or node.get("type") != feature_ops.SKETCH_TYPE:
-        raise NoSuchFeature(f"no sketch feature {sketch_id!r} — create_sketch makes one",
-                            arg=arg_key)
+    if node is None or not _is_sketch_source(node):
+        raise NoSuchFeature(f"no sketch feature {sketch_id!r} — create_sketch makes one, "
+                            f"or add_derived with kind='sketch' reads one from another "
+                            f"document", arg=arg_key)
     params[ref_key] = sketch_id
+
+
+def _is_sketch_source(node: dict) -> bool:
+    """Whether a node resolves to a sketch other features can consume."""
+    if node.get("type") == feature_ops.SKETCH_TYPE:
+        return True
+    return (node.get("type") == feature_ops.DERIVED_TYPE
+            and (node.get("params") or {}).get("kind") == "sketch")
 
 
 @operation("add_extrude", "mutate", "Sketch a 2D profile on a plane and extrude it into a solid (unioned or subtracted). "
@@ -1019,6 +1230,114 @@ def _set_feature_params(doc_id, args):
     return {"message": f"updated feature {args['feature_id']}"}
 
 
+_DERIVED_KIND = {
+    "enum": ["body", "sketch"], "default": "body",
+    "description": "`body` splices the source's solid in as ordinary features; "
+                   "`sketch` brings across one of its sketches, so two parts "
+                   "can extrude the same outline to different thicknesses",
+}
+
+
+@operation("add_derived", "mutate",
+           "Read geometry from **another document**, live. This is the one way "
+           "a part can be built from another part rather than beside it: an "
+           "enclosure's top and bottom extruding the outline that lives in the "
+           "enclosure document, a bracket cut from the envelope of the thing it "
+           "carries. Nothing is copied — the reference is followed on every "
+           "evaluation, so the source's next edit is this document's next body. "
+           "`entities` narrows it to named features of the source (empty means "
+           "its whole body); `revision` pins it to a released snapshot, which "
+           "is the opt-out from all of the above. A reference that would close "
+           "a loop is refused, and so is one to a document this document's "
+           "owner cannot open — a derived reference reads the source's "
+           "geometry, so it is the same boundary a component in an assembly "
+           "crosses. Use list_derived to see what a document reads and what "
+           "reads it.",
+           {"document_id": {"type": "string", "required": True,
+                            "description": "the source document to read from"},
+            "kind": _DERIVED_KIND,
+            "entities": {"type": "array", "items": {"type": "string"},
+                         "description": "feature ids **in the source** (from "
+                                        "list_features on it). Empty takes its "
+                                        "whole body; for a sketch, names which "
+                                        "one"},
+            "revision": {"type": "string",
+                         "description": "a released revision letter of the "
+                                        "source, to pin this reference to a "
+                                        "snapshot instead of following it"},
+            "operation": {"enum": ["union", "subtract", "intersect"],
+                          "default": "union",
+                          "description": "how the derived body joins this part"},
+            "target": _COMBINE_TARGET})
+def _add_derived(doc_id, args):
+    from app.cad_kernel.ops.derived import KINDS
+    from app.services import derived_service
+
+    doc = _get(doc_id)
+    source_id = require(args, "document_id")
+    kind = args.get("kind", "body")
+    if kind not in KINDS:
+        raise BadArgument(f"kind must be one of {', '.join(KINDS)}", arg="kind")
+
+    source = document_service.get_document(source_id)
+    if source is None:
+        raise NoSuchDocument(f"no document {source_id!r} to derive from")
+    # Checked here as well as at resolution. Resolution is what makes a cycle
+    # impossible; this is what makes it *legible* — a reference refused now
+    # names the loop, where one refused later is a document that no longer
+    # opens and a user with no idea which edit did it.
+    loop = derived_service.path_back(doc_id, source_id)
+    if loop:
+        raise PreconditionFailed(
+            f"that would be circular: {' -> '.join(loop)}. A document cannot "
+            f"derive from one that derives from it, at any depth.")
+    if doc.owner_id and not document_service.can_access(source, doc.owner_id):
+        raise PreconditionFailed(
+            f"document {source_id!r} is not one this document's owner can open, "
+            f"and a derived reference reads its geometry")
+    revision = args.get("revision")
+    if revision and not any(r.letter == revision for r in source.revisions):
+        raise BadArgument(
+            f"document {source_id!r} has no revision {revision!r} — released "
+            f"revisions are " + (", ".join(r.letter for r in source.revisions)
+                                 or "none yet"),
+            arg="revision")
+
+    node = {"type": derived_service.DERIVED_TYPE,
+            "name": args.get("name") or f"Derived from {source.name}",
+            "params": {"document_id": source_id, "revision": revision or None,
+                       "entities": list(args.get("entities") or []),
+                       "kind": kind}}
+    # Resolved before it is written, not after: "the source has no such
+    # feature" is then a refusal at the call that made the mistake rather than
+    # a warning on the next evaluation of a document that already stored it —
+    # and there is nothing to roll back. The id is not assigned yet and the
+    # graft does not need one to fail.
+    try:
+        derived_service.graft(node, owner_id=doc.owner_id, chain=(doc_id,))
+    except derived_service.DerivedError as exc:
+        raise PreconditionFailed(str(exc)) from exc
+
+    result = _combined(doc_id, node, args, f"derived {kind}")
+    return {**result, "document_id": source_id, "kind": kind,
+            "revision": revision or None,
+            "source_name": source.name}
+
+
+@operation("list_derived", "query",
+           "What this document reads from other documents, and what reads it. "
+           "Each reference says whether it still resolves and why not — a "
+           "source that was deleted, a named feature that is gone, a document "
+           "that is no longer shared. A body built from a reference that stops "
+           "resolving is the one failure mode of top-down design, and this is "
+           "where it is visible.",
+           {})
+def _list_derived(doc_id, args):
+    from app.services import derived_service
+
+    return derived_service.status(_get(doc_id))
+
+
 @operation("delete_feature", "mutate", "Remove a feature by id.",
            {"feature_id": {"type": "string", "required": True,
             "description": "id of the feature, from list_features"}})
@@ -1606,6 +1925,99 @@ def _list_mate_connectors(doc_id, args):
             "z_axis": [round(float(c), 6) for c in rotation[:, 2]],
         })
     return {"connectors": out}
+
+
+@operation("add_thread", "mutate",
+           "Cut a real ISO 68-1 metric thread — the helix, not a callout. The "
+           "body it builds is a **threaded cylinder**, so `union` gives a stud "
+           "or a threaded boss and `subtract` gives a tapped hole: an internal "
+           "thread is the negative of an external one, and a tap is a screw. "
+           "Give a designation (`thread: M8`) for the coarse-pitch form, or a "
+           "`diameter` and a `pitch` for anything else. add_hole's `tapped` is "
+           "the other answer to the same question and remains the right one "
+           "most of the time — it drills the tap-drill size and records the "
+           "thread as a note, which is what an assembly model and a drawing "
+           "want. Use this when the helix itself has to be there. Requires the "
+           "exact kernel.",
+           {"thread": {"enum": list(_METRIC_SIZES),
+                       "description": "metric designation, e.g. M8 — takes the "
+                                      "ISO 261 coarse pitch for that size"},
+            "diameter": {"type": "number",
+                         "description": "nominal major diameter, in place of "
+                                        "`thread`. A thread is named by its "
+                                        "major diameter, which is why this is "
+                                        "not a radius like everything else here"},
+            "pitch": {"type": "number",
+                      "description": "rise per turn, with `diameter`; or "
+                                     "override the designation's coarse pitch"},
+            "length": {"type": "number", "required": True,
+                       "description": "how far along the axis the thread runs"},
+            "center": {**_VEC, "description": "where the thread starts"},
+            "axis": {**_VEC, "description": "which way it runs; +Z by default"},
+            "right_handed": {"type": "boolean", "default": True,
+                             "description": "a left-hand thread winds the other "
+                                            "way and will not take a right-hand "
+                                            "fastener"},
+            "operation": {"enum": ["union", "subtract"], "default": "union",
+                          "description": "union for a stud or a threaded boss, "
+                                         "subtract to tap a hole"},
+            "target": _COMBINE_TARGET})
+def _add_thread(doc_id, args):
+    from app.services import parts_catalog
+
+    doc = _get(doc_id)
+    _one_of(args, ["thread", "diameter"], op="add_thread",
+            what="a thread to cut")
+    designation = args.get("thread")
+    if designation:
+        metric = parts_catalog.METRIC.get(str(designation))
+        if metric is None:
+            raise BadArgument(f"unknown thread: {designation}", arg="thread")
+        diameter = float(str(designation)[1:]) / 1000.0
+        pitch = float(args.get("pitch") or metric.pitch / 1000.0)
+    else:
+        diameter = float(args["diameter"])
+        pitch = args.get("pitch")
+        if pitch is None:
+            raise MissingArgument(
+                "a thread given by 'diameter' needs its 'pitch' too — there is "
+                "no pitch to assume for a diameter that is not a designation.",
+                arg="pitch")
+        pitch = float(pitch)
+    length = float(require(args, "length"))
+    if diameter <= 0 or pitch <= 0 or length <= 0:
+        raise BadArgument(
+            "a thread needs a positive diameter, pitch and length",
+            arg="length" if length <= 0 else "pitch")
+
+    node = {"type": "ThreadFeature",
+            "name": f"{designation or f'{diameter * 1000:g} mm'} thread",
+            "params": {"diameter": diameter, "pitch": pitch, "length": length,
+                       "center": args.get("center") or {"x": 0.0, "y": 0.0, "z": 0.0},
+                       "axis": args.get("axis") or {"x": 0.0, "y": 0.0, "z": 1.0},
+                       "right_handed": bool(args.get("right_handed", True))}}
+    combine = str(args.get("operation", "union"))
+    tree = feature_ops.add_primitive(doc.feature_tree, node, combine,
+                                     target_id=args.get("target"))
+    _apply_exact(doc_id, doc.feature_tree, tree,
+                 f"a {length / pitch:.1f}-turn {designation or 'metric'} thread")
+    return {"message": f"cut a {designation or f'{diameter * 1000:g}x{pitch * 1000:g}'} "
+                       f"thread, {length * 1000:g} mm long",
+            "feature_id": node["id"], "operation": combine,
+            "diameter_mm": round(diameter * 1000, 4),
+            "pitch_mm": round(pitch * 1000, 4),
+            "turns": round(length / pitch, 3),
+            # The two diameters a fastener is actually checked against, from the
+            # ISO 68-1 triangle rather than a second table.
+            # d1 = D - (5*sqrt(3)/8) P and d2 = D - (3*sqrt(3)/8) P: the basic
+            # minor and pitch diameters, both `5H/8` and `3H/8` in from the
+            # major on each side of the ISO 68-1 triangle. Written from the
+            # triangle rather than from a table of 1.0825 and 0.6495, which are
+            # those two numbers rounded.
+            "minor_diameter_mm": round(
+                (diameter - 5 * math.sqrt(3.0) / 8 * pitch) * 1000, 4),
+            "pitch_diameter_mm": round(
+                (diameter - 3 * math.sqrt(3.0) / 8 * pitch) * 1000, 4)}
 
 
 @operation("add_helix", "mutate",
@@ -2255,12 +2667,17 @@ def _verify_against_spec(doc_id, args):
 @operation("list_standard_parts", "query",
            "Browse the purchased parts you can place. Two kinds in one list. "
            "Generated: screws, nuts, washers, dowel pins, ball bearings, NEMA "
-           "steppers and T-slot extrusion, built from the published "
-           "dimensional standard rather than downloaded from anyone. Imported: "
+           "steppers and T-slot extrusion from the published dimensional "
+           "standards, plus brushless motors, flight controllers, 4-in-1 ESCs, "
+           "RC servos, hex standoffs, propellers, carbon plate and tube and "
+           "LiPo packs from the settled conventions of RC, drone and robotics "
+           "work — built here rather than downloaded from anyone. Imported: "
            "supplier CAD files this account brought in itself. Every row states "
            "`fidelity` (`as-standard` / `envelope` / `supplier`) and `geometry` "
-           "(`exact` — faces and edges are addressable — or `mesh`). Each "
-           "row\'s `key` goes to insert_standard_part on an assembly.",
+           "(`exact` — faces and edges are addressable — or `mesh`), and a row "
+           "whose dimensions vary by manufacturer also states the `params` it "
+           "takes and what each defaults to. Each row\'s `key` goes to "
+           "insert_standard_part on an assembly.",
            {"category": {"enum": list(_PART_CATEGORIES),
                          "description": "narrow to one kind"},
             "search": {"type": "string",
@@ -2863,6 +3280,170 @@ def _cancel_job(doc_id, args):
     if job is None or job.subject_id != doc_id:
         raise NoSuchDocument(f"no job {job_id!r} on this document")
     return (jobs.request_cancel(job_id) or job).public()
+
+def _bolt_transforms(name: str, axis: Dict[str, float]):
+    """A named pattern's holes, as offsets in millimetres and as table entries.
+
+    `table`, and the list is complete: there is no implicit copy at the origin,
+    so four entries are four holes and the seed is not a fifth.
+    """
+    from app.services import parts_catalog
+
+    offsets = parts_catalog.pattern_placements(
+        name, (float(axis.get("x", 0.0)), float(axis.get("y", 0.0)),
+               float(axis.get("z", 1.0))))
+    return offsets, [{"translate": {"x": ox / 1000.0, "y": oy / 1000.0,
+                                    "z": oz / 1000.0}} for ox, oy, oz in offsets]
+
+
+def _positive_depth(value) -> float:
+    """`args.get("depth") or default` would swallow an explicit zero, which has
+    to be refused by name rather than quietly become a hole through the body."""
+    depth = float(value)
+    if depth <= 0:
+        raise BadArgument("hole depth must be positive", arg="depth")
+    return depth
+
+
+def _pattern_result(name: str, screw: str, hole: dict, offsets) -> dict:
+    return {"pattern": name, "screw": screw, "holes": len(offsets),
+            "diameter_mm": hole["diameter_mm"], "fit": hole["fit"],
+            "offsets_mm": [[round(c, 4) for c in o] for o in offsets]}
+
+
+@operation("mounting_pattern", "mutate",
+           "Drill a named bolt pattern as **one** feature — the holes a flight "
+           "controller, a 4-in-1 ESC, a brushless motor, a NEMA stepper or an "
+           "RC servo bolts through. The placements come from the same tables "
+           "the catalog builds those parts from, so a bracket drilled for a "
+           "NEMA 17 and a NEMA 17 agree by construction rather than because "
+           "somebody typed 31 mm twice. Bores are ISO 273 clearance for the "
+           "pattern's own screw unless `screw` says otherwise. Being one "
+           "feature is the point: swapping a 30.5 board for a 20 one is this "
+           "operation again with `feature` and the new `pattern`, and all four "
+           "holes move — where four add_hole calls are four holes to find and "
+           "move by hand. Plain bores; for a counterbore or a countersink on a "
+           "single hole use add_hole.",
+           {"pattern": {"enum": list(_BOLT_PATTERN_NAMES), "required": True,
+                        "description": "which pattern to drill"},
+            "center": {**_VEC,
+                       "description": "centre of the pattern. Defaults to the "
+                                      "body's centre with the bores mouthed on "
+                                      "its face along `axis`"},
+            "axis": _AXIS,
+            "screw": {"enum": list(_METRIC_SIZES),
+                      "description": "the screw the holes are for; defaults to "
+                                     "the pattern's own"},
+            "fit": {"enum": ["fine", "medium", "coarse"], "default": "medium",
+                    "description": "ISO 273 series; medium is the "
+                                   "general-assembly one"},
+            "depth": {"type": "number",
+                      "description": "how deep to cut. Defaults to through the body."},
+            "feature": {"type": "string",
+                        "description": "re-drill this mounting pattern in place "
+                                       "instead of adding another — from "
+                                       "list_features, or the feature_id this "
+                                       "operation returned"},
+            "target": _MODIFIER_TARGET})
+def _mounting_pattern(doc_id, args):
+    from app.services import parts_catalog
+
+    doc = _get(doc_id)
+    name = require(args, "pattern")
+    bolts = parts_catalog.bolt_patterns().get(name)
+    if bolts is None:
+        raise BadArgument(
+            f"unknown bolt pattern {name!r}; the catalog knows "
+            f"{', '.join(sorted(parts_catalog.bolt_patterns()))}", arg="pattern")
+    screw = args.get("screw") or bolts.screw
+    try:
+        hole = parts_catalog.clearance_hole(screw, str(args.get("fit", "medium")))
+    except KeyError as exc:
+        raise BadArgument(f"unknown screw or fit: {exc}", arg="screw") from exc
+
+    existing = args.get("feature")
+    if existing is not None:
+        tree = copy.deepcopy(doc.feature_tree)
+        node = feature_ops.find_node(tree, existing)
+        if node is None:
+            raise NoSuchFeature(f"no feature {existing!r} in this document",
+                                arg="feature")
+        seed = (node.get("params") or {}).get("children") or [None]
+        seed = seed[0]
+        if node.get("type") != "PatternFeature" or \
+                (seed or {}).get("type") != "CylinderFeature":
+            raise BadArgument(
+                f"{existing} is a {node.get('type')}, not a mounting pattern — "
+                f"re-drilling rewrites a pattern of bores, and there is nothing "
+                f"here to rewrite", arg="feature")
+        # **The axis a re-drill keeps is the one the pattern was placed on.**
+        # Falling back to `_AXIS`'s +Z here instead would swing a pattern
+        # drilled along +X into the XY plane the moment somebody swapped the
+        # board on it — a re-drill that silently moves the holes somewhere
+        # nobody asked for, which is the failure this operation exists to end.
+        axis = args.get("axis") or dict(
+            seed["params"].get("axis") or {"x": 0.0, "y": 0.0, "z": 1.0})
+        offsets, transforms = _bolt_transforms(name, axis)
+
+        node["name"] = f"{bolts.label} pattern"
+        node["params"].update({"kind": "table", "count": len(transforms),
+                               "transforms": transforms, "axis": dict(axis)})
+        seed["name"] = f"{screw} clearance"
+        seed["params"]["radius"] = hole["radius_m"]
+        seed["params"]["axis"] = dict(axis)
+        # Everything else about the placement is kept unless it was named. A
+        # re-drill changes which holes and how wide; where the pattern sits and
+        # how deep it cuts were decided when it was drilled.
+        if args.get("center") is not None:
+            seed["params"]["center"] = dict(args["center"])
+            node["params"]["center"] = dict(args["center"])
+        if args.get("depth") is not None:
+            seed["params"]["height"] = _positive_depth(args["depth"])
+        document_service.update_document(doc_id, feature_tree=tree)
+        return {"message": f"re-drilled {existing} as {bolts.label} — "
+                           f"{len(transforms)} × {hole['diameter_mm']} mm "
+                           f"for {screw}",
+                "feature_id": existing, "redrilled": True,
+                **_pattern_result(name, screw, hole, offsets)}
+
+    axis = args.get("axis") or {"x": 0.0, "y": 0.0, "z": 1.0}
+    offsets, transforms = _bolt_transforms(name, axis)
+    bbox = doc.derived.bbox
+    if bbox is not None:
+        body_centre, unit, half = _axis_extent(bbox, axis)
+    else:
+        body_centre, unit, half = (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 0.05
+    depth = (2.0 * half if args.get("depth") is None
+             else _positive_depth(args["depth"]))
+    if args.get("center") is not None:
+        centre = dict(args["center"])
+    else:
+        centre = {k: body_centre[i] + unit[i] * (half - depth / 2.0)
+                  for i, k in enumerate("xyz")}
+
+    seed = {"type": "CylinderFeature", "name": f"{screw} clearance",
+            "params": {"radius": hole["radius_m"], "height": depth,
+                       "center": dict(centre), "axis": dict(axis)}}
+    node = {"type": "PatternFeature", "name": f"{bolts.label} pattern",
+            "params": {"kind": "table", "count": len(transforms),
+                       "transforms": transforms, "axis": dict(axis),
+                       "center": dict(centre), "children": [seed]}}
+    # A pattern is a *union* of its copies, so it goes in as the tool of a
+    # subtract rather than wrapping the body: wrapping would union four copies
+    # of a drilled body, which fills every hole back in. `add_primitive` also
+    # refuses a subtract into a document with no material, which is where the
+    # "there is nothing to drill" answer comes from.
+    tree = feature_ops.add_primitive(doc.feature_tree, node, "subtract",
+                                     target_id=args.get("target"))
+    # The seed lives inside the node and `add_primitive`'s allocator only ever
+    # sees the node itself, so the id comes from here — after the pattern is in
+    # the tree, or the two could be handed the same number.
+    tree = feature_ops.ensure_ids(tree)
+    document_service.update_document(doc_id, feature_tree=tree)
+    return {"message": f"drilled the {bolts.label} pattern — "
+                       f"{len(transforms)} × {hole['diameter_mm']} mm for {screw}",
+            "feature_id": node["id"], "redrilled": False,
+            **_pattern_result(name, screw, hole, offsets)}
 
 
 @operation("export", "query",

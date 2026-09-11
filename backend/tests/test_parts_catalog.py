@@ -30,7 +30,8 @@ client = TestClient(app)
 
 def _measure(entry):
     """(bbox mm, volume mm³, mass g) of a catalog part, actually evaluated."""
-    solid = Kernel.evaluate_tree(FeatureTree.from_dict(entry.build()), resolution=96)
+    solid = Kernel.evaluate_tree(
+        FeatureTree.from_dict(pc.build_tree(entry)), resolution=96)
     mesh = Kernel.tessellate(solid)
     volume = abs(mesh_volume(mesh.vertices, mesh.faces))
     size = (mesh.vertices.max(axis=0) - mesh.vertices.min(axis=0)) * 1000
@@ -93,7 +94,8 @@ def test_a_stepper_has_the_frame_face_bolt_pattern_and_shaft():
     assert size[0] == pytest.approx(42.3, abs=0.05)
     assert size[1] == pytest.approx(42.3, abs=0.05)
     # Four mounting holes at 31 mm, taking M3 clearance.
-    holes = [n for n in walk_nodes(entry.build()) if n.get("name") == "Mount hole"]
+    holes = [n for n in walk_nodes(pc.build_tree(entry))
+             if n.get("name") == "Mount hole"]
     assert len(holes) == 4
     centres = {(round(h["params"]["center"]["x"] * 1000, 2),
                 round(h["params"]["center"]["y"] * 1000, 2)) for h in holes}
@@ -110,7 +112,7 @@ def test_every_catalog_part_builds_and_has_volume():
     """Not a sample: a listing row that cannot be built is a row someone will
     click. Coarse resolution — this asserts existence, not dimensions."""
     for entry in pc.catalog():
-        tree = FeatureTree.from_dict(entry.build())
+        tree = FeatureTree.from_dict(pc.build_tree(entry))
         solid = Kernel.evaluate_tree(tree, resolution=32)
         mesh = Kernel.tessellate(solid)
         assert len(mesh.faces) > 0, entry.key

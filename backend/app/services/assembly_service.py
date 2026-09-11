@@ -251,6 +251,30 @@ def add_mate(asm_id: str, mate) -> Optional[AssemblyDoc]:
     return _resolve(asm)
 
 
+def update_mate(asm_id: str, mate_id: str,
+                changes: dict) -> Optional[AssemblyDoc]:
+    """Change a mate's driven values in place and re-solve every placement.
+
+    Only the fields a caller may drive are writable here — the mate's type, the
+    two components and the two connectors are what the constraint *is*, and
+    changing one of those is a different mate rather than a new position for
+    this one. Re-solving is the whole point: a hinge angle that does not move
+    the part is a stored number.
+    """
+    asm = _load(asm_id)
+    if asm is None:
+        return None
+    mate = next((m for m in asm.mates if m.id == mate_id), None)
+    if mate is None:
+        return None
+    for field in ("angle_deg", "offset_mm"):
+        if field in changes and changes[field] is not None:
+            setattr(mate, field, float(changes[field]))
+    asm.updated_at = _now()
+    _persist(asm)
+    return _resolve(asm)
+
+
 def remove_mate(asm_id: str, mate_id: str) -> Optional[AssemblyDoc]:
     asm = _load(asm_id)
     if asm is None:

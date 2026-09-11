@@ -54,6 +54,18 @@ _BUILDERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
                           ("thickness", "length", "width", "bend_radius", "k_factor", "flanges")),
     "HelixFeature": ("add_helix", ("helix_radius", "wire_radius", "pitch", "turns",
                                    "center", "axis", "right_handed")),
+    "ThreadFeature": ("add_thread", ("diameter", "pitch", "length", "center",
+                                     "axis", "right_handed")),
+    "SurfaceFeature": ("add_surface", ("kind", "profile", "profile_b", "plane",
+                                       "offset", "offset_b", "depth", "axis",
+                                       "center", "angle", "ruled")),
+    # A derived reference is recoverable because it *is* just a reference: the
+    # source document id outlives the replay, so the rebuilt document reads the
+    # same geometry. What it must not do is emit the grafted features — those
+    # belong to another document, and replaying them here would turn a live
+    # reference into the copy the feature exists to avoid.
+    "DerivedFeature": ("add_derived", ("document_id", "revision", "entities",
+                                       "kind")),
 }
 
 # Features that wrap a body and are created by a first-class operation rather
@@ -62,6 +74,12 @@ _BUILDERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
 # only purpose is to be decompiled into.
 _WRAPPERS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "RibFeature": ("add_rib", ("start", "end", "up", "thickness", "height", "draft")),
+    # The surface modifiers. Each takes its own arguments, so routing them
+    # through the `add_modifier` table would need an entry there whose only
+    # purpose is to be decompiled into — the same reason a rib is here.
+    "KnitFeature": ("knit", ("tolerance",)),
+    "ThickenFeature": ("thicken", ("thickness",)),
+    "TrimFeature": ("trim", ("plane", "offset", "keep")),
 }
 
 # Feature type -> (modifier name, its params) for add_modifier.
@@ -668,16 +686,31 @@ def _parameter_steps(source_tree: dict, parameters: List[dict],
 
 # ------------------------------------------------------------ verification --
 
-def _hash_tree_geometry(tree: dict, resolution: int,
-                        scope: Optional[Dict[str, float]] = None) -> str:
-    from app.services import feature_ops
+def _hash_document_geometry(doc, resolution: int,
+                            scope: Optional[Dict[str, float]] = None) -> str:
+    """The mesh hash of a document's tree, for the two sides of a comparison.
+
+    Takes the document rather than its tree because a derived reference has to
+    be followed to have a body at all, and following one needs the owner (to
+    decide access) and the id (to close a cycle). Both call sites hold the
+    document; only the tree used to be passed, which is how a `DerivedFeature`
+    reached the evaluator here and nowhere else.
+    """
+    import copy as _copy
+
+    from app.services import derived_service, feature_ops
     from app.services import parameters as params
 
-    # Parameters first, then sketches: an expression string is not a number any
-    # evaluator can take, and a SketchFeature has no body and never reaches one
-    # in the running system either.
+    # Parameters first, then derived references, then sketches: an expression
+    # string is not a number any evaluator can take, a derived reference has no
+    # body until it is followed, and a SketchFeature has no body and never
+    # reaches one in the running system either.
+    tree = doc.feature_tree
     if scope:
         tree = params.resolve_tree(tree, scope)
+    tree = derived_service.resolve(_copy.deepcopy(tree),
+                                   owner_id=getattr(doc, "owner_id", None),
+                                   chain=(doc.id,))
     solid = Kernel.evaluate_tree(
         FeatureTree.from_dict(feature_ops.resolve_sketches(tree)), resolution=resolution)
     return mesh_hash(Kernel.tessellate(solid))
@@ -781,8 +814,8 @@ def decompile_document(
         # evaluated is a number in the report, not a traceback that takes the
         # whole report down with it.
         try:
-            want = _hash_tree_geometry(source.feature_tree, resolution, scope)
-            got = _hash_tree_geometry(rebuilt.feature_tree, resolution, _scope_of(rebuilt))
+            want = _hash_document_geometry(source, resolution, scope)
+            got = _hash_document_geometry(rebuilt, resolution, _scope_of(rebuilt))
         except Exception as exc:
             return _reject(trajectory_id, record, steps,
                            f"the tree does not evaluate: {type(exc).__name__}: {exc}",

@@ -207,7 +207,7 @@ def tree_hash(tree: dict) -> str:
     return hashlib.sha256(json.dumps(tree, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def geometry_fingerprint(doc, resolution: int) -> str:
+def geometry_fingerprint(doc, resolution: int, chain: tuple = ()) -> str:
     """Everything that changes what an evaluation would produce.
 
     Not just the feature tree: a parameter value, the active configuration and
@@ -216,7 +216,19 @@ def geometry_fingerprint(doc, resolution: int) -> str:
     one failure a cache must not have — so this is deliberately generous, and
     excludes only what provably cannot change geometry (the material, the name,
     the spec, the revision counter).
+
+    **A derived document's geometry is not in the document.** In-context design
+    lets one document read another's body, and nothing above would move when the
+    source moved — so `document_service.source_keys` folds in the evaluation
+    identity of everything this one derives from, recursively and guarded
+    against a cycle by `chain`. It costs one tree walk to discover the common
+    case has no sources at all. It belongs *here* rather than at the one caller
+    that noticed: `product_fingerprint` builds on this digest, and a staleness
+    reading that hashed geometry differently from the geometry cache would
+    disagree about freshness in exactly the cases that matter.
     """
+    from app.services import document_service
+
     return _digest([
         tree_hash(doc.feature_tree),
         resolution,
@@ -226,6 +238,7 @@ def geometry_fingerprint(doc, resolution: int) -> str:
         # evaluation that produced it.
         _dumped(doc.parameters, drop=("value",)),
         _dumped(doc.configurations),
+        document_service.source_keys(doc, resolution, chain + (doc.id,)),
     ])
 
 

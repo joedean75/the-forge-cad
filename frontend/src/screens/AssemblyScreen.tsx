@@ -10,6 +10,7 @@ import { useAuthStore } from '../store/useAuthStore'
 import { useNavStore } from '../store/useNavStore'
 import { AccountDrawer } from '../components/AccountDrawer'
 import { AssemblyViewport } from '../components/AssemblyViewport'
+import { PanelRail, usePanelCollapse } from '../components/PanelRail'
 import { BomPanel, ClashPanel, MatesPanel } from '../features/assembly/AssemblyInspector'
 import { StandardPartsPicker } from '../features/assembly/StandardPartsPicker'
 import type { AssemblyComponent, ComponentTransform, DocumentSummary } from '../../../shared/types'
@@ -172,6 +173,8 @@ export function AssemblyScreen() {
   const [editingName, setEditingName] = useState(false)
   const [creatingPart, setCreatingPart] = useState(false)
   const [tab, setTab] = useState<InspectorTab>('place')
+  const [listHidden, toggleList] = usePanelCollapse('assembly.components')
+  const [inspectorHidden, toggleInspector] = usePanelCollapse('assembly.inspector')
 
   // Coming back from the part editor: pull the assembly again so a component
   // shows the geometry as just edited rather than the copy we left with.
@@ -261,6 +264,7 @@ export function AssemblyScreen() {
 
       <div className="flex flex-1 min-h-0">
         {/* components panel */}
+        {!listHidden && (
         <aside className="w-72 border-r border-cad-border bg-cad-panel flex flex-col shrink-0 z-10">
           <div className="h-11 border-b border-cad-border flex items-center justify-between px-4">
             <span className="eyebrow text-cad-text/70">Components</span>
@@ -318,17 +322,37 @@ export function AssemblyScreen() {
             </div>
           )}
         </aside>
+        )}
+        <PanelRail side="left" label="Components" collapsed={listHidden} onToggle={toggleList} />
 
         {/* viewport */}
-        <AssemblyViewport
-          components={assembly.components}
-          bbox={assembly.bbox}
-          selectedId={selectedComponentId}
-          isolate={isolate}
-          onSelect={select}
-        />
+        <div className="relative flex flex-1 min-w-0">
+          <AssemblyViewport
+            components={assembly.components}
+            bbox={assembly.bbox}
+            selectedId={selectedComponentId}
+            isolate={isolate}
+            driven={driven}
+            onSelect={select}
+            onMove={setTransform}
+          />
+          {/* The inspector is where a failure is reported, so collapsing it
+              would silently swallow one. Shown over the viewport instead —
+              the editor solves the same problem with `FailureNotice`, for the
+              same reason: a failure is news wherever it came from. */}
+          {inspectorHidden && error && (
+            <p className="absolute bottom-3 right-3 max-w-[min(420px,60%)] text-[11px]
+                          text-cad-danger bg-cad-panel/90 backdrop-blur-sm border
+                          border-cad-danger/40 rounded-sm px-2.5 py-1.5">
+              {error}
+            </p>
+          )}
+        </div>
 
+        <PanelRail side="right" label="Inspector" collapsed={inspectorHidden}
+                   onToggle={toggleInspector} />
         {/* inspector: placement, mates, fit and the parts list */}
+        {!inspectorHidden && (
         <aside className="w-80 border-l border-cad-border bg-cad-panel flex flex-col shrink-0 z-10">
           <div className="h-11 border-b border-cad-border flex items-center justify-between px-4">
             <div className="leading-none min-w-0">
@@ -385,6 +409,7 @@ export function AssemblyScreen() {
             {error && <p className="mt-4 text-[11px] text-cad-danger">{error}</p>}
           </div>
         </aside>
+        )}
       </div>
 
       {picking && (
