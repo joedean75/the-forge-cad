@@ -11,6 +11,7 @@ interface AssemblyState {
   selectedComponentId: string | null
   /** A component's part was opened for editing, so this copy may be out of date. */
   stale: boolean
+  refreshing: boolean
   markStale: () => void
   refresh: () => Promise<void>
   open: (id: string) => Promise<void>
@@ -69,17 +70,22 @@ interface AssemblyState {
  */
 const STALE = { clash: null, bom: null } as const
 
+// Invalidates in-flight refreshes when the subject or its source changes.
+let refreshRequest = 0
+
 export const useAssemblyStore = create<AssemblyState>((set, get) => ({
   assembly: null,
   busy: false,
   error: null,
   selectedComponentId: null,
   stale: false,
+  refreshing: false,
   clash: null,
   bom: null,
 
   open: async (id) => {
-    set({ busy: true, error: null })
+    refreshRequest++
+    set({ busy: true, error: null, refreshing: false })
     try {
       set({ assembly: await api.getAssemblyDoc(id), selectedComponentId: null, stale: false, ...STALE })
     } catch (e) {
@@ -89,27 +95,38 @@ export const useAssemblyStore = create<AssemblyState>((set, get) => ({
     }
   },
 
-  markStale: () => set({ stale: true }),
+  markStale: () => {
+    refreshRequest++
+    set({ stale: true, refreshing: false, ...STALE })
+  },
 
   refresh: async () => {
-    const { assembly, stale } = get()
-    if (!assembly || !stale) return
-    // Components carry their part's geometry, so an edited part leaves this copy
-    // showing the old shape. Refetch, but only when a part was actually opened
-    // for editing — the payload is the sum of every component's mesh.
+    const { assembly, stale, refreshing } = get()
+    if (!assembly || !stale || refreshing) return
+    const request = ++refreshRequest
+    set({ refreshing: true, error: null })
     try {
+      const updated = await api.getAssemblyDoc(assembly.id)
+      if (request !== refreshRequest || get().assembly !== assembly) return
       const selected = get().selectedComponentId
-      set({ assembly: await api.getAssemblyDoc(assembly.id), selectedComponentId: selected, stale: false })
-    } catch {
-      set({ stale: false })  // a failed refresh must not retry forever
+      set({ assembly: updated, stale: false, ...STALE,
+        selectedComponentId: updated.components.some((c) => c.id === selected) ? selected : null })
+    } catch (e) {
+      if (request === refreshRequest && get().assembly === assembly) {
+        set({ stale: true, ...STALE,
+          error: `Assembly could not refresh: ${e instanceof Error ? e.message : 'request failed'}. Retry to load the current parts.` })
+      }
+    } finally {
+      if (request === refreshRequest) set({ refreshing: false })
     }
   },
 
   createAndOpen: async (name) => {
-    set({ busy: true, error: null })
+    refreshRequest++
+    set({ busy: true, error: null, refreshing: false })
     try {
       const a = await api.createAssembly(name)
-      set({ assembly: a, selectedComponentId: null })
+      set({ assembly: a, selectedComponentId: null, stale: false, ...STALE })
       return a.id
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Failed to create assembly' })
@@ -119,7 +136,11 @@ export const useAssemblyStore = create<AssemblyState>((set, get) => ({
     }
   },
 
-  close: () => set({ assembly: null, selectedComponentId: null, error: null }),
+  close: () => {
+    refreshRequest++
+    set({ assembly: null, selectedComponentId: null, error: null,
+      stale: false, refreshing: false, ...STALE })
+  },
 
   rename: async (name) => {
     const { assembly } = get()
