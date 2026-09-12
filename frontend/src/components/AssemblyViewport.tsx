@@ -14,6 +14,7 @@ const DEG = Math.PI / 180
 function useFit(assemblyId: string, bbox: BBox | null | undefined, nonce: number) {
   const frozen = useRef<{ key: string; bbox: BBox } | null>(null)
   const key = `${assemblyId}|${!!bbox}|${nonce}`
+  if (!bbox) frozen.current = null
   if (bbox && frozen.current?.key !== key) frozen.current = { key, bbox }
   const envelope = bbox ? frozen.current?.bbox : undefined
   return useMemo(() => {
