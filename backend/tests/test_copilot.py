@@ -423,3 +423,105 @@ def test_an_assembly_build_gets_a_bigger_budget_than_an_edit():
     stops a build halfway and reports it as out of budget."""
     assert copilot.step_default("assembly") > copilot.step_default("document")
     assert copilot.step_cap("assembly") > copilot.step_cap("document")
+
+
+# ---------------------------------------------------------------------------
+# What the build loop says when parts overlap, and what it does not call a clash
+# ---------------------------------------------------------------------------
+
+def test_touching_parts_are_not_a_clash(monkeypatch):
+    """The bug this replaced: `clear` is false for a *near miss* as well as a
+    clash, and a coincident mate holds two faces at a 0 mm gap by definition —
+    so gating on it failed every correctly assembled stack while reporting
+    "0 pair(s) of parts intersect"."""
+    execute = copilot.cad_operations.execute
+
+    def touching(op, *args, **kwargs):
+        if op == "check_interference":
+            return {"ok": True, "result": {
+                "clear": False,           # false because of the near miss below
+                "interferences": 0,
+                "clearance_warnings": 1,
+                "pairs": [{"a": "base", "b": "top", "status": "clearance",
+                           "gap_mm": 0.0, "penetration_mm": 0.0}]}}
+        return execute(op, *args, **kwargs)
+
+    monkeypatch.setattr(copilot.cad_operations, "execute", touching)
+    notes = []
+    failures = copilot._verify("assembly", "any-id", notes.append)
+    assert failures == []
+    assert notes[0]["ok"] is True
+    # And the near miss is still reported rather than hidden.
+    assert "1 pair(s) touching" in notes[0]["result"]["summary"]
+
+
+def test_an_overlap_names_the_parts_and_how_deep(monkeypatch):
+    """"1 pair(s) intersect" is a fact the planner cannot act on: it does not say
+    which two parts, or whether it is out by half a millimetre or by the whole
+    thickness of a plate."""
+    execute = copilot.cad_operations.execute
+
+    def clashing(op, *args, **kwargs):
+        if op == "check_interference":
+            return {"ok": True, "result": {
+                "clear": False, "interferences": 2, "clearance_warnings": 0,
+                "pairs": [
+                    {"a": "base plate", "b": "top plate", "status": "interference",
+                     "gap_mm": -6.0, "penetration_mm": 6.0},
+                    {"a": "top plate", "b": "bracket", "status": "interference",
+                     "gap_mm": -0.5, "penetration_mm": 0.5}]}}
+        return execute(op, *args, **kwargs)
+
+    monkeypatch.setattr(copilot.cad_operations, "execute", clashing)
+    failures = copilot._verify("assembly", "any-id", lambda _entry: None)
+    assert len(failures) == 1
+    message = failures[0]
+    # Which parts, and by how much — worst first.
+    assert "base plate into top plate by 6.0 mm" in message
+    assert "top plate into bracket by 0.5 mm" in message
+    # And what to do about it, because the obvious move makes it worse.
+    assert "rather than deleting it" in message
+
+
+def test_deleting_the_mate_fails_both_checks_instead_of_one(monkeypatch):
+    """Why that instruction is in the message. Removing the mate that positions
+    an overlapping part leaves it unheld *and* still overlapping — which is what
+    a live run actually did before the guidance was added."""
+    monkeypatch.setattr(copilot, "_plan_next", _box_planner(size=(0.08, 0.05, 0.01)))
+    asm_id = _assembly()
+
+    def scripted(goal, transcript, summary, **_):
+        built = [x for x in transcript if x.get("op") == "build_part" and x.get("ok")]
+        mated = [x for x in transcript if x.get("op") == "add_mate" and x.get("ok")]
+        removed = [x for x in transcript if x.get("op") == "remove_mate" and x.get("ok")]
+        if len(built) < 2:
+            return {"op": "build_part", "args": {"goal": f"plate {len(built) + 1}"},
+                    "rationale": "a part"}
+        if not mated:
+            ids = [x["result"]["component_id"] for x in built]
+            return {"op": "add_mate", "rationale": "stack",
+                    "args": {"type": "coincident", "base": ids[0], "moved": ids[1],
+                             "axis": "z"}}
+        if not removed:
+            mate_id = mated[0]["result"].get("mate_id")
+            return {"op": "remove_mate", "args": {"mate_id": mate_id},
+                    "rationale": "the wrong move"}
+        return {"done": True, "summary": "removed the mate"}
+
+    out = copilot.run(asm_id, "two plates", planner=scripted, subject="assembly",
+                      max_steps=8)
+    assert out["finished"] is False
+    # Unheld again, which is the half the planner gave itself back.
+    assert any("not held by any mate" in u for u in out["unmet"]), out["unmet"]
+
+
+def test_the_planner_is_told_not_to_delete_the_mate():
+    """The guidance has to reach the model, not only the failure message."""
+    from app.services import action_space
+
+    prompt = action_space.system_prompt(with_tools=True, subject="assembly")
+    assert "Do not delete the mate" in prompt
+    assert "offset_mm" in prompt
+    # And the part-editing prompt is not cluttered with any of it.
+    assert "Do not delete the mate" not in action_space.system_prompt(
+        with_tools=True, subject="document")
