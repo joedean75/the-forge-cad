@@ -904,6 +904,8 @@ export interface CopilotStep {
 
 export interface CopilotResult {
   ok: boolean
+  finished?: boolean
+  stop_reason?: string | null
   /** Job id — copilot runs as a background job; poll GET /copilot/{job_id}. */
   job_id: string
   status: 'running' | 'done' | 'error'
@@ -1185,7 +1187,10 @@ export interface StandardPart {
   fidelity: 'as-standard' | 'envelope' | 'supplier'
   geometry: 'exact' | 'mesh'
   notes: string
-  size_mm: Vector3
+  size_mm: Vector3 | null
+  download_on_place?: boolean
+  removable?: boolean
+  license?: string
   /** Published mass, where the solid envelope is known to over-state it. */
   typical_mass_g?: number
   /** What varies by manufacturer on this row, where tabling it would be

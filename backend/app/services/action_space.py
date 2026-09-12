@@ -38,6 +38,8 @@ Rules:
 - Query operations (bounding_box, list_features, verify_against_spec) do not change the part — use them to check rather than to guess.
 - If a call returned an error, read the code: MISSING_ARG and BAD_ARG mean fix the arguments, PRECONDITION means a different earlier step is needed. Do not repeat a call that failed the same way.
 - If a call returned a warning, act on it. A SUSPECT_UNITS warning means the number was almost certainly metres-for-millimetres.
+- This is an internal design tool. Prefer direct progress with the existing CAD operations; do not add commercial-release or publishing steps.
+- Inspect the current document before edits. After edits, check the relevant dimensions and declared design requirements before reporting completion. A successful tool call alone does not establish that the design meets the goal.
 - When the part matches the goal, stop. Do not keep adding features."""
 
 _DONE_PROTOCOL = """

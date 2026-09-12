@@ -53,6 +53,9 @@ export function StandardPartsPicker() {
   const [total, setTotal] = useState(0)
   const [category, setCategory] = useState('')
   const [search, setSearch] = useState('')
+  const [source, setSource] = useState('')
+  const [offset, setOffset] = useState(0)
+  const [placing, setPlacing] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [quantity, setQuantity] = useState(1)
@@ -67,8 +70,8 @@ export function StandardPartsPicker() {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    api.listStandardParts({ category: category || undefined,
-                            search: search || undefined, limit: 60 })
+    const timer = window.setTimeout(() => api.listStandardParts({ category: category || undefined,
+                            search: search || undefined, source: source || undefined, limit: 60, offset })
       .then((page) => {
         if (cancelled) return
         setParts(page.parts)
@@ -77,9 +80,16 @@ export function StandardPartsPicker() {
         setError(null)
       })
       .catch((e) => !cancelled && setError(e instanceof Error ? e.message : 'Unavailable'))
-      .finally(() => !cancelled && setLoading(false))
-    return () => { cancelled = true }
-  }, [category, search, reload])
+      .finally(() => !cancelled && setLoading(false)), 200)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [category, search, source, offset, reload])
+
+  const place = async (part: StandardPart) => {
+    if (placing || busy) return
+    setPlacing(part.key)
+    try { await insertStandardPart(part.key, quantity, tuned[part.key]) }
+    finally { setPlacing(null) }
+  }
 
   const forget = async (key: string) => {
     try {
@@ -96,17 +106,24 @@ export function StandardPartsPicker() {
         <Search size={12} className="text-cad-text/60 shrink-0" />
         <input
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="M4, 608, NEMA 17, 2020…"
+          onChange={(e) => { setSearch(e.target.value); setOffset(0) }}
+          aria-label="Search components"
+          placeholder="Feather, ESP32, servo, M4..."
           className="flex-1 min-w-0 bg-transparent text-[11px] text-cad-text-heading placeholder:text-cad-text/50 outline-none"
         />
       </div>
 
-      <div className="flex gap-px rounded-sm overflow-hidden border border-cad-border">
+      <select aria-label="Component source" value={source}
+        onChange={(e) => { setSource(e.target.value); setOffset(0) }}
+        className="w-full rounded-sm bg-cad-bg border border-cad-border px-2 py-1 text-[11px] text-cad-text-heading">
+        <option value="">All sources</option>
+        {sources.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+      </select>
+      <div className="flex flex-wrap gap-px rounded-sm border border-cad-border">
         {CATEGORIES.map((c) => (
           <button
             key={c.id}
-            onClick={() => setCategory(c.id)}
+            onClick={() => { setCategory(c.id); setOffset(0) }}
             className={`flex-1 py-1 text-[10px] transition-colors ${
               category === c.id ? 'bg-cad-accent text-cad-bg'
                 : 'bg-cad-bg text-cad-text hover:text-cad-text-heading'}`}
@@ -123,8 +140,8 @@ export function StandardPartsPicker() {
           onChange={(e) => setQuantity(Math.max(1, Math.min(64, Number(e.target.value) || 1)))}
           className="tabular w-14 px-1.5 py-0.5 rounded-sm bg-cad-bg border border-cad-border text-cad-text-heading outline-none focus:border-cad-accent"
         />
-        <span className="text-cad-text/50">
-          {loading ? 'searching…' : `${parts.length} of ${total}`}
+        <span className="text-cad-text/50" role="status">
+          {loading ? 'searching…' : `${total ? offset + 1 : 0}-${offset + parts.length} of ${total}`}
         </span>
         <button
           onClick={() => setImporting((v) => !v)}
@@ -168,7 +185,7 @@ export function StandardPartsPicker() {
               )}
               {/* Only an imported part can be forgotten; a generated one is not
                   stored anywhere to remove. */}
-              {part.fidelity === 'supplier' && (
+              {part.fidelity === 'supplier' && part.removable !== false && (
                 <button
                   onClick={() => forget(part.key)}
                   title="Take out of the catalog (the part document is kept)"
@@ -195,17 +212,17 @@ export function StandardPartsPicker() {
                 </button>
               )}
               <button
-                onClick={() => insertStandardPart(part.key, quantity, tuned[part.key])}
-                disabled={busy}
+                onClick={() => place(part)}
+                disabled={busy || placing !== null}
                 title={`Place ${quantity} × ${part.designation}`}
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm border border-cad-accent/50 text-cad-accent-hot hover:bg-cad-accent/10 text-[10px] font-medium transition disabled:opacity-40"
               >
-                {busy ? <Loader2 size={10} className="animate-spin" /> : <Plus size={10} />}
-                Place
+                {placing === part.key ? <Loader2 size={10} className="animate-spin" /> : <Plus size={10} />}
+                {placing === part.key ? 'Preparing...' : 'Place'}
               </button>
             </div>
             <div className="tabular text-[9px] text-cad-text/50 flex flex-wrap gap-x-2">
-              <span>{part.size_mm.x}×{part.size_mm.y}×{part.size_mm.z} mm</span>
+              {part.size_mm && <span>{part.size_mm.x}×{part.size_mm.y}×{part.size_mm.z} mm</span>}
               <span>{part.standard}</span>
               {part.typical_mass_g != null && <span>~{part.typical_mass_g} g</span>}
               {/* Said before you place a hundred, not after. */}
@@ -266,10 +283,16 @@ export function StandardPartsPicker() {
         ))}
       </div>
 
+      {!loading && !parts.length && <p className="text-[11px] text-cad-text">No matching components.</p>}
+      {total > 60 && <div className="flex justify-between text-[11px] text-cad-text">
+        <button disabled={loading || offset === 0} onClick={() => setOffset(Math.max(0, offset - 60))}
+          className="disabled:opacity-40">Previous</button>
+        <button disabled={loading || offset + parts.length >= total} onClick={() => setOffset(offset + 60)}
+          className="disabled:opacity-40">Next</button>
+      </div>}
       <p className="text-[9px] text-cad-text/40 leading-snug">
-        Generated from the published dimensional standards (ISO&nbsp;4762/4032/7089/2338,
-        ISO&nbsp;15, NEMA frames) — not downloaded from a supplier. Import brings in a
-        file you fetched yourself; nothing here calls a portal on your behalf.
+        Adafruit CAD downloads automatically on first placement. Original models by
+        Adafruit Industries, MIT licensed. Personal imports stay in your account.
       </p>
     </div>
   )
@@ -370,7 +393,7 @@ function SupplierImport({ sources, query, onDone, onError }: {
         </select>
         <select className={field} value={source}
                 onChange={(e) => setSource(e.target.value)}>
-          {sources.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+          {sources.filter((s) => s.id !== 'adafruit').map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
         </select>
         <input className={field} placeholder="Source URL (optional)" value={sourceUrl}
                onChange={(e) => setSourceUrl(e.target.value)} />

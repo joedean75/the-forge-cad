@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Bot, Send, X, Check, AlertTriangle, Loader2, Wrench } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
+import { api } from '../api/client'
 import type { CopilotResult, CopilotStep } from '../../../shared/types'
 
-type Turn = { goal: string; running: boolean; result?: CopilotResult }
+type Turn = { goal: string; running: boolean; docId: string; stopping?: boolean; stopError?: string; result?: CopilotResult }
 
 const EXAMPLES = [
   'Add four M4 mounting holes near the corners',
@@ -51,13 +52,23 @@ export function CopilotPanel({ open, onClose }: { open: boolean; onClose: () => 
     if (!text || busy || !doc) return
     setGoal('')
     const idx = turns.length
-    setTurns((t) => [...t, { goal: text, running: true }])
+    setTurns((t) => [...t, { goal: text, running: true, docId: doc.id }])
     // Live progress: the copilot runs as a server-side job; each poll delivers
     // the transcript so far.
     const result = await runCopilot(text, (state) =>
       setTurns((t) => t.map((x, i) => (i === idx ? { ...x, result: state } : x))),
     )
     setTurns((t) => t.map((x, i) => (i === idx ? { ...x, running: false, result } : x)))
+  }
+
+  const stop = async (index: number, turn: Turn) => {
+    if (!turn.result?.job_id) return
+    setTurns((t) => t.map((x, i) => i === index ? { ...x, stopping: true, stopError: undefined } : x))
+    try { await api.cancelCopilot(turn.docId, turn.result.job_id) }
+    catch (e) {
+      setTurns((t) => t.map((x, i) => i === index ? { ...x, stopping: false,
+        stopError: e instanceof Error ? e.message : 'Could not stop the task' } : x))
+    }
   }
 
   return (
@@ -114,13 +125,16 @@ export function CopilotPanel({ open, onClose }: { open: boolean; onClose: () => 
               )}
               {turn.running ? (
                 <div className="flex items-center gap-2 text-[11px] text-cad-accent-hot">
-                  <Loader2 size={12} className="animate-spin" /> Planning &amp; building…
+                  <Loader2 size={12} className="animate-spin" /> {turn.stopping ? 'Stopping after current operation...' : 'Planning & building...'}
+                  {turn.result?.job_id && <button onClick={() => stop(i, turn)} disabled={turn.stopping}
+                    className="ml-auto px-2 py-1 border border-cad-border rounded-sm disabled:opacity-40">Stop</button>}
                 </div>
               ) : turn.result ? (
                 <div className="text-[12px] text-cad-text-heading pt-1 border-t border-cad-border/60 mt-1">{turn.result.summary}</div>
               ) : (
                 <div className="text-[11px] text-cad-danger">No response.</div>
               )}
+              {turn.stopError && <p role="alert" className="text-[11px] text-cad-danger">{turn.stopError}</p>}
             </div>
           </div>
         ))}

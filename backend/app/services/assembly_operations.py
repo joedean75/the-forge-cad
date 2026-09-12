@@ -178,8 +178,8 @@ def _insert_part(asm_id, args):
            "dimensional standards, or a brushless motor, flight controller, "
            "4-in-1 ESC, RC servo, hex standoff, propeller, carbon plate or tube "
            "or LiPo pack from the settled conventions of RC, drone and robotics "
-           "work. Every one arrives as an ordinary editable part, not an "
-           "imported blob. Browse the keys with list_standard_parts. Inserting "
+           "work. Adafruit catalog keys automatically fetch original manufacturer "
+           "CAD and import it as a reusable part. Browse list_standard_parts. Inserting "
            "the same key twice reuses one part document, so the BOM says qty 2 "
            "rather than listing it twice. Where a dimension varies by "
            "manufacturer it is a parameter rather than a table row — pass those "
@@ -223,7 +223,13 @@ def _insert_standard_part(asm_id, args):
     # against the *assembly owner's* imports, not the caller's, for the same
     # reason `document_for` creates under that account: `add_component` refuses
     # a part the assembly's owner cannot open.
-    if str(key).startswith(supplier_parts.PREFIX):
+    if str(key).startswith("adafruit:"):
+        from app.services import adafruit_parts
+        row = adafruit_parts.by_key(key)
+        if row is None:
+            raise BadArgument("Unknown Adafruit catalog key", arg="key")
+        designation, fidelity = row["designation"], "supplier"
+    elif str(key).startswith(supplier_parts.PREFIX):
         row = supplier_parts.by_key(key, asm.owner_id)
         if row is None:
             raise BadArgument(

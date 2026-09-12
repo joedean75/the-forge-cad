@@ -63,7 +63,7 @@ def _existing(key: str, owner_id: Optional[str]) -> Optional[str]:
 
 def listing(owner_id: Optional[str] = None, *, category: Optional[str] = None,
             search: Optional[str] = None, source: Optional[str] = None,
-            limit: int = 60) -> dict:
+            limit: int = 60, offset: int = 0) -> dict:
     """The whole catalog a caller can place: generated parts plus their own.
 
     One listing rather than two, because they are the same question — "what can
@@ -76,14 +76,15 @@ def listing(owner_id: Optional[str] = None, *, category: Optional[str] = None,
     Supplier rows come first: an account that has imported six parts wants those
     six near the top, not on page four behind 173 screws.
     """
-    from app.services import parts_catalog, supplier_parts
+    from app.services import parts_catalog, supplier_parts, adafruit_parts
 
     mine = [supplier_parts.describe(r) for r in supplier_parts.for_owner(owner_id)]
     if source:
         mine = [r for r in mine if r["source"] == source]
     generated = [] if source else [parts_catalog.describe(e) for e in parts_catalog.catalog()]
 
-    rows = mine + generated
+    adafruit = [adafruit_parts.describe(r) for r in adafruit_parts.manifest()["parts"]] if source in (None, "", "adafruit") else []
+    rows = mine + generated + adafruit
     if category:
         rows = [r for r in rows if r["category"] == category]
     needle = (search or "").strip().lower()
@@ -97,10 +98,12 @@ def listing(owner_id: Optional[str] = None, *, category: Optional[str] = None,
     counts: dict = {}
     for row in rows:
         counts[row["category"]] = counts.get(row["category"], 0) + 1
-    return {"parts": rows[:limit], "count": len(rows),
-            "returned": min(len(rows), limit), "categories": counts,
+    offset = max(0, int(offset))
+    page = rows[offset:offset + limit]
+    return {"parts": page, "count": len(rows), "offset": offset,
+            "returned": len(page), "categories": counts,
             "imported": len(mine),
-            "sources": supplier_parts.sources(),
+            "sources": [adafruit_parts.SOURCE, *supplier_parts.sources()],
             "source": "generated from the published dimensional standards "
                       "(ISO 4762/4032/7089/2338/273, ISO 15, NEMA frames) and "
                       "from the settled conventions of RC, drone and robotics "
@@ -122,6 +125,11 @@ def document_for_key(key: str, owner_id: Optional[str] = None,
     """
     from app.services import parts_catalog, supplier_parts
 
+    if str(key).startswith("adafruit:"):
+        from app.services import adafruit_parts
+        if params:
+            raise ValueError("Adafruit parts use original manufacturer geometry, without parameters")
+        return adafruit_parts.document_for_key(key, owner_id)
     if str(key).startswith(supplier_parts.PREFIX):
         if params:
             raise ValueError("an imported supplier part has no parameters — "
@@ -178,6 +186,10 @@ def category_of(catalog_ref: Optional[str],
     ref = (catalog_ref or "").strip()
     if not ref:
         return None
+    if ref.startswith("adafruit:"):
+        from app.services import adafruit_parts
+        row = adafruit_parts.by_key(ref)
+        return row["category"] if row else None
     if ref.startswith(supplier_parts.PREFIX):
         row = supplier_parts.by_key(ref, owner_id)
         return row.get("category") if row else None

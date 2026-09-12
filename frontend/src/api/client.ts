@@ -320,6 +320,8 @@ export const api = {
    * ask, because the id lived in a process-local dict that a restart emptied.
    */
   listJobs: (id: string) => fetchJson<{ jobs: JobRecord[] }>(`/documents/${id}/jobs`),
+  cancelCopilot: (id: string, jobId: string) =>
+    fetchJson<{ ok: boolean }>(`/documents/${id}/copilot/${jobId}/cancel`, { method: 'POST' }),
 
   /**
    * Per-mode readiness and freshness, in one call.
@@ -346,12 +348,13 @@ export const api = {
    * opening a *new* assembly holds neither, and that is exactly when they reach
    * for a screw. Both doors read the same catalog.
    */
-  listStandardParts: (opts?: { category?: string; search?: string; source?: string; limit?: number }) => {
+  listStandardParts: (opts?: { category?: string; search?: string; source?: string; limit?: number; offset?: number }) => {
     const query = new URLSearchParams()
     if (opts?.category) query.set('category', opts.category)
     if (opts?.search) query.set('search', opts.search)
     if (opts?.source) query.set('source', opts.source)
     query.set('limit', String(opts?.limit ?? 60))
+    query.set('offset', String(opts?.offset ?? 0))
     return fetchJson<StandardPartPage>(`/documents/meta/standard-parts?${query}`)
   },
   /**

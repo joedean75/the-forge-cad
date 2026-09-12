@@ -256,6 +256,8 @@ class CopilotJobState(BaseModel):
     steps: list[Dict[str, Any]]
     summary: Optional[str] = None
     document: Optional[DesignDocument] = None
+    finished: bool = False
+    stop_reason: Optional[str] = None
 
 
 # In-memory copilot jobs (single-instance, like the optimize job store).
@@ -264,12 +266,14 @@ _COPILOT_JOBS: Dict[str, Dict[str, Any]] = {}
 
 def _copilot_state(job: Dict[str, Any], document: Optional[DesignDocument]) -> CopilotJobState:
     return CopilotJobState(
-        ok=job["status"] != "error",
+        ok=job["status"] != "error" and (job["status"] == "running" or job.get("finished", False)),
         job_id=job["id"],
         status=job["status"],
         steps=list(job["steps"]),
         summary=job.get("summary"),
         document=document,
+        finished=job.get("finished", False),
+        stop_reason=job.get("stop_reason"),
     )
 
 
@@ -281,8 +285,11 @@ def _run_copilot_job(job: Dict[str, Any], doc_id: str, goal: str, max_steps: int
             max_steps=max_steps,
             meter=lambda: meter_operation(acc),
             on_step=lambda entry: job["steps"].append(entry),
+            cancelled=lambda: job.get("cancel_requested", False),
         )
         job["summary"] = outcome["summary"]
+        job["finished"] = outcome["finished"]
+        job["stop_reason"] = outcome["stop_reason"]
         job["status"] = "done"
     except Exception as exc:  # noqa: BLE001 — job must always resolve
         job["summary"] = f"Copilot failed: {exc}"
@@ -295,6 +302,17 @@ def _copilot_access(doc_id: str, acc: accounts.Account) -> None:
         raise HTTPException(status_code=404, detail="Document not found")
     if not document_service.can_edit(doc, acc.id):
         raise HTTPException(status_code=403, detail="this action requires editor access")
+
+
+@router.post("/api/documents/{doc_id}/copilot/{job_id}/cancel")
+def cancel_copilot(doc_id: str, job_id: str, acc: accounts.Account = Depends(current_account)):
+    _copilot_access(doc_id, acc)
+    job = _COPILOT_JOBS.get(job_id)
+    if job is None or job["doc_id"] != doc_id:
+        raise HTTPException(status_code=404, detail="Copilot job not found")
+    if job["status"] == "running":
+        job["cancel_requested"] = True
+    return {"ok": True, "cancel_requested": job.get("cancel_requested", False)}
 
 
 @router.post(

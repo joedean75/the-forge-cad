@@ -703,6 +703,7 @@ def list_standard_parts(
     search: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
     limit: int = Query(60, ge=1, le=250),
+    offset: int = Query(0, ge=0),
     acc: accounts.Account = Depends(current_account),
 ):
     """The purchased parts, as a resource rather than an operation.
@@ -721,7 +722,7 @@ def list_standard_parts(
     from app.services import standard_parts
 
     return standard_parts.listing(acc.id, category=category, search=search,
-                                  source=source, limit=limit)
+                                  source=source, limit=limit, offset=offset)
 
 
 @router.post("/meta/supplier-parts")

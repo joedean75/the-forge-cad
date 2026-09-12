@@ -90,3 +90,62 @@ def test_copilot_endpoint_requires_goal():
 def test_copilot_endpoint_unknown_document_404():
     r = client.post("/api/documents/does-not-exist/copilot", json={"goal": "x"})
     assert r.status_code == 404
+
+
+def test_done_is_rechecked_and_never_accepts_unmet_requirements(monkeypatch):
+    monkeypatch.setattr(copilot, "_unmet_requirements", lambda _: ["Width is incorrect"])
+    out = copilot.run(_new_doc(), "width", planner=lambda *a: {"done": True, "summary": "All done"})
+    assert out["finished"] is False
+    assert out["stop_reason"] == "verification_failed"
+    assert "Goal not confirmed complete" in out["summary"]
+
+
+def test_repeated_unknown_operation_is_bounded():
+    out = copilot.run(_new_doc(), "goal", max_steps=16,
+                      planner=lambda *a: {"op": "unknown_operation", "args": {}})
+    assert out["stop_reason"] == "repeated_failure"
+    assert len([s for s in out["steps"] if s["kind"] == "op"]) == 3
+
+
+def test_cancel_during_planning_prevents_mutation():
+    flag = {"cancel": False}
+    def planner(*args):
+        flag["cancel"] = True
+        return {"op": "add_primitive", "args": {"shape": "box"}}
+    out = copilot.run(_new_doc(), "goal", planner=planner, cancelled=lambda: flag["cancel"])
+    assert out["stop_reason"] == "cancelled" and not out["finished"]
+    assert out["steps"] == []
+
+
+def test_unconfigured_is_not_success():
+    out = copilot.run(_new_doc(), "goal")
+    assert not out["finished"] and out["stop_reason"] == "unconfigured"
+
+
+def test_result_summary_is_bounded_and_removes_nested_geometry():
+    import json
+    result = copilot._trim_result({"nested": {"feature_tree": "x"*100000},
+                                  "rows": ["x"*10000]*1000})
+    assert len(json.dumps(result)) < 12000
+    assert "feature_tree" not in json.dumps(result)
+
+
+def test_cancel_requires_matching_document():
+    from app.routers.operations import _COPILOT_JOBS
+    doc_id, other = _new_doc(), _new_doc()
+    _COPILOT_JOBS["cancel-test"] = {"id": "cancel-test", "doc_id": doc_id, "status": "running", "steps": []}
+    assert client.post(f"/api/documents/{other}/copilot/cancel-test/cancel").status_code == 404
+    assert client.post(f"/api/documents/{doc_id}/copilot/cancel-test/cancel").status_code == 200
+    assert _COPILOT_JOBS["cancel-test"]["cancel_requested"] is True
+
+
+def test_invalid_geometry_cannot_finish_without_a_spec(monkeypatch):
+    execute = copilot.cad_operations.execute
+    def checked(op, *args, **kwargs):
+        if op == "check_geometry":
+            return {"ok": True, "result": {"valid": False, "failed": ["watertight"]}}
+        return execute(op, *args, **kwargs)
+    monkeypatch.setattr(copilot.cad_operations, "execute", checked)
+    out = copilot.run(_new_doc(), "plate", planner=_scripted)
+    assert not out["finished"]
+    assert out["stop_reason"] == "verification_failed"

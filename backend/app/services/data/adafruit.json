@@ -1,0 +1,3877 @@
+{
+  "revision": "af042a90c642be09752ebf9d99ba10f84f8daf0b",
+  "parts": [
+    {
+      "key": "adafruit:d759d6f22948df71",
+      "path": "1048 1.2in 8x8 Matrix Backpack/1048 1.2in 8x8 matrix backpack.step",
+      "sha": "d759d6f22948df715505f4ab26f9a6bfb1f1128a",
+      "size": 1064330,
+      "designation": "1048 1.2in 8x8 matrix backpack",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:859df2d45b60b360",
+      "path": "1054 Laser Diode/Laser Diode.step",
+      "sha": "859df2d45b60b36032ee83c4af2d2c339a4d20c4",
+      "size": 40572,
+      "designation": "Laser Diode",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:51bce566d784a20d",
+      "path": "1085 ADS1115 ADC/1085 ADS1115 ADC.step",
+      "sha": "51bce566d784a20da187fad36635d901000271cd",
+      "size": 630881,
+      "designation": "1085 ADS1115 ADC",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c8b58935bc577c6d",
+      "path": "1092 Tactile On Off Switch/1092 Tactile On Off Switch.step",
+      "sha": "c8b58935bc577c6d06ea7465324ecd7a017671a4",
+      "size": 57270,
+      "designation": "1092 Tactile On Off Switch",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ff21db318951981d",
+      "path": "1119 Tactile Switch 12mm (B3F-40XX)/1119-12mm-TactileSwitch.step",
+      "sha": "ff21db318951981d7ef71cd21a9cc625206e1473",
+      "size": 123695,
+      "designation": "1119-12mm-TactileSwitch",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d03ce99e2205de94",
+      "path": "1143 Micro Servo - High Torque Metal Gear/1143 Micro Servo High Torque Metal Gear.step",
+      "sha": "d03ce99e2205de94c9ad9576dd4b293c59e5aed5",
+      "size": 136339,
+      "designation": "1143 Micro Servo High Torque Metal Gear",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:6c6759792553237c",
+      "path": "1145 16mm button/1445 16mm button.step",
+      "sha": "6c6759792553237c3376ad29a1929c8393264dd6",
+      "size": 336828,
+      "designation": "1445 16mm button",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:39edada4cb6eaeb9",
+      "path": "1185 Massive Arcade Button 100mm/1185 Massive Arcade Button 100mm.step",
+      "sha": "39edada4cb6eaeb9300ee94ce3887eadf2987de3",
+      "size": 802426,
+      "designation": "1185 Massive Arcade Button 100mm",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5b53d15fbee19afc",
+      "path": "1214 PermaProto Small Mint/1214 Perma-Proto Small Mint.step",
+      "sha": "5b53d15fbee19afc4a7b11a755bab3e280366769",
+      "size": 399304,
+      "designation": "1214 Perma-Proto Small Mint",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1714d880d0f2a4e9",
+      "path": "1221 Adafruit 2020 Extrusion/1221 Adafruit 2020 Extrusion.step",
+      "sha": "1714d880d0f2a4e92269390a3dbaf3260cc7d998",
+      "size": 156205,
+      "designation": "1221 Adafruit 2020 Extrusion",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:b6128259281cdeb5",
+      "path": "1253 Aluminum Timing Pulley/1253 Aluminum Timing Pulley.step",
+      "sha": "b6128259281cdeb578b4422d11da41a6ec9e4868",
+      "size": 472468,
+      "designation": "1253 Aluminum Timing Pulley",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e10e1e5d07de840d",
+      "path": "1264 1.2in 7 Segment Display/1.2in 7 Segment Display.step",
+      "sha": "e10e1e5d07de840d6a2ba1771754c230f18b64ef",
+      "size": 402896,
+      "designation": "1.2in 7 Segment Display",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:b956713b2135c0d3",
+      "path": "1271 1.2in 7 Segment Backpack/1271 1.2in 7 Segment Backpack.step",
+      "sha": "b956713b2135c0d3c785d09cbfe58425c92a21ea",
+      "size": 1886502,
+      "designation": "1271 1.2in 7 Segment Backpack",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:dcb1cd1c5f5b9f6b",
+      "path": "1304 MicroLipo Charger/1304 MicroLipo Charger V2.step",
+      "sha": "dcb1cd1c5f5b9f6b9befce5cac043028f2f6f3e5",
+      "size": 558307,
+      "designation": "1304 MicroLipo Charger V2",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8a2d8e4c01511265",
+      "path": "1313 Speaker 3in 8Ohm 1W/1313 Speaker 3in 8Ohm 1W.step",
+      "sha": "8a2d8e4c01511265c3b701ce0a13edba52e1746b",
+      "size": 271015,
+      "designation": "1313 Speaker 3in 8Ohm 1W",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3fa56953b7a64fdb",
+      "path": "1317 150mAh Lipo Battery/1317 150mAh Lipo Battery.step",
+      "sha": "3fa56953b7a64fdbf75a51b7a096e9c4731a79fb",
+      "size": 15749,
+      "designation": "1317 150mAh Lipo Battery",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9661d87150451142",
+      "path": "1321 Battery 9V/1321 Battery 9V.step",
+      "sha": "9661d87150451142b4958a3097531f185a1dd5f0",
+      "size": 237372,
+      "designation": "1321 Battery 9V",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:559d17c4865170a1",
+      "path": "1374 Capacitive Touch Breakout ATA42QT1010/1374 AT42QT1010 Breakout.step",
+      "sha": "559d17c4865170a167ea2136ada92ad58913294b",
+      "size": 271893,
+      "designation": "1374 AT42QT1010 Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9ec40d8bb8f02b1b",
+      "path": "1376 NeoPixel Strip/1376 NeoPixel Strip.step",
+      "sha": "9ec40d8bb8f02b1b8d052b1fd5c3fdc2b7f2dad5",
+      "size": 237843,
+      "designation": "1376 NeoPixel Strip",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d9950359b5395c93",
+      "path": "1400 Push Button Power Switch/1400 Push Button Power Switch.step",
+      "sha": "d9950359b5395c93b6c5f49f01a2b98820b73096",
+      "size": 3768696,
+      "designation": "1400 Push Button Power Switch",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7d01cfa7a4bb1495",
+      "path": "1426 8x NeoPixel Stick/1426 8x NeoPixel Stick.step",
+      "sha": "7d01cfa7a4bb1495964542b31d05b5a4b06ebad4",
+      "size": 116195,
+      "designation": "1426 8x NeoPixel Stick",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c82295d29b7cd909",
+      "path": "1438 Adafruit MotorShield/1438 Adafruit MotorShield.step",
+      "sha": "c82295d29b7cd909d5000eac56dcc8960aded834",
+      "size": 73337,
+      "designation": "1438 Adafruit MotorShield",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:519c26df7924e71a",
+      "path": "1455 LED driver TLC59711/1455 LED-Driver-TLC59711.step",
+      "sha": "519c26df7924e71a9331dc5ee8a2bcf4ce73ccbb",
+      "size": 1102124,
+      "designation": "1455 LED-Driver-TLC59711",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7cfa8ccea29281a3",
+      "path": "1463 16x NeoPixel Ring/1463 16x NeoPixel Ring.step",
+      "sha": "7cfa8ccea29281a33b5e6f2615c26de9a51b604c",
+      "size": 114270,
+      "designation": "1463 16x NeoPixel Ring",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:da14028ca3ebad06",
+      "path": "1487 NeoMatrix 8x8/1487 NeoMatrix 8x8.step",
+      "sha": "da14028ca3ebad0679537c9e8f48942a303bc792",
+      "size": 378899,
+      "designation": "1487 NeoMatrix 8x8",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8d26787e82cd0218",
+      "path": "1501 Trinket 5V/1501 Trinket 5V.step",
+      "sha": "8d26787e82cd0218c70a1aee7715329f763c3462",
+      "size": 43267,
+      "designation": "1501 Trinket 5V",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:dc5ac20e6c4d500e",
+      "path": "1570 100mAh Lipo Battery/1570 100mAh Lipo Battery.step",
+      "sha": "dc5ac20e6c4d500e9cc1e449ab8c7a408c3f20fe",
+      "size": 14835,
+      "designation": "1570 100mAh Lipo Battery",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:73fdc20e9903e8aa",
+      "path": "1578 500mAh battery/1578 500mAh battery.step",
+      "sha": "73fdc20e9903e8aaebe6932f2a06bfecd070b556",
+      "size": 14850,
+      "designation": "1578 500mAh battery",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:60e9a7133b9dc7ab",
+      "path": "1586 24x NeoRing/1586 24x NeoRing.step",
+      "sha": "60e9a7133b9dc7ab71e2667248e07dd6c365c1b5",
+      "size": 157858,
+      "designation": "1586 24x NeoRing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:57dc77877b7efeae",
+      "path": "1586 NeoPixel Ring 24x/24x NeoPixel Ring 1586.step",
+      "sha": "57dc77877b7efeaed72144f47cb9edf3033824d8",
+      "size": 198967,
+      "designation": "24x NeoPixel Ring 1586",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e3c48e876dae0916",
+      "path": "1590 Adafruit RA8875 Breakout/Adafruit RA8875 TFT Breakout.step",
+      "sha": "e3c48e876dae09166fe2e5cfc1939a7f8407ad28",
+      "size": 4712259,
+      "designation": "Adafruit RA8875 TFT Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7bbcfe2e1effbdc5",
+      "path": "1602 CAP1188/1602 Adafruit CAP1188.stl",
+      "sha": "7bbcfe2e1effbdc5f558798f0cfb4f612ab90abe",
+      "size": 910884,
+      "designation": "1602 Adafruit CAP1188",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1e582735c738e55d",
+      "path": "1606 Perma-Proto FullSize/1606 Perma-Proto FullSize.step",
+      "sha": "1e582735c738e55d8e453446e6d71da89c807617",
+      "size": 1467024,
+      "designation": "1606 Perma-Proto FullSize",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:4a601942b298ac86",
+      "path": "1608 perma-proto quarter/1608 perma-proto quarter.step",
+      "sha": "4a601942b298ac8625ef0d288c08b5b3c7aa015e",
+      "size": 18037,
+      "designation": "1608 perma-proto quarter",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:dd00210c5dda988d",
+      "path": "1609 Perma-Proto HalfSize/1609 Perma-Proto HalfSize.step",
+      "sha": "dd00210c5dda988d244bf5689de2fa63e351ea2b",
+      "size": 730552,
+      "designation": "1609 Perma-Proto HalfSize",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5636c69080698d5d",
+      "path": "1680 5in TFT Display/1680 5in TFT Display.step",
+      "sha": "5636c69080698d5d6b8b87993a004a3b640e5075",
+      "size": 13882,
+      "designation": "1680 5in TFT Display",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ced4288f4c5b2989",
+      "path": "1739 Pizero Large/1739 Pizero Large.step",
+      "sha": "ced4288f4c5b298973de7e40500b72a72a0f4993",
+      "size": 26845,
+      "designation": "1739 Pizero Large",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9fabf3a92a5f5c0e",
+      "path": "1752 MAX9744/1752 MAX9744.step",
+      "sha": "9fabf3a92a5f5c0e0bf1fc3acf111c68d50e4cd4",
+      "size": 39642,
+      "designation": "1752 MAX9744",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ab5bf79e5ee70baa",
+      "path": "1781 2200mAh Battery/1781 2200mAh Battery.step",
+      "sha": "ab5bf79e5ee70baafc75833b3350844a814445cb",
+      "size": 12177,
+      "designation": "1781 2200mAh Battery",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:bd3442afffdbc86d",
+      "path": "1782 MCP9808/1782 MCP9808.step",
+      "sha": "bd3442afffdbc86df3adedad71981dd1079416a8",
+      "size": 299588,
+      "designation": "1782 MCP9808",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9813bc4a89728006",
+      "path": "1833 micro USB Breakout/1833 micro USB Breakout.step",
+      "sha": "9813bc4a89728006ed3c1df662014f626809116c",
+      "size": 60280,
+      "designation": "1833 micro USB Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5a435ec39a5c82dc",
+      "path": "1833 microUSB breakout/1833 microUSB breakout.step",
+      "sha": "5a435ec39a5c82dc9d64248223567338903d374b",
+      "size": 532667,
+      "designation": "1833 microUSB breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:cfb937cb9c122713",
+      "path": "1866 Slide Rail Platform/1866 Slide Rail Platform.step",
+      "sha": "cfb937cb9c12271357fe83fb65fe42e3fab2f5f4",
+      "size": 139950,
+      "designation": "1866 Slide Rail Platform",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:25ea1a531dc9e00a",
+      "path": "1867 12mm Coincell Switched/1867 12mm Coincell Switched.step",
+      "sha": "25ea1a531dc9e00a8c260252ccb630ebd8f76ecf",
+      "size": 74108,
+      "designation": "1867 12mm Coincell Switched",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e1736b646d94f8a8",
+      "path": "1870 Coin Cell CR2032/1870 Coin Cell CR2032.step",
+      "sha": "e1736b646d94f8a87b25af320c273a0115f216be",
+      "size": 170048,
+      "designation": "1870 Coin Cell CR2032",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3a6d3171c1852384",
+      "path": "1871 CR2032 Breakout Switch/1871 CR2032 Breakout Switch.step",
+      "sha": "3a6d3171c18523843ff37947d868ad74ec9e5e73",
+      "size": 276827,
+      "designation": "1871 CR2032 Breakout Switch",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c5f30769ca095dc6",
+      "path": "1893 Altimeter MLP3115A2/1893 Altimeter MLP3115A2.step",
+      "sha": "c5f30769ca095dc63b971c24f4b090c073682e3a",
+      "size": 106231,
+      "designation": "1893 Altimeter MLP3115A2",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:cfc2c65b73134914",
+      "path": "1904 MicroUSB Lipo Charger/1904 MicroUSB Lipo Charger.step",
+      "sha": "cfc2c65b73134914b478765401a35b17084b6c98",
+      "size": 936350,
+      "designation": "1904 MicroUSB Lipo Charger",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:b0905e5a407a5e6f",
+      "path": "1910 Alphanumeric Backpack STEMMA QT/1910 Alphanumeric Backpack STEMMA QT.step",
+      "sha": "b0905e5a407a5e6fb11a50a41c54ed156fc7cfe4",
+      "size": 1809285,
+      "designation": "1910 Alphanumeric Backpack STEMMA QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8b6dc99101cb7c90",
+      "path": "1911 Alphanumberic Display STEMMA QT/1911 Alphanumberic Display STEMMA QT.step",
+      "sha": "8b6dc99101cb7c90454d6f1885a927fdc094bb01",
+      "size": 1809369,
+      "designation": "1911 Alphanumberic Display STEMMA QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:2cd920b76d004d55",
+      "path": "1946 Adafruit FONA/1946 Adafruit FONA 800 GSM.step",
+      "sha": "2cd920b76d004d554770e1219846028c4a7c5562",
+      "size": 6544331,
+      "designation": "1946 Adafruit FONA 800 GSM",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:64f13cd29ac23664",
+      "path": "1982 MPR121 Stemma Breakout/1982 MPR121Q QT.step",
+      "sha": "64f13cd29ac23664fb70ca20c6f32ac361f95c40",
+      "size": 882579,
+      "designation": "1982 MPR121Q QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:6c1a0170a080862b",
+      "path": "1982 MPR121/1982 MPR121.step",
+      "sha": "6c1a0170a080862be08748d7b1673d8be24f9b81",
+      "size": 15017,
+      "designation": "1982 MPR121",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f9e89b62566ec1ee",
+      "path": "2000 ProTrinket 5V/PCB Component.step",
+      "sha": "f9e89b62566ec1eec66250fccdf07c6e0a650c60",
+      "size": 1867357,
+      "designation": "PCB Component",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f0afd8653a095f3b",
+      "path": "2010 ProTrinket 3V/2010 ProTrinket 3V.step",
+      "sha": "f0afd8653a095f3b2c3a37c4f71c5b4845a7d51e",
+      "size": 1822469,
+      "designation": "2010 ProTrinket 3V",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:36a137d08ce7a1b7",
+      "path": "2011 2000mAh Battery/2000mAh Battery.step",
+      "sha": "36a137d08ce7a1b75ef41b33271b91aa3d8f1053",
+      "size": 14821,
+      "designation": "2000mAh Battery",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ab80d2e85b6b02af",
+      "path": "2088 1.44in TFT Display/2088 1.44in TFT Display-revC.step",
+      "sha": "ab80d2e85b6b02afe4f37f1d690d8069ed9ce395",
+      "size": 1712005,
+      "designation": "2088 1.44in TFT Display-revC",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:30ac53e724ac61e6",
+      "path": "2090 2.8in TFT Cap Touch/2090 2.8in TFT Cap Touch.step",
+      "sha": "30ac53e724ac61e6029a64be436140a4bc61ab56",
+      "size": 3147860,
+      "designation": "2090 2.8in TFT Cap Touch",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:07996b5dac864e6d",
+      "path": "2124 Trinket Lipo Backpack/2124 Trinket Lipo Backpack.step",
+      "sha": "07996b5dac864e6dd29933dc16ee684bfbd6c735",
+      "size": 477333,
+      "designation": "2124 Trinket Lipo Backpack",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3dda97a9605fcb6f",
+      "path": "2130 PAM8302/2130 PAM8302.step",
+      "sha": "3dda97a9605fcb6feca01fd22589c7034abcfdd2",
+      "size": 115942,
+      "designation": "2130 PAM8302",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9415fe452d9ce84e",
+      "path": "2133 Audio FX Soundboard with Headphone/2133 Adafruit EZ-SFX with Headphone.step",
+      "sha": "9415fe452d9ce84e013e609685c64099bad596d4",
+      "size": 3041691,
+      "designation": "2133 Adafruit EZ-SFX with Headphone",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:de09426ea193fa97",
+      "path": "2190 Verter 5V USB/2190 Verter 5V USB.step",
+      "sha": "de09426ea193fa97b2cb01a8f2fe46b2452404ea",
+      "size": 101010,
+      "designation": "2190 Verter 5V USB",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a7d76642ba31839d",
+      "path": "2201 Submicro servo/2201 Submicro Servo SG51R.step",
+      "sha": "a7d76642ba31839d66a1015baf655a0a31404d38",
+      "size": 160072,
+      "designation": "2201 Submicro Servo SG51R",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:468a8864659db39e",
+      "path": "2217 Adafruit FX Soundboard with Amp/2217 Adafruit EZ-SFX with Amp.step",
+      "sha": "468a8864659db39e853535837aa43261244a498c",
+      "size": 2715081,
+      "designation": "2217 Adafruit EZ-SFX with Amp",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:47f94aa96f3702f5",
+      "path": "2218 HDMI TPF401 Breakout/2218 HDMI TPF401 Breakout.step",
+      "sha": "47f94aa96f3702f50fc2161dd68df373a6c84123",
+      "size": 44631,
+      "designation": "2218 HDMI TPF401 Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:47a77f99b93251c7",
+      "path": "2219 TFP401 HDMI Breakout/2219 TFP401 HDMI Breakout.step",
+      "sha": "47a77f99b93251c7938aee3ab91ecff1baaa0924",
+      "size": 7247521,
+      "designation": "2219 TFP401 HDMI Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:18956cdcc3675c38",
+      "path": "2226 NeoPixel Jewel/2226 NeoPixel Jewel.step",
+      "sha": "18956cdcc3675c389b5e5d51a1a50ba3fdcc15f2",
+      "size": 69965,
+      "designation": "2226 NeoPixel Jewel",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:b57f539e1bcf4ace",
+      "path": "2230 Extruded aluminum box 94mm/2230 Extruded aluminum box 94mm.step",
+      "sha": "b57f539e1bcf4ace8fd615e7f67a53fef95e8135",
+      "size": 73474,
+      "designation": "2230 Extruded aluminum box 94mm",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d875611fc6828d6b",
+      "path": "2232 5in HDMI Backpack/2232 5in HDMI Backpack.step",
+      "sha": "d875611fc6828d6b160c8833007713171324f192",
+      "size": 53968,
+      "designation": "2232 5in HDMI Backpack",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:6d8a698f4529726b",
+      "path": "2277 RGB Matrix 5mm/2277 RGB Matrix.step",
+      "sha": "6d8a698f4529726b1330e1d75871ce6c61406303",
+      "size": 57278743,
+      "designation": "2277 RGB Matrix",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:509544807bc32d94",
+      "path": "2278 RGB Matrix 4mm/2278 RGB Matrix 4mm.step",
+      "sha": "509544807bc32d94f12dff0c87f7c77c1881f7ce",
+      "size": 59886,
+      "designation": "2278 RGB Matrix 4mm",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:6e9d14f825940cf1",
+      "path": "2305 DRV2605L/2305 DRV2605L.step",
+      "sha": "6e9d14f825940cf111e600ffa1b965afd65eba92",
+      "size": 281978,
+      "designation": "2305 DRV2605L",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8fb4ba38970fddb7",
+      "path": "2307 MicroServo MG923B/2307 MicroServo MG923B.step",
+      "sha": "8fb4ba38970fddb7ed8b580ca7cac5287b931b5d",
+      "size": 140481,
+      "designation": "2307 MicroServo MG923B",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:8b794fe4326de446",
+      "path": "2315 PiTFT 2.2/2315 PiTFT 2.2.step",
+      "sha": "8b794fe4326de4465749d2999895596fab38cb80",
+      "size": 111599,
+      "designation": "2315 PiTFT 2.2",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:119da003ecf653c1",
+      "path": "2341 Adafruit EZ-SFX Mini/2341 Adafruit EZ-SFX Mini.step",
+      "sha": "119da003ecf653c15727c65a9882be047e0c9fb7",
+      "size": 2350175,
+      "designation": "2341 Adafruit EZ-SFX Mini",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d9b2a829e8cb159f",
+      "path": "2348 Adafruit Motor HAT/2348 Adafruit Motor HAT.step",
+      "sha": "d9b2a829e8cb159f1b965a87ada561bb2373a706",
+      "size": 2054701,
+      "designation": "2348 Adafruit Motor HAT",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:cc473a294a5c532a",
+      "path": "2354 7in TFT Touchscreen/Adafruit 2354 7in TFT Touchscreen v3.step",
+      "sha": "cc473a294a5c532ad3feaffe7dcfc4a9a41c96f5",
+      "size": 331479,
+      "designation": "Adafruit 2354 7in TFT Touchscreen v3",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ad373edaa8b3e240",
+      "path": "2423 PiTFT 2.8/2423 PiTFT 2.8.step",
+      "sha": "ad373edaa8b3e2407c5ea386ecfec86c815d19b9",
+      "size": 157852,
+      "designation": "2423 PiTFT 2.8",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:6593d825d258467c",
+      "path": "2441 PiTFT 3.5/2441 PiTFT 3.5.step",
+      "sha": "6593d825d258467c9ded1031e0c93d37df79e34b",
+      "size": 53548,
+      "designation": "2441 PiTFT 3.5",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c231be561316f7c1",
+      "path": "2465 Powerboost 1000C/2465 Adafruit PowerBoost 1000C Rev B.step",
+      "sha": "c231be561316f7c1d8d8a35ce910cdd608234e4e",
+      "size": 1879501,
+      "designation": "2465 Adafruit PowerBoost 1000C Rev B",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:805763ed04a3f427",
+      "path": "2471 HUZZAH ESP8266 Breakout/2471 HUZZAH ESP8266 Breakout.step",
+      "sha": "805763ed04a3f42770cc61cec30b630ccf0af618",
+      "size": 1938898,
+      "designation": "2471 HUZZAH ESP8266 Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:39b82c8168bada0e",
+      "path": "2472 BNO055 Breakout/2472 BNO055 Breakout.step",
+      "sha": "39b82c8168bada0e8fd4e4e7b6b7a0fb7fb12cb0",
+      "size": 910421,
+      "designation": "2472 BNO055 Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:524ee05ad5e64913",
+      "path": "2488 Adafruit Metro 328/2488 Adafruit Metro 328.step",
+      "sha": "524ee05ad5e64913c32ea481c5a39c43828c5b72",
+      "size": 104086,
+      "designation": "2488 Adafruit Metro 328",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ad8aafaeeff52136",
+      "path": "2530 3W RGB LED/2530 3W RGB LED.step",
+      "sha": "ad8aafaeeff5213612782786666d7d0bea214c18",
+      "size": 193530,
+      "designation": "2530 3W RGB LED",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:829f07a8493d53a8",
+      "path": "258 1200mAh lipo/258 1200mAh lipo.step",
+      "sha": "829f07a8493d53a840334b2cab9fcd3437609ace",
+      "size": 38402,
+      "designation": "258 1200mAh lipo",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ad2e9e78a449550e",
+      "path": "259 USB Lilon Lipoly Charger/259 USB Lilon Lipoly Charger.step",
+      "sha": "ad2e9e78a449550eaf9d74a12d20c4bd7586e122",
+      "size": 1720379,
+      "designation": "259 USB Lilon Lipoly Charger",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ed071470facf6358",
+      "path": "2590 Metro Mini V2/2590 Metro Mini V2.step",
+      "sha": "ed071470facf6358451ee24716a1c5d21146f8f4",
+      "size": 2088974,
+      "designation": "2590 Metro Mini V2",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:4ca19a2364263fb6",
+      "path": "2590 Metro Mini/2590 Metro Mini Rev B.step",
+      "sha": "4ca19a2364263fb63689fc9b0f02ce9929f92de5",
+      "size": 2480550,
+      "designation": "2590 Metro Mini Rev B",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7bf489c507779ad8",
+      "path": "2629 Quarter Inch D-Ring Tripod Mount/2629 Quarter Inch D-Ring Tripod Mount.step",
+      "sha": "7bf489c507779ad8842247bc9d1d4e618c78f36a",
+      "size": 208316,
+      "designation": "2629 Quarter Inch D-Ring Tripod Mount",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:2dbf3fc47b8378b2",
+      "path": "2643 NeoPixel Ring 12/2643 NeoPixel Ring 12.step",
+      "sha": "2dbf3fc47b8378b263e9e6c812b6584b64c1b9a3",
+      "size": 114933,
+      "designation": "2643 NeoPixel Ring 12",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:94ce0c409c926bc8",
+      "path": "2652 Adafruit BME280/2652 BMP280 STEMMA QT.step",
+      "sha": "94ce0c409c926bc8c60fc6654b3abde2d41300c5",
+      "size": 895722,
+      "designation": "2652 BMP280 STEMMA QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a1b081461f37279d",
+      "path": "2652 Adafruit BME280/Adafruit BME280.step",
+      "sha": "a1b081461f37279d640500fdec4bceb3734d039d",
+      "size": 535665,
+      "designation": "Adafruit BME280",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f233e60fe95e500a",
+      "path": "2687 Adafruit FONA 3G/2687 Adafruit FONA SIM5320 3G.step",
+      "sha": "f233e60fe95e500a0cb06ba769061057fb558f35",
+      "size": 6082365,
+      "designation": "2687 Adafruit FONA SIM5320 3G",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e8096437534dff6e",
+      "path": "2719 OLED 2.4in/2719 OLED 2.4in.step",
+      "sha": "e8096437534dff6e41bb053f03ac42b30f9e7dde",
+      "size": 37324,
+      "designation": "2719 OLED 2.4in",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e2ad8df31563fb72",
+      "path": "2756 Teensy 3.2/2756 Teensy 3.2.step",
+      "sha": "e2ad8df31563fb72fbb48a856925bfcfc96216c6",
+      "size": 169311,
+      "designation": "2756 Teensy 3.2",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e50f98be2f3d757d",
+      "path": "2795 Feather 32u4 Adalogger/2795 Feather 32u4 Adalogger.step",
+      "sha": "e50f98be2f3d757d0681da821f882e272fc47007",
+      "size": 2774739,
+      "designation": "2795 Feather 32u4 Adalogger",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:2718962051967483",
+      "path": "2809 LIS3DH/2809 LIS3DH.step",
+      "sha": "271896205196748372832221b6082e2071cac762",
+      "size": 968963,
+      "designation": "2809 LIS3DH",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:cf939f2b5eccc195",
+      "path": "2821 Feather HUZZAH ESP8266/2821 Adafruit ESP8266 Feather.step",
+      "sha": "cf939f2b5eccc1954557939366768273d1746c89",
+      "size": 3143296,
+      "designation": "2821 Adafruit ESP8266 Feather",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:970a58c74b81edd7",
+      "path": "2829 Adafruit Feather Bluefruit 32u4/2829 Adafruit Feather Bluefruit 32u4.step",
+      "sha": "970a58c74b81edd7fc8f6a92b5e9aa5070dc1bac",
+      "size": 34111,
+      "designation": "2829 Adafruit Feather Bluefruit 32u4",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:071d94c02c5536e1",
+      "path": "2831 Photo Transistor Light Sensor/2831 Photo Transistor Light Sensor.step",
+      "sha": "071d94c02c5536e1911d3b63a2955ebdc472ae32",
+      "size": 28872,
+      "designation": "2831 Photo Transistor Light Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:005aad11f173e944",
+      "path": "2857 SHT31-D/2857 SHT31-D.step",
+      "sha": "005aad11f173e944ae717115b3a205d781484730",
+      "size": 626452,
+      "designation": "2857 SHT31-D",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1451696c6c002be8",
+      "path": "2884 Proto FeatherWing/2884 Proto FeatherWing.step",
+      "sha": "1451696c6c002be8a76d06860d05265c27462a6e",
+      "size": 293460,
+      "designation": "2884 Proto FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:56b1d935c2b62fa2",
+      "path": "2890 Doubler FeatherWing/2890 Doubler FeatherWing.step",
+      "sha": "56b1d935c2b62fa20c5ba9987dde3edd0686d4ba",
+      "size": 577049,
+      "designation": "2890 Doubler FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3a1716931204a909",
+      "path": "2900 Feather OLED Wing/2900 Feather OLED Wing.step",
+      "sha": "3a1716931204a909f1652e01878c61528bd98ad0",
+      "size": 71027,
+      "designation": "2900 Feather OLED Wing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e7480b195615c0a9",
+      "path": "2922 FeatherWing Adalogger/2922 FeatherWing Adalogger.step",
+      "sha": "e7480b195615c0a94d428f3eff6a0c59052fb36e",
+      "size": 1894923,
+      "designation": "2922 FeatherWing Adalogger",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:509cf38c16b36918",
+      "path": "2925 8-Way Switch/2925-8-way-switch.stl",
+      "sha": "509cf38c16b3691859e3e70191bfc573a22c1e88",
+      "size": 790384,
+      "designation": "2925-8-way-switch",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:38eb68289f3c6ea5",
+      "path": "2926 Terminal Block FeatherWing/2926 Terminal Block FeatherWing.step",
+      "sha": "38eb68289f3c6ea56103b0505170dcb86cc024e9",
+      "size": 2699798,
+      "designation": "2926 Terminal Block FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:05cb33fd7636ef8c",
+      "path": "2927 Motor FeatherWing/2927 Motor FeatherWing.step",
+      "sha": "05cb33fd7636ef8c192c7350e274d5b673a29322",
+      "size": 2250677,
+      "designation": "2927 Motor FeatherWing",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:2b2d8c238c88726a",
+      "path": "2928 Servo PWM FeatherWing/2928 Servo PWM FeatherWing.step",
+      "sha": "2b2d8c238c88726aa04df83bcab3cdf98f055d91",
+      "size": 1677906,
+      "designation": "2928 Servo PWM FeatherWing",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:0fe8eedcf7b5f919",
+      "path": "2941 DC Motor in Servo Body/2941 Micro DC Motor.step",
+      "sha": "0fe8eedcf7b5f9195667b53356a63f2c2f68a57b",
+      "size": 121685,
+      "designation": "2941 Micro DC Motor",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:654b7ce75ae514d3",
+      "path": "2995 Feather M0 Bluefruit LE/2995 Feather M0 Bluefruit LE.step",
+      "sha": "654b7ce75ae514d3087e71b9de717cbab8091d37",
+      "size": 2126560,
+      "designation": "2995 Feather M0 Bluefruit LE",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:fe3ce0cdf275c5c4",
+      "path": "3000 Circuit Playground Classic/3000 Circuit Playground Classic.step",
+      "sha": "fe3ce0cdf275c5c4426e550b4e1161c824a98dfd",
+      "size": 256343,
+      "designation": "3000 Circuit Playground Classic",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5f247019f1d9f91c",
+      "path": "3006 MAX98357/3006 MAX98357.step",
+      "sha": "5f247019f1d9f91c1c014b5bf65d5624b0156fe6",
+      "size": 296260,
+      "designation": "3006 MAX98357",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:05fd3f64ea168702",
+      "path": "3010 Adafruit Feather M0 WiFi/3010 Adafruit Feather M0 WiFi.step",
+      "sha": "05fd3f64ea1687027569a5aa8f502d83c6923ca8",
+      "size": 2160225,
+      "designation": "3010 Adafruit Feather M0 WiFi",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7cecbb47fdea871d",
+      "path": "3010 Feather M0 Wifi/3010 Feather M0 Wifi.step",
+      "sha": "7cecbb47fdea871ddca5f4fa4fed411f7944e78e",
+      "size": 36188,
+      "designation": "3010 Feather M0 Wifi",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9e9f850bf4b16490",
+      "path": "3013 DS3231 RTC/3013 DS3231 RTC.step",
+      "sha": "9e9f850bf4b164904fd2b7ec4248be7ffc4fcdf6",
+      "size": 565334,
+      "designation": "3013 DS3231 RTC",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:276a702469fe0c39",
+      "path": "3027 Adafruit FONA Feather 32u4/3027 Adafruit FONA Feather 32u4.step",
+      "sha": "276a702469fe0c3954dcb2e5b6ff344ecc544412",
+      "size": 102235,
+      "designation": "3027 Adafruit FONA Feather 32u4",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:edc2131fca093a6f",
+      "path": "3093 Crickit CPX/3093 Crickit CPX.step",
+      "sha": "edc2131fca093a6f1e86d0e505b79581a901515d",
+      "size": 850364,
+      "designation": "3093 Crickit CPX",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:537f3f68c9f621f6",
+      "path": "3093 Crickit CPX/Crickit CPX Assembly.step",
+      "sha": "537f3f68c9f621f60046978f9e4fad72bbb48c02",
+      "size": 1987669,
+      "designation": "Crickit CPX Assembly",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:132198622f976e95",
+      "path": "3101 8mm soft button/3101 8mm soft button.step",
+      "sha": "132198622f976e95fd2b15ac1b981588e1edcc16",
+      "size": 139235,
+      "designation": "3101 8mm soft button",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:bbd0b7a582e762ab",
+      "path": "3102 Mini Joystick/3102 Mini Joystick.step",
+      "sha": "bbd0b7a582e762ab0758ea390dcc9e8c4c1bdb2a",
+      "size": 150923,
+      "designation": "3102 Mini Joystick",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:04111443966b0b30",
+      "path": "3104 3105 Mini Illuminated Momentary Pushbutton/3104 3105 Mini Illuminated Momentary Pushbutton v7.step",
+      "sha": "04111443966b0b307e6202af9536cd959faca21c",
+      "size": 10362,
+      "designation": "3104 3105 Mini Illuminated Momentary Pushbutton v7",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:34f37d8e8b09b6fa",
+      "path": "3133 Ultimate GPS FeatherWing/3133 Adafruit Ultimate GPS FeatherWing.step",
+      "sha": "34f37d8e8b09b6fa47ecf093e6c99a32b3970a9a",
+      "size": 1385507,
+      "designation": "3133 Adafruit Ultimate GPS FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:be6a73a409cf53f3",
+      "path": "3178 Feather M0 RFM95/3178 Feather M0 RFM95.step",
+      "sha": "be6a73a409cf53f3a87c1b866af4fbf26530dda9",
+      "size": 2419585,
+      "designation": "3178 Feather M0 RFM95",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:12b679ad04bba0ed",
+      "path": "3190 DRV8871 Breakout/3190 DRV8871 Breakout.step",
+      "sha": "12b679ad04bba0ed9709015a66df8d2d0b678e61",
+      "size": 870028,
+      "designation": "3190 DRV8871 Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3623387e799d3d7c",
+      "path": "3191 Power Relay FeatherWing/3191 Power Relay FeatherWing.step",
+      "sha": "3623387e799d3d7c1d5ce56ac6851c82f92bd7bf",
+      "size": 869309,
+      "designation": "3191 Power Relay FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:91d89bf71c3a44d3",
+      "path": "3200 Teensy Feather Adapter/3200 Teensy Feather Adapter.step",
+      "sha": "91d89bf71c3a44d39c0f69ba45d787c8df97ab22",
+      "size": 239951,
+      "designation": "3200 Teensy Feather Adapter",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:72fd76e7aa4c9631",
+      "path": "3201 Ethernet FeatherWing/3201 Ethernet FeatherWing.step",
+      "sha": "72fd76e7aa4c9631972c671c04a0ee0927f15555",
+      "size": 2053450,
+      "designation": "3201 Ethernet FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:2f6721b502d0b7f1",
+      "path": "3202 Spy Camera/3202 Spy Camera.step",
+      "sha": "2f6721b502d0b7f1ee61943f230a11c69b65395d",
+      "size": 124304,
+      "designation": "3202 Spy Camera",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d68330afa6b5b4de",
+      "path": "3211 RGB Matrix Bonnet/3211 RGB Matrix Bonnet.step",
+      "sha": "d68330afa6b5b4deb2b6ab574e22cc15e25691ff",
+      "size": 3104991,
+      "designation": "3211 RGB Matrix Bonnet",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f8e0d1fe8a877418",
+      "path": "3221 Toggle Switch/3221 Toggle Switch.step",
+      "sha": "f8e0d1fe8a877418e54fcebe676b424a46983d8c",
+      "size": 678213,
+      "designation": "3221 Toggle Switch",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:157ea16348dd956d",
+      "path": "3229 Radio FeatherWing/3229 Radio FeatherWing.step",
+      "sha": "157ea16348dd956d8a330fcd01b2c620ef1b2dfd",
+      "size": 747562,
+      "designation": "3229 Radio FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:12a4efeb62c3f5bf",
+      "path": "324 NEMA-17 Stepper Motor/324 NEMA-17 Stepper Motor.step",
+      "sha": "12a4efeb62c3f5bf8993e338d951972bd9e0a1d0",
+      "size": 1175898,
+      "designation": "324 NEMA-17 Stepper Motor",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:6d6734c61bc3b409",
+      "path": "3258 USB Panel Mout Cable/3258 microUSB panel mount.step",
+      "sha": "6d6734c61bc3b40947d544c2f61da4b6de5a8ca6",
+      "size": 61562,
+      "designation": "3258 microUSB panel mount",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:33b19ee999aa0df9",
+      "path": "328 2500mAh battery/328 2500mAh battery.step",
+      "sha": "33b19ee999aa0df9b36a1a0b7e26bd362b34e700",
+      "size": 9128,
+      "designation": "328 2500mAh battery",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c695d3dd5745c779",
+      "path": "3315 2.4 TFT FeatherWing/3315 2.4 TFT FeatherWing.step",
+      "sha": "c695d3dd5745c7792a70a21c6fcb3fa25f505161",
+      "size": 2197600,
+      "designation": "3315 2.4 TFT FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f3521c59fc553beb",
+      "path": "3316 VL6180 ToF Sensor/3316 VL6180 ToF Sensor.step",
+      "sha": "f3521c59fc553beb5377afa113ed58229640b451",
+      "size": 970305,
+      "designation": "3316 VL6180 ToF Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e791febb57247d8f",
+      "path": "3321 Mini TFT Wing/3321-Mini-TFT-Wing.step",
+      "sha": "e791febb57247d8ffd1164241a2f502b045dbbf0",
+      "size": 1221797,
+      "designation": "3321-Mini-TFT-Wing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c0f48e638443dfa5",
+      "path": "3333 Circuit Playground Express/3333 Circuit Playground Express.step",
+      "sha": "c0f48e638443dfa5b7c1575eff6bdf0d03058108",
+      "size": 3922790,
+      "designation": "3333 Circuit Playground Express",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f7e7a004c516fd9f",
+      "path": "3346 Adafruit Speaker Bonnet for Pi/3346 Adafruit Speaker Bonnet for Pi Rev D.step",
+      "sha": "f7e7a004c516fd9fbefe2eac375f257877f059d3",
+      "size": 2329980,
+      "designation": "3346 Adafruit Speaker Bonnet for Pi Rev D",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a3f8e53ca2d2932b",
+      "path": "3346 Adafruit Speaker Bonnet for Pi/3346 Adafruit Speaker Bonnet for Pi.step",
+      "sha": "a3f8e53ca2d2932be016546ad03cedb6a39c9a47",
+      "size": 64819,
+      "designation": "3346 Adafruit Speaker Bonnet for Pi",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:65543ae03e0569be",
+      "path": "3347 Metal Ball Tactile Button 6mm/3347 Metal Ball Tactile Button 6mm.step",
+      "sha": "65543ae03e0569bef9e365fddd578a74c952b219",
+      "size": 367686,
+      "designation": "3347 Metal Ball Tactile Button 6mm",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e9f4eec04b40f860",
+      "path": "3350 RGB button/3350 RGB button.step",
+      "sha": "e9f4eec04b40f860e36e73a0336020a3d8aed8c0",
+      "size": 331200,
+      "designation": "3350 RGB button",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:41aac260c8ecaa3a",
+      "path": "3351 Enclosed Speaker 3W 4Ohm/3351 Enclosed Speaker 3W 4Ohm.step",
+      "sha": "41aac260c8ecaa3acc613d48ae3ce40aabf6211e",
+      "size": 174912,
+      "designation": "3351 Enclosed Speaker 3W 4Ohm",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:dd2cde540f929ee0",
+      "path": "3382 Metro M4/3382 Metro M4.step",
+      "sha": "dd2cde540f929ee0c77ae5067884bd69813557b1",
+      "size": 4336054,
+      "designation": "3382 Metro M4",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:0f297cd320cf7278",
+      "path": "3386 PiRTC PCF8523/3386 PiRTC PCF8523.step",
+      "sha": "0f297cd320cf72783ad6981a5e47439845e2c92a",
+      "size": 717289,
+      "designation": "3386 PiRTC PCF8523",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:af6d6e23a43878a5",
+      "path": "3403 Feather M0 Express/3403 Feather M0 Express.step",
+      "sha": "af6d6e23a43878a54e9251eae4ef32fd42b383e4",
+      "size": 2673373,
+      "designation": "3403 Feather M0 Express",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:080959986edab241",
+      "path": "3405 ESP32 Feather HUZZAH/3405 Adafruit HUZZAH32 ESP32 Feather.step",
+      "sha": "080959986edab2410e1077235c73697e47749c66",
+      "size": 2789185,
+      "designation": "3405 Adafruit HUZZAH32 ESP32 Feather",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9532bd3c2a54c5ed",
+      "path": "3417 Tripler FeatherWing/3417 Tripler FeatherWing.step",
+      "sha": "9532bd3c2a54c5ed8d650aa2dce47f32dc03b772",
+      "size": 867360,
+      "designation": "3417 Tripler FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:35168ac3e01c9700",
+      "path": "3422 Adafruit Arcade Bonnet/3422 Adafruit Arcade Bonnet.step",
+      "sha": "35168ac3e01c9700ec382d2425882f489b93e7b3",
+      "size": 121756,
+      "designation": "3422 Adafruit Arcade Bonnet",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3f34b5fc15646a27",
+      "path": "3436 Adafruit Music Maker Amp Feather Wing/3436 Adafruit Music Maker Amp Feather Wing.step",
+      "sha": "3f34b5fc15646a272a3e4e6c8a51b3a2d09e8ef7",
+      "size": 172867,
+      "designation": "3436 Adafruit Music Maker Amp Feather Wing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:eb3a47cdf35282da",
+      "path": "3464 Joy Bonnet/3464 Joy Bonnet.f3d.step",
+      "sha": "eb3a47cdf35282daadd315d9110dc4d5eabe955a",
+      "size": 98720,
+      "designation": "3464 Joy Bonnet.f3d",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:74b72b812503b924",
+      "path": "3500 Trinket M0/Trinket M0.step",
+      "sha": "74b72b812503b924bbee7e5b9bcea3e974df1eba",
+      "size": 1958142,
+      "designation": "Trinket M0",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c5e23380dcdc70e1",
+      "path": "3501 GEMMA M0/3501 GEMMA M0.step",
+      "sha": "c5e23380dcdc70e1633282235ec2d9e3c86b0d1e",
+      "size": 2602483,
+      "designation": "3501 GEMMA M0",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f77e358344bb1403",
+      "path": "3502 Sharp Memory Display Breakout/3502 Sharp Memory Display Breakout.step",
+      "sha": "f77e358344bb1403fa3913d87d34833e272aaa09",
+      "size": 1693753,
+      "designation": "3502 Sharp Memory Display Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f77c2efe86157cb2",
+      "path": "353 6600mAh Battery/353 6600mAh Battery.step",
+      "sha": "f77c2efe86157cb2e2cf4783fe7eb0cf64677d9c",
+      "size": 17395,
+      "designation": "353 6600mAh Battery",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a936460c31fec596",
+      "path": "3538 AMG8833 IR Thermal Camera/3538 AMG8833 IR Thermal Camera.step",
+      "sha": "a936460c31fec596b009f319e1de3351e625294f",
+      "size": 75023,
+      "designation": "3538 AMG8833 IR Thermal Camera",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ffd833b1ccbf7a98",
+      "path": "354 4400mah battery/354 4400mah battery.step",
+      "sha": "ffd833b1ccbf7a986f37375deb278e400c9dfb50",
+      "size": 34025,
+      "designation": "354 4400mah battery",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9d1dc235e838361a",
+      "path": "355 MOSFET P-channel/335 MOSFET N-channel.stl",
+      "sha": "9d1dc235e838361a6d26cbbaf55080d1ea6b2f7e",
+      "size": 31284,
+      "designation": "335 MOSFET N-channel",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ebc342107eeea5ac",
+      "path": "3577 PICO Hat/3577 PICO Hat.step",
+      "sha": "ebc342107eeea5ac1e8c4b8f194038c8594e9769",
+      "size": 41612,
+      "designation": "3577 PICO Hat",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:0c9f8189fdced649",
+      "path": "3595 APDS9960 Sensor/3595 APDS9960 Sensor.step",
+      "sha": "0c9f8189fdced649913671a434f6a77bb9039a36",
+      "size": 679498,
+      "designation": "3595 APDS9960 Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:51b90609a83a24ed",
+      "path": "3632 Joy FeatherWing/3632 Joy FeatherWing.step",
+      "sha": "51b90609a83a24edd60ac53f405c7eda7f2b39b4",
+      "size": 145908,
+      "designation": "3632 Joy FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d137713ddc4f28c2",
+      "path": "364 NFC Breakout/364 NFC Breakout.step",
+      "sha": "d137713ddc4f28c22fd79a123fb78efcd4031960",
+      "size": 873672,
+      "designation": "364 NFC Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a6865d7645a59e14",
+      "path": "3651 3.5in TFT FeatherWing/3651 3.5in TFT FeatherWing V2.step",
+      "sha": "a6865d7645a59e148eb44e8863c00a296cbc1f6c",
+      "size": 3751871,
+      "designation": "3651 3.5in TFT FeatherWing V2",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:778c6676c0ab262f",
+      "path": "3651 3.5in TFT FeatherWing/3651 3.5in TFT FeatherWing.step",
+      "sha": "778c6676c0ab262f0fadde52f5e0a72f7de858dd",
+      "size": 3736009,
+      "designation": "3651 3.5in TFT FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:cd2e128e2e3a561d",
+      "path": "3660 BME680/3660 BME680.step",
+      "sha": "cd2e128e2e3a561dd29c98add84d22102ad53222",
+      "size": 861374,
+      "designation": "3660 BME680",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e8f13ebfcc082b1f",
+      "path": "3692 TRS Jack/3692 TRS Jack.step",
+      "sha": "e8f13ebfcc082b1f4a837b9c2d79c5639d9a3971",
+      "size": 238212,
+      "designation": "3692 TRS Jack",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7c78c526f50e1ce6",
+      "path": "3722 Snowglobe/3722 Snow Globe.step",
+      "sha": "7c78c526f50e1ce691e1c10952c077da465fc768",
+      "size": 71145,
+      "designation": "3722 Snow Globe",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8a0ded2b68af9ae8",
+      "path": "3727 ItsyBitsy M0/3727 Adafruit ItsyBitsy M0.step",
+      "sha": "8a0ded2b68af9ae8a9bdbfb3eb81210ce8c733b5",
+      "size": 2457418,
+      "designation": "3727 Adafruit ItsyBitsy M0",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:17d51676e5b11ad4",
+      "path": "3777 TT Motor/3777 TT Motor.step",
+      "sha": "17d51676e5b11ad4ac8a35384017fbe79f2ad392",
+      "size": 112694,
+      "designation": "3777 TT Motor",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:899848eebd60d369",
+      "path": "3787 1.5in TFT Display/3787 1.54in TFT Display.step",
+      "sha": "899848eebd60d369321df16c0f8f10ea59d805f0",
+      "size": 1804980,
+      "designation": "3787 1.54in TFT Display",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:86c1c80f5f73a69e",
+      "path": "3800 ItsyBitsy M4/3800-ItsyBitsy-M4.step",
+      "sha": "86c1c80f5f73a69e1c81d0d6d7fcc7f6bb780e40",
+      "size": 2561912,
+      "designation": "3800-ItsyBitsy-M4",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a059a9d5475ce521",
+      "path": "3802 TT Motor Metal Gear/3802 TT Motor Metal Gear.step",
+      "sha": "a059a9d5475ce521debacce594f17dc662086605",
+      "size": 170464,
+      "designation": "3802 TT Motor Metal Gear",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:ffeac9499785bc7c",
+      "path": "3842 3xAA Battery/3842 3xAA Battery.step",
+      "sha": "ffeac9499785bc7ce796043940d49e01eb91e006",
+      "size": 221410,
+      "designation": "3842 3xAA Battery",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f512c99153866e02",
+      "path": "3857 Feather M4 Express/3857 Adafruit Feather M4 Express.step",
+      "sha": "f512c99153866e023fe017c5989c7aef488b34e6",
+      "size": 3029565,
+      "designation": "3857 Adafruit Feather M4 Express",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:2219a1e4014170c9",
+      "path": "3885 STEMMA Speaker/3885 STEMMA Speaker rev A.step",
+      "sha": "2219a1e4014170c933604554c5f531e2738d7ccd",
+      "size": 963499,
+      "designation": "3885 STEMMA Speaker rev A",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e5e42a71381bbccf",
+      "path": "3898 400mah Battery/3898 400mAh Battery.step",
+      "sha": "e5e42a71381bbccf5880eb55df94358c9c91ac14",
+      "size": 30200,
+      "designation": "3898 400mAh Battery",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1779f137decf6616",
+      "path": "3900 Hallowing/3900 HalloWing M0 Express Rev C.step",
+      "sha": "1779f137decf6616937df1322e6e25bf1f6196d3",
+      "size": 5519169,
+      "designation": "3900 HalloWing M0 Express Rev C",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:326565936cee16df",
+      "path": "3900 Hallowing/3900 Hallowing M0 Express.step",
+      "sha": "326565936cee16df7207a1ca36b49fa9175f8b75",
+      "size": 5061075,
+      "designation": "3900 Hallowing M0 Express",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c5a4c79a35a363c0",
+      "path": "3923 Mini Oval Speaker/3923 Mini Oval Speaker.step",
+      "sha": "c5a4c79a35a363c05201fd2f66117eb8172716fe",
+      "size": 76364,
+      "designation": "3923 Mini Oval Speaker",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c080baab1bb6f077",
+      "path": "3954 Adafruit NeoTrellis/Adafruit NeoTrellis 4x4.step",
+      "sha": "c080baab1bb6f0774e22cf6f00eff8ff40da10e4",
+      "size": 991525,
+      "designation": "Adafruit NeoTrellis 4x4",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:155005c82e6481cb",
+      "path": "3957 CRICKIT Hat/3957 Adafruit Crickit HAT.stp",
+      "sha": "155005c82e6481cb7405c91fc22d10eebb97d3a8",
+      "size": 6611599,
+      "designation": "3957 Adafruit Crickit HAT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:98c277be3b679f80",
+      "path": "3965 MPRLS Pressure Sensor/3965 MPRLS Pressure Sensor.step",
+      "sha": "98c277be3b679f806f732364f53a1e70da21b197",
+      "size": 543526,
+      "designation": "3965 MPRLS Pressure Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3efce14132a14c34",
+      "path": "3966 BMP388 QT/3966 BMP388 QT.step",
+      "sha": "3efce14132a14c343ea5dec0dfb681b5e1c0ba51",
+      "size": 794957,
+      "designation": "3966 BMP388 QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:dc4baa0f18046d74",
+      "path": "3967 VL5SL1X TOF Sensor/3967 VL5SL1X TOF Sensor.step",
+      "sha": "dc4baa0f18046d744ab8709b0d3d9a29565dce1c",
+      "size": 956659,
+      "designation": "3967 VL5SL1X TOF Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d99fecb7dc2988b1",
+      "path": "3968 Speaker 40mm/3968 Speaker 40mm.step",
+      "sha": "d99fecb7dc2988b18ff294d545e0cb0cd144e4af",
+      "size": 130345,
+      "designation": "3968 Speaker 40mm",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:882bea1573933057",
+      "path": "3988 Prop-Maker FeatherWing/3988 Prop-Maker FeatherWing.step",
+      "sha": "882bea1573933057a1c4e28beab8c54fe582979c",
+      "size": 1669201,
+      "designation": "3988 Prop-Maker FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:743f3a37f2d67622",
+      "path": "4022 Wide-Range Triple-axis Magnetometer MLX90393/4022 Wide-Range Triple-axis Magnetometer MLX90393.step",
+      "sha": "743f3a37f2d67622e31f2a99337da22812e562da",
+      "size": 707231,
+      "designation": "4022 Wide-Range Triple-axis Magnetometer MLX90393",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:bd7959a98208caca",
+      "path": "4026 STEMMA Soil Sensor/4026 STEMMA Soil Sensor.step",
+      "sha": "bd7959a98208cacadaa6f12e6dc7281a1ad38e67",
+      "size": 1078213,
+      "designation": "4026 STEMMA Soil Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e43f9405f562837d",
+      "path": "4056 USBC-to-microB-cable/4056-USB-C-to-micro-B.step",
+      "sha": "e43f9405f562837dc84665db859bd411ae470705",
+      "size": 54721,
+      "designation": "4056-USB-C-to-micro-B",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:dcb427c3b68cde84",
+      "path": "4062 nRF52840 Feather/4062-nRF52830-Feather.step",
+      "sha": "dcb427c3b68cde845284b17cbe2f5566a1718e8d",
+      "size": 2285565,
+      "designation": "4062-nRF52830-Feather",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c839bd734e6dc651",
+      "path": "4064 Grand Central M4/4064 Grand Central M4.step",
+      "sha": "c839bd734e6dc651fe3c16f594576f959329de17",
+      "size": 6351015,
+      "designation": "4064 Grand Central M4",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8632c545c9d0f208",
+      "path": "4074 LoRa Radio Bonnet/4074 LoRa Radio Bonnet.step",
+      "sha": "8632c545c9d0f208ef31f0e1272807ef9ba26a5e",
+      "size": 2095823,
+      "designation": "4074 LoRa Radio Bonnet",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:0b1df59cc51fc16b",
+      "path": "4086 TriColor ePaper Display/4086-tricolor-epaper-display.step",
+      "sha": "0b1df59cc51fc16bd46f8bbdc3c74fee1057474e",
+      "size": 2918517,
+      "designation": "4086-tricolor-epaper-display",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:75dcb9c409daa999",
+      "path": "4089 ADT7410 Sensor/4089 ADT7410 Sensor.step",
+      "sha": "75dcb9c409daa9993a43ec7675e8fc2167500289",
+      "size": 607518,
+      "designation": "4089 ADT7410 Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:0c5b52a5000cad6f",
+      "path": "4090 USB C Breakout/4090 USB C Breakout.step",
+      "sha": "0c5b52a5000cad6fd1f42b74e3660ea18d899109",
+      "size": 590435,
+      "designation": "4090 USB C Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:26f0e0968bfa1576",
+      "path": "4097 ADXL343 Accelerometer/4097 ADXL343 STEMMA QT.step",
+      "sha": "26f0e0968bfa15766f3c1cd9b95722e992392de4",
+      "size": 911738,
+      "designation": "4097 ADXL343 STEMMA QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f10f8cd8c1c37f6d",
+      "path": "4097 ADXL343 Accelerometer/4097 ADXL343.step",
+      "sha": "f10f8cd8c1c37f6d099a52d24070dec313bff7d4",
+      "size": 615922,
+      "designation": "4097 ADXL343",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3be43dcd9066ba6a",
+      "path": "4116 PyPortal/4116 PyPortal.step",
+      "sha": "3be43dcd9066ba6a448b00d3b2c1254be68001b1",
+      "size": 6018680,
+      "designation": "4116 PyPortal",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a80dbd7a20e690a1",
+      "path": "4128 eInk FeatherWing/2in-eInk-FeatherWing.step",
+      "sha": "a80dbd7a20e690a110e3c8810680d5eae4e991db",
+      "size": 3154203,
+      "designation": "2in-eInk-FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:57ce955ca0656982",
+      "path": "413 Large Solenoid/413 Large Solenoid.step",
+      "sha": "57ce955ca0656982874a751c995dfc570b37bfd8",
+      "size": 89653,
+      "designation": "413 Large Solenoid",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:1e1aa1abc235e8ae",
+      "path": "4132 GPIO Expander Bonnet/4132 GPIO Expander Bonnet.step",
+      "sha": "1e1aa1abc235e8ae50c2e4efce0bcd135a937ba8",
+      "size": 2716130,
+      "designation": "4132 GPIO Expander Bonnet",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e11aa5eb56e174c3",
+      "path": "4161 VCNL4040 Sensor/4161 VCNL4040 Sensor.step",
+      "sha": "e11aa5eb56e174c36687409279ba3006f3fadf37",
+      "size": 732486,
+      "designation": "4161 VCNL4040 Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1cb095f99736ac70",
+      "path": "4196 1.54in eink display SSD1681/4196 1.54in eink display SSD1681.step",
+      "sha": "1cb095f99736ac704b4d713d4afabad9093c57bb",
+      "size": 2901000,
+      "designation": "4196 1.54in eink display SSD1681",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:af139de98b5a8fc2",
+      "path": "4200 PyBadge/4200 PyBadge.step",
+      "sha": "af139de98b5a8fc27456fd1ed8e5616f84aa7c1d",
+      "size": 5370213,
+      "designation": "4200 PyBadge",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:4b446f9516a648d1",
+      "path": "4222 NeoPixel Triple-Ring Board/4222 NeoPixel Triple-Ring.step",
+      "sha": "4b446f9516a648d11b491479a896f7c91f974506",
+      "size": 382406,
+      "designation": "4222 NeoPixel Triple-Ring",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:fdb67c3d74c7caf7",
+      "path": "4222 NeoPixel Triple-Ring/4222 NeoPixel Triple Ring.step",
+      "sha": "fdb67c3d74c7caf70ec27c25fc92b78b9cb8c967",
+      "size": 382455,
+      "designation": "4222 NeoPixel Triple Ring",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:0ed906df3ef73585",
+      "path": "4242 Adafruit PyGamer/Adafruit PyGamer.step",
+      "sha": "0ed906df3ef7358599b8944b5fbe0c8968a5a5cc",
+      "size": 6879875,
+      "designation": "Adafruit PyGamer",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1865124e1a02d316",
+      "path": "4264 AirLift FeatherWing/Adafruit AirLift FeatherWing.step",
+      "sha": "1865124e1a02d316c17279b388a7dcaf09c342b7",
+      "size": 2266549,
+      "designation": "Adafruit AirLift FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:eea0ccb387c233e4",
+      "path": "4280 DC Stepper Motor Bonnet/4280 DC Stepper Motor Bonnet.step",
+      "sha": "eea0ccb387c233e4ce408f0917991c7629ecd571",
+      "size": 4097523,
+      "designation": "4280 DC Stepper Motor Bonnet",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:2f4b28c813adf8f8",
+      "path": "4282 PiRTC DS3231/4282 PiRTC DS3231.step",
+      "sha": "2f4b28c813adf8f86f184be5ef08c08aef7680d9",
+      "size": 758679,
+      "designation": "4282 PiRTC DS3231",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:bfaccb0acd568bfc",
+      "path": "4286 DS3502 Digital Pot/4286 Adafruit DS3502 v3.step",
+      "sha": "bfaccb0acd568bfc6660e1cfff2f584154a41a2c",
+      "size": 559451,
+      "designation": "4286 Adafruit DS3502 v3",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:90320327d4f6a18e",
+      "path": "4300 HalloWing M4/4300 HalloWing M4 Express.step",
+      "sha": "90320327d4f6a18e898b55e8bb710fb5d775a199",
+      "size": 5638495,
+      "designation": "4300 HalloWing M4 Express",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9b109d96dff4d1a7",
+      "path": "4311 2in TFT IPS Display/4311 2in TFT IPS Display.step",
+      "sha": "9b109d96dff4d1a7c38df90d29e95dd3d9ecb214",
+      "size": 2000708,
+      "designation": "4311 2in TFT IPS Display",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:05281008c7a91f06",
+      "path": "4313 1.3in TFT IPS Display/4313 1.3in-TFT-IPS-Display.step",
+      "sha": "05281008c7a91f069a49ecdac55bb2fea1fc1282",
+      "size": 1762184,
+      "designation": "4313 1.3in-TFT-IPS-Display",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1eb095c1c2342e76",
+      "path": "4320 PermaProto Gizmo/4320 PermaProto Gizmo.step",
+      "sha": "1eb095c1c2342e7695e5dc717bb835c30e286133",
+      "size": 430524,
+      "designation": "4320 PermaProto Gizmo",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:38ed34bb4045fac6",
+      "path": "4333 Circuit Playground Bluefruit/Cricuit Playground Bluefruit.step",
+      "sha": "38ed34bb4045fac67bea454796f6ba99fa6bd3c0",
+      "size": 3200969,
+      "designation": "Cricuit Playground Bluefruit",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:bcb52ab944493702",
+      "path": "4343 Monster M4sk/MONSTER M4SK revD.step",
+      "sha": "bcb52ab944493702097bf30b40f9b713444337f7",
+      "size": 6113683,
+      "designation": "MONSTER M4SK revD",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e280fc7bc0e85d44",
+      "path": "4344 MSA301 Accelerometer/4344 Adafruit MSA301.step",
+      "sha": "e280fc7bc0e85d443c228a2b42ba354b0e8d05b3",
+      "size": 816512,
+      "designation": "4344 Adafruit MSA301",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9f6d1abe55caa08d",
+      "path": "4346 PDM Mic Breakout/PDM Mic with JST SH.step",
+      "sha": "9f6d1abe55caa08d4ff5ae401eacf7d84cbf07e0",
+      "size": 255983,
+      "designation": "PDM Mic with JST SH",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:db5650300ef9e128",
+      "path": "4367 TFT Gizmo/4367 Circuit Playground TFT Gizmo.step",
+      "sha": "db5650300ef9e1285191da5f2955a060cc550161",
+      "size": 1558419,
+      "designation": "4367 Circuit Playground TFT Gizmo",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8287311207bc9998",
+      "path": "4374 BrainCraft HAT/4374 BrainCraft HAT.step",
+      "sha": "8287311207bc9998f545f49692f36ae71af2a6d9",
+      "size": 5772849,
+      "designation": "4374 BrainCraft HAT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a184c715e7d638c4",
+      "path": "4383 1.14in TFT Display/4383 1.14in TFT Display.step",
+      "sha": "a184c715e7d638c474c2030675052567e5b25758",
+      "size": 1915351,
+      "designation": "4383 1.14in TFT Display",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a78b0eb7fe85ceb7",
+      "path": "4392 STEMMA QT Horizontal/STEMMA QT Horizontal.stl",
+      "sha": "a78b0eb7fe85ceb73f241a15955b3e0ef6f07cc1",
+      "size": 74084,
+      "designation": "STEMMA QT Horizontal",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9fd9b76e52963f83",
+      "path": "4400 EdgeBadge/4400 Adafruit EdgeBadge.step",
+      "sha": "9fd9b76e52963f833ec0bb2644bac1cdc220ac40",
+      "size": 5755046,
+      "designation": "4400 Adafruit EdgeBadge",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9f50aaaea8442b3f",
+      "path": "4410 Micro Lipo USBC/4410 Micro Lipo USBC.step",
+      "sha": "9f50aaaea8442b3f6cc24c70590797da8e1199e1",
+      "size": 928261,
+      "designation": "4410 Micro Lipo USBC",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:96e6ec29ec590a1a",
+      "path": "4415 Mini GPS PA1010D/4415 Mini GPS PA1010D.step",
+      "sha": "96e6ec29ec590a1af12ecb277705918603cef103",
+      "size": 1370627,
+      "designation": "4415 Mini GPS PA1010D",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:72416caf96a7d49f",
+      "path": "4431 STEMMA Buttons/4431 STEMMA Buttons.step",
+      "sha": "72416caf96a7d49f1c0ca2630460dc7e9ad6c954",
+      "size": 348935,
+      "designation": "4431 STEMMA Buttons",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e82ac78580376c00",
+      "path": "4440 0.91 OLED I2C Display/4440 0.91 OLED I2C Display.step",
+      "sha": "e82ac78580376c00756d2e2ddb25395cbd340815",
+      "size": 865536,
+      "designation": "4440 0.91 OLED I2C Display",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:16dd199e4416ed0f",
+      "path": "4444 PyPortal Titano/4444 PyPortal Titano.step",
+      "sha": "16dd199e4416ed0f7f0624e9b567da23410128e6",
+      "size": 6232626,
+      "designation": "4444 PyPortal Titano",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:6ace3f373e3c63f0",
+      "path": "4465 PyPortal Pynt/4465 PyPortal Pynt.step",
+      "sha": "6ace3f373e3c63f0703e2762b35b5d8f0e79dee7",
+      "size": 5153986,
+      "designation": "4465 PyPortal Pynt",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e975909da0efe3fb",
+      "path": "4469 MLX90640 Stemma/4469 MLX90640 Stemma.step",
+      "sha": "e975909da0efe3fbc10e4cb7ce02a6855bc1ad95",
+      "size": 730858,
+      "designation": "4469 MLX90640 Stemma",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:6d6e5a89f4d5894e",
+      "path": "4471 MCP2221A Breakout/4471 MCP2221A Breakout.step",
+      "sha": "6d6e5a89f4d5894eb0bc06e8c02c1473973789b0",
+      "size": 1511667,
+      "designation": "4471 MCP2221A Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a73ca15472a17c10",
+      "path": "4479 LIS3MDL/4479 LIS3MDL.step",
+      "sha": "a73ca15472a17c10e0a8e6d4dcfde1621ca27b26",
+      "size": 891570,
+      "designation": "4479 LIS3MDL",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e3042f8738084fd3",
+      "path": "4481 ItsyBitsy nRF52840/4481 ItsyBitsy nRF52840.step",
+      "sha": "e3042f8738084fd36bf30148484ec70fc40d89ec",
+      "size": 1870223,
+      "designation": "4481 ItsyBitsy nRF52840",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:881e936ba755fd78",
+      "path": "4494 DPS310 Sensor/4494-DPS310-Sensor.step",
+      "sha": "881e936ba755fd78d6229928f4852ac25381eefe",
+      "size": 758790,
+      "designation": "4494-DPS310-Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:002e74e3fb097be7",
+      "path": "4500 CLUE nRF52840/4500 CLUE nRF52840.step",
+      "sha": "002e74e3fb097be70ffc41f992e6add20ddfe1cf",
+      "size": 3237753,
+      "designation": "4500 CLUE nRF52840",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:84c9d19bdaceeffb",
+      "path": "4502 6DoF IMU/4502 6DoF IMU.step",
+      "sha": "84c9d19bdaceeffb73060aa64dba45706cb835de",
+      "size": 835834,
+      "designation": "4502 6DoF IMU",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3cf4ceed8cf67433",
+      "path": "4506 TFT Bonnet/4506 TFT Bonnet.step",
+      "sha": "3cf4ceed8cf67433477bbaea7ec78b8023b45d70",
+      "size": 2083790,
+      "designation": "4506 TFT Bonnet",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5089fd50f553450a",
+      "path": "4516 Feather nRF52840 Sense/4516 Feather nRF52840 Sense.step",
+      "sha": "5089fd50f553450a080c96890db91b02477ce6b1",
+      "size": 3092940,
+      "designation": "4516 Feather nRF52840 Sense",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:47f6e4b608437766",
+      "path": "4517 LSM6DSOX-LIS3MDL/4517 LSM6DSOX-LIS3MDL.step",
+      "sha": "47f6e4b608437766944b1193fd0a4ce8ccf54415",
+      "size": 1018233,
+      "designation": "4517 LSM6DSOX-LIS3MDL",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:6b63339331fe6b0f",
+      "path": "4538 NAU7802/4538 NAU7802 Rev B.step",
+      "sha": "6b63339331fe6b0f3ae2586e16ceac6dd36495fb",
+      "size": 810473,
+      "designation": "4538 NAU7802 Rev B",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:42fc115c97189ab2",
+      "path": "4538 NAU7802/4538 NAU7802 Rev C.step",
+      "sha": "42fc115c97189ab2d5e8b06fc020255095fde734",
+      "size": 1735040,
+      "designation": "4538 NAU7802 Rev C",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:18c5b069b652bdca",
+      "path": "4565 FeatherWing LIS3MDL LSM6DSOX/4565 FeatherWing LIS3MDL LSM6DSOX.step",
+      "sha": "18c5b069b652bdca0907e22f8d7c350c53b5614f",
+      "size": 714965,
+      "designation": "4565 FeatherWing LIS3MDL LSM6DSOX",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5f7c299fd73f0361",
+      "path": "4566 AHT20 Sensor/4566-AHT20-Sensor.step",
+      "sha": "5f7c299fd73f0361f8a80df5df4f340d347aef5b",
+      "size": 531927,
+      "designation": "4566-AHT20-Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a36b30992d01c67c",
+      "path": "4600 QT Py/4600 QTPy.step",
+      "sha": "a36b30992d01c67c80931e06d097438abfa722aa",
+      "size": 2325597,
+      "designation": "4600 QTPy",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1729ca1e3bb4a117",
+      "path": "4631 Mini Mag Feet/4631 Mini Mag Feet.step",
+      "sha": "1729ca1e3bb4a117eb7072a5bd35bb1beb9b4946",
+      "size": 264596,
+      "designation": "4631 Mini Mag Feet",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:06ac4f56dbafd8f0",
+      "path": "4632 PMSA003I/4632 PMSA003I.step",
+      "sha": "06ac4f56dbafd8f0df272982906aa9b2fbbb1005",
+      "size": 1358564,
+      "designation": "4632 PMSA003I",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d90387bc3dae89e5",
+      "path": "4636 SHTC3/4636 SHTC3.step",
+      "sha": "d90387bc3dae89e5e13ae767f21e22e79c9462d7",
+      "size": 724185,
+      "designation": "4636 SHTC3",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3c05fc5b75d29774",
+      "path": "4646 BNO055 Stemma/4646 BNO055 Stemma.step",
+      "sha": "3c05fc5b75d297749343f9046b7854c0f18af9e2",
+      "size": 1164922,
+      "designation": "4646 BNO055 Stemma",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a4e3bc5fd2e6a183",
+      "path": "4650 OLED FeatherWing/4650 OLED FeatherWing.step",
+      "sha": "a4e3bc5fd2e6a1838f9fdcb4937ca449bcc24dcd",
+      "size": 627171,
+      "designation": "4650 OLED FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:dc5343cde3fc6083",
+      "path": "4654 MiniBoost 5V/4654 MiniBoost 5V.step",
+      "sha": "dc5343cde3fc6083a768eea97d0a00113e7f71ed",
+      "size": 179502,
+      "designation": "4654 MiniBoost 5V",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:cef97734b9462747",
+      "path": "4682 Micro SD Breakout/4682 Micro SD Breakout.step",
+      "sha": "cef97734b94627472b629c22fdfa87c62d0ca6c6",
+      "size": 1164125,
+      "designation": "4682 Micro SD Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e3583bfa466bfac2",
+      "path": "4698 AS7341 Light Color Sensor/4698 AS7341 Light Color Sensor.step",
+      "sha": "e3583bfa466bfac20beebcc284d42843409d41b4",
+      "size": 963515,
+      "designation": "4698 AS7341 Light Color Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a05986d629ae7fa8",
+      "path": "4701 ST25DV16K RFID/4701 ST25DV16K RFID.step",
+      "sha": "a05986d629ae7fa8f4e95e82099fd68961384561",
+      "size": 582919,
+      "designation": "4701 ST25DV16K RFID",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:4feaf66152e1ff4d",
+      "path": "471 Arcade Button 30mm/471 Arcade Button 30mm.step",
+      "sha": "4feaf66152e1ff4d8c5fe188b6b3192c45472045",
+      "size": 354257,
+      "designation": "471 Arcade Button 30mm",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:52ad143a7ff8e1d2",
+      "path": "4712 LC709203F Battey Monitor/4712 LC709203F.step",
+      "sha": "52ad143a7ff8e1d2944052592e029f69603e37a4",
+      "size": 645306,
+      "designation": "4712 LC709203F",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:6d5f08a27d091ba7",
+      "path": "4739 MPM3610 5V Buck/4739 MPM3610 5V Buck.step",
+      "sha": "6d5f08a27d091ba7811ccafdd3000bc9de7fc7ba",
+      "size": 413342,
+      "designation": "4739 MPM3610 5V Buck",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a16883dc7f12fac8",
+      "path": "4740 MIDI FeatherWing/4740 MIDI FeatherWing.step",
+      "sha": "a16883dc7f12fac8f595f90d79780a180f1103dd",
+      "size": 669708,
+      "designation": "4740 MIDI FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:14027d936c5c4d81",
+      "path": "4741 OLED 1.5in/4741 1.5-inch OLED.step",
+      "sha": "14027d936c5c4d819e8ed266e51a164d44b7871e",
+      "size": 1065656,
+      "designation": "4741 1.5-inch OLED",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:54163291849d4a4e",
+      "path": "4745 Matrix Portal M4/4745 Matrix Portal M4.step",
+      "sha": "54163291849d4a4ee61771b4df857c7614062322",
+      "size": 4424246,
+      "designation": "4745 Matrix Portal M4",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3d4e4a6f8dee1c94",
+      "path": "4754 BNO085 STEMMA QT/4754 BNO085 STEMMA QT.step",
+      "sha": "3d4e4a6f8dee1c94c495847e78ceedf90ae73a04",
+      "size": 1585999,
+      "designation": "4754 BNO085 STEMMA QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:de26b8e3116a2ea2",
+      "path": "4755 USB Solar Charger/4755 USB Solar Charger.step",
+      "sha": "de26b8e3116a2ea216b5eb26c47ba04dfa663b39",
+      "size": 1937662,
+      "designation": "4755 USB Solar Charger",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:6e0b3e043db215b3",
+      "path": "4756 LTC4311 I2C Extender/4756 LTC4311 I2C Extender.step",
+      "sha": "6e0b3e043db215b3ae50645bcc6ab2b1076115a5",
+      "size": 532266,
+      "designation": "4756 LTC4311 I2C Extender",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9dd0987bccf33551",
+      "path": "4759 Feather M4 CAN Express/4759 Feather M4 CAN Express.step",
+      "sha": "9dd0987bccf33551aec785f8b8f604a80977f1b1",
+      "size": 3500419,
+      "designation": "4759 Feather M4 CAN Express",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:0590a0e68d72c25f",
+      "path": "4775 Metro ESP32-S2/4775 Metro ESP32-S2.step",
+      "sha": "0590a0e68d72c25f13c4437c75463b3ffb2b9543",
+      "size": 3554001,
+      "designation": "4775 Metro ESP32-S2",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7ef755ac2f4372e2",
+      "path": "4778 2.9 inch E-Ink Featherwing/4778 2.9 inch E-Ink Featherwing.step",
+      "sha": "7ef755ac2f4372e2423bdb64a7e134f143ef1dc9",
+      "size": 4302306,
+      "designation": "4778 2.9 inch E-Ink Featherwing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:149e2eba79724063",
+      "path": "4800 MagTag/4800 MagTag.step",
+      "sha": "149e2eba79724063db5087493211311baabeb14d",
+      "size": 4426251,
+      "designation": "4800 MagTag",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:969b46cce062f085",
+      "path": "4808 EMC2101 STEMMA QT/4808 EMC2101 STEMMA QT.step",
+      "sha": "969b46cce062f0851e0fd36aeef13359aa117d03",
+      "size": 708668,
+      "designation": "4808 EMC2101 STEMMA QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e91af684923d08b9",
+      "path": "4816 BMP390 QT/4816 BMP390 QT.step",
+      "sha": "e91af684923d08b9346ac55f51b89c5115556e43",
+      "size": 793596,
+      "designation": "4816 BMP390 QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7929fcca6cdfe5bd",
+      "path": "4829 SGP40 Sensor/4829 SGP40 Sensor.step",
+      "sha": "7929fcca6cdfe5bd04fefc6aa6a8cc0d4d01e125",
+      "size": 735813,
+      "designation": "4829 SGP40 Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8bc712b020eb07c8",
+      "path": "4836 Wii Nunchuck Adapter/4836-Wii-Nunchuck-Adapter.step",
+      "sha": "8bc712b020eb07c853dbffbacfafa1a5b09b0cee",
+      "size": 680075,
+      "designation": "4836-Wii-Nunchuck-Adapter",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:67324777ab35e1ea",
+      "path": "4862 CYBERDECK Bonnet/4862 CyberDeck Bonnet.step",
+      "sha": "67324777ab35e1eae30d5074ba8b1171707fa22a",
+      "size": 3179819,
+      "designation": "4862 CyberDeck Bonnet",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:34a38d3aad355bd9",
+      "path": "4863 CYBERDECK Hat/4863 CyberDeck HAT.step",
+      "sha": "34a38d3aad355bd94cd02bf8e2f5f891671c69aa",
+      "size": 3210572,
+      "designation": "4863 CyberDeck HAT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:0ffdf9f8b58b1e21",
+      "path": "4867 SCD-30 C02 Sensor/4867 Adafruit SCD30.step",
+      "sha": "0ffdf9f8b58b1e21a3d837132c971e22c621befd",
+      "size": 2466732,
+      "designation": "4867 Adafruit SCD30",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8cc62d1d6517879f",
+      "path": "4870 Neo Trinkey/4870 Neo Trinkey.step",
+      "sha": "8cc62d1d6517879fc0cfa1b260e6ffdb3b137a13",
+      "size": 1188056,
+      "designation": "4870 Neo Trinkey",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:6b6c10b83c8e2648",
+      "path": "4884 Feather RP2040/4884 Feather RP2040.step",
+      "sha": "6b6c10b83c8e2648b036c741208101c5511affd6",
+      "size": 2443088,
+      "designation": "4884 Feather RP2040",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:63d79e18f2453764",
+      "path": "4885 SHT40 Sensor/4485 SHT40.step",
+      "sha": "63d79e18f245376457b46891862324e33e94c7bc",
+      "size": 826215,
+      "designation": "4485 SHT40",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8affa6686b688334",
+      "path": "4886 AW9523 LED Driver/4886 AW9523 LED Driver.step",
+      "sha": "8affa6686b6883348394bd84a80c5d5607c15efe",
+      "size": 820742,
+      "designation": "4886 AW9523 LED Driver",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:17eca25590ab104c",
+      "path": "4888 ItsyBitsy RP2040/4888 ItsyBitsy RP2040.step",
+      "sha": "17eca25590ab104c0604577312c9856a34fa69a4",
+      "size": 1947081,
+      "designation": "4888 ItsyBitsy RP2040",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7faecac389744002",
+      "path": "4900 QTPy RP2040/4900 QTPY-RP2040.step",
+      "sha": "7faecac3897440024282c86be2961999cf31ebc6",
+      "size": 1930656,
+      "designation": "4900 QTPY-RP2040",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:619ee7d1fac9d458",
+      "path": "4918 TCA8418 Stemma/4918 TCA8418 Stemma.step",
+      "sha": "619ee7d1fac9d458ca4d1ab74ef599663b2bd5dd",
+      "size": 1104367,
+      "designation": "4918 TCA8418 Stemma",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:dce2d929e5652f12",
+      "path": "4964 Rotary Trinkey/4964 Rotary Trinkey.step",
+      "sha": "dce2d929e5652f12db01b14347c2a6caca66f277",
+      "size": 1478173,
+      "designation": "4964 Rotary Trinkey",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:4f7f7d8f17cab4c1",
+      "path": "4978 NeoKey Breakout/4978 NeoKey Breakout.step",
+      "sha": "4f7f7d8f17cab4c19eda9102376011a9e8c585ad",
+      "size": 584842,
+      "designation": "4978 NeoKey Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:b20abd696c8c5fbc",
+      "path": "4979 NeoKey FeatherWing/4979 NeoKey FeatherWing.step",
+      "sha": "b20abd696c8c5fbcc4af1fbb04b80c99c4efcfa2",
+      "size": 696111,
+      "designation": "4979 NeoKey FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:68939dc3fcbb4889",
+      "path": "4980 NeoKey 1x4 QT/4980 NeoKey 1x4 QT.step",
+      "sha": "68939dc3fcbb48894fbde7704c5c4ac8973adab7",
+      "size": 1498068,
+      "designation": "4980 NeoKey 1x4 QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:241bb2cf80e45f22",
+      "path": "4985 Funhouse/4985 FunHouse.step",
+      "sha": "241bb2cf80e45f2243bcedfec9e96dfce6f4daa0",
+      "size": 4840830,
+      "designation": "4985 FunHouse",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:2107b00831da2457",
+      "path": "4991 QT Rotary Encoder/4991 QT Rotary Encoder.step",
+      "sha": "2107b00831da2457a73127fe0769ce9b7aca1aed",
+      "size": 1853348,
+      "designation": "4991 QT Rotary Encoder",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a823851328a1de76",
+      "path": "5020 NeoKey Trinkey/5020 NeoKey Trinkey.step",
+      "sha": "a823851328a1de76539b752c9bfa13f7542143c3",
+      "size": 874187,
+      "designation": "5020 NeoKey Trinkey",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:b26baf0614f19d0a",
+      "path": "5021 Slide Trinkey/5021 Slide Trinkey.step",
+      "sha": "b26baf0614f19d0a1ed640a3d053224787289827",
+      "size": 1334861,
+      "designation": "5021 Slide Trinkey",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9c446afc8d93f767",
+      "path": "5027 MCP9808 Stemma/5027 MCP9808 Stemma.step",
+      "sha": "9c446afc8d93f7677e38c35337f87934b3b88523",
+      "size": 493651,
+      "designation": "5027 MCP9808 Stemma",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c8b66628144ecbb0",
+      "path": "5036 RGB Matrix 2.5mm/5036 RGB Matrix.step",
+      "sha": "c8b66628144ecbb07e2deb9d879ca3f887871df4",
+      "size": 4568114,
+      "designation": "5036 RGB Matrix",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7b88b9dbc90a66d3",
+      "path": "5046 BME688 Sensor/5046 BME688 Sensor.step",
+      "sha": "7b88b9dbc90a66d3f76201d9066d32f67b5d5b7b",
+      "size": 849321,
+      "designation": "5046 BME688 Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:45a1e13a705c54d7",
+      "path": "5056 Trinkey QT2040/5056 Trinkey QT2040.step",
+      "sha": "45a1e13a705c54d7648a7b1800ef4e931c7962df",
+      "size": 902141,
+      "designation": "5056 Trinkey QT2040",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5cad6e93f7a13e5a",
+      "path": "5100 MacroPad RP2040/5100 MacroPad RP2040.step",
+      "sha": "5cad6e93f7a13e5a6f74f8a390296699582deaf1",
+      "size": 3139511,
+      "designation": "5100 MacroPad RP2040",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:0251e5fa74cfa2ed",
+      "path": "512 Analog 2-axis Joystick/512 Analog 2-axis Joystick.step",
+      "sha": "0251e5fa74cfa2ed7d5015b5b1debc48d03fd428",
+      "size": 213902,
+      "designation": "512 Analog 2-axis Joystick",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:553924fa794033f2",
+      "path": "5128 MacroPad RP2040 Kit/5128 MacroPad RP2040-Assembly.step",
+      "sha": "553924fa794033f212f95b2df1e629a2f616b869",
+      "size": 3416469,
+      "designation": "5128 MacroPad RP2040-Assembly",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:b396e9e6f47c68bd",
+      "path": "5128 MacroPad RP2040 Kit/5128 MacroPad RP2040-Keyplate.step",
+      "sha": "b396e9e6f47c68bdbde95a0ea78c08988c10ad6b",
+      "size": 83657,
+      "designation": "5128 MacroPad RP2040-Keyplate",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e235286429efca23",
+      "path": "5128 MacroPad RP2040 Kit/5128 MacroPad RP2040-bottom-plate.step",
+      "sha": "e235286429efca235ea72dc40553d19b764754ac",
+      "size": 24445,
+      "designation": "5128 MacroPad RP2040-bottom-plate",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:2331a4182ef23aba",
+      "path": "5146 24LC32 I2C EEPROM/5146 24LC32 I2C EEPROM.step",
+      "sha": "2331a4182ef23ababd96a3a579c7baff6460d107",
+      "size": 872762,
+      "designation": "5146 24LC32 I2C EEPROM",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:4abe0c4931c0769c",
+      "path": "5187 SCD-40 C02 Sensor/5187 SCD-40 C02 Sensor.step",
+      "sha": "4abe0c4931c0769ccfdc8cc47d649d937fab79a1",
+      "size": 975516,
+      "designation": "5187 SCD-40 C02 Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:964d8dc8d4f16bcd",
+      "path": "5188 DS3231 RTC/5188 DS3231 RTC.step",
+      "sha": "964d8dc8d4f16bcd18a6be7de7c245f6935b5724",
+      "size": 851518,
+      "designation": "5188 DS3231 RTC",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:89caf942da770f0d",
+      "path": "5200 Proto PiCowbell/5200 Proto PiCowbell.step",
+      "sha": "89caf942da770f0dd6f7987f597d0d7f762b301d",
+      "size": 502433,
+      "designation": "5200 Proto PiCowbell",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:765e7985375be35a",
+      "path": "5201 IS31FL3741 STEMMA/5201 IS31FL3741 STEMMA.step",
+      "sha": "765e7985375be35a6c9ff86fddcd124b8c22445f",
+      "size": 1299661,
+      "designation": "5201 IS31FL3741 STEMMA",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a058f8abd84920ed",
+      "path": "5210 LED Glasses IS31FL3741/5210 LED Glasses-IS31FL3741.step",
+      "sha": "a058f8abd84920edde56a351c2092f510c40134b",
+      "size": 1510187,
+      "designation": "5210 LED Glasses-IS31FL3741",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:44654ba48136ec12",
+      "path": "5217 LED Glasses nRF52840/5217-LED-Glasses-nRF52840.step",
+      "sha": "44654ba48136ec12f0c31a8f58258d6f556a0688",
+      "size": 2488098,
+      "designation": "5217-LED-Glasses-nRF52840",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5efb65625a804c73",
+      "path": "5221 ANO Rotary Encoder/5221 ANO Rotary Encoder.step",
+      "sha": "5efb65625a804c730204135be05121a39c0908bd",
+      "size": 271861,
+      "designation": "5221 ANO Rotary Encoder",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:82d7a99b1958014a",
+      "path": "5295 NeoSlider Stemma/5295 NeoSlider Stemma.step",
+      "sha": "82d7a99b1958014a75fe9377e52c8db32553f352",
+      "size": 1532443,
+      "designation": "5295 NeoSlider Stemma",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:fc12dac833d8ce2b",
+      "path": "5300 ESP32-S2 TFT Feather/5300 ESP32-S2 TFT Feather.step",
+      "sha": "fc12dac833d8ce2baba4da200dff9a2f0aecb60d",
+      "size": 4360542,
+      "designation": "5300 ESP32-S2 TFT Feather",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:47c6238e2abdda5c",
+      "path": "5302 KB2040/5302 KB2040.step",
+      "sha": "47c6238e2abdda5c107a530c4c3d58af4ff57652",
+      "size": 2161058,
+      "designation": "5302 KB2040",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a6e4407dbdb3f715",
+      "path": "5303 Feather ESP32-S2/5303 Feather ESP32-S2.step",
+      "sha": "a6e4407dbdb3f7155a6030a33b47bf73e2131d46",
+      "size": 3412594,
+      "designation": "5303 Feather ESP32-S2",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e7dffef49eb42be0",
+      "path": "5323 Feather ESP32-S3/5323 Feather ESP32-S3.step",
+      "sha": "e7dffef49eb42be085cde62aeb659935f33269ed",
+      "size": 3636928,
+      "designation": "5323 Feather ESP32-S3",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:26d8b1f4b5e65d13",
+      "path": "5325 QTPy ESP32S2/5325 QTPy ESP32S2.step",
+      "sha": "26d8b1f4b5e65d135cf1195b8781ad1633f1d805",
+      "size": 2666761,
+      "designation": "5325 QTPy ESP32S2",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:6b2c2c7c41d45dd4",
+      "path": "5345 Feather ESP32-S2 TFT Reverse/5345 Feather ESP32-S2 TFT Reverse.step",
+      "sha": "6b2c2c7c41d45dd46150ae7bb27f560641b4e30f",
+      "size": 3945063,
+      "designation": "5345 Feather ESP32-S2 TFT Reverse",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d714342d63b3d056",
+      "path": "5346 MCP23017 Expander/5346-MCP23017-Expander.step",
+      "sha": "d714342d63b3d0567f04b242405451f1925ce754",
+      "size": 689452,
+      "designation": "5346-MCP23017-Expander",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e9bd8aef6338a50c",
+      "path": "5358 Mag Connector (4-pin, Right Angle)/5358 Mag Connector (4-pin, Right Angle, Pads).step",
+      "sha": "e9bd8aef6338a50cbf9da86551a4f002d12578a0",
+      "size": 136815,
+      "designation": "5358 Mag Connector (4-pin, Right Angle, Pads)",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:b0469e2e658e3be3",
+      "path": "5358 Mag Connector (4-pin, Right Angle)/5358 Mag Connector (4-pin, Right Angle, Pins).step",
+      "sha": "b0469e2e658e3be3e4f7199d834d3500d259866a",
+      "size": 136618,
+      "designation": "5358 Mag Connector (4-pin, Right Angle, Pins)",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:aaa6a61620007b8b",
+      "path": "5359 Mag Connector (5-pin, Right Angle)/5359 Mag Connector (5-pin, Right Angle, Pads).step",
+      "sha": "aaa6a61620007b8b3be12ec963cfcb2b3bb177c8",
+      "size": 153987,
+      "designation": "5359 Mag Connector (5-pin, Right Angle, Pads)",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:20dd16fb818dbdbb",
+      "path": "5359 Mag Connector (5-pin, Right Angle)/5359 Mag Connector (5-pin, Right Angle, Pins).step",
+      "sha": "20dd16fb818dbdbba554c15688085c1410354d90",
+      "size": 153362,
+      "designation": "5359 Mag Connector (5-pin, Right Angle, Pins)",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:2254805be2c68f80",
+      "path": "5360 Mag Connector (3-pin, Right Angle)/5360 Mag Connector (3-pin, Right Angle, Pads).step",
+      "sha": "2254805be2c68f800f2496b9466ecd607206763c",
+      "size": 112664,
+      "designation": "5360 Mag Connector (3-pin, Right Angle, Pads)",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:4e94953605adff1d",
+      "path": "5360 Mag Connector (3-pin, Right Angle)/5360 Mag Connector (3-pin, Right Angle, Pins).step",
+      "sha": "4e94953605adff1d6ff52e798183611f290dbf2a",
+      "size": 113208,
+      "designation": "5360 Mag Connector (3-pin, Right Angle, Pins)",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a4495949b3bcd611",
+      "path": "5378 VEML7700 Lux Sensor/5378 VEML7700 Lux Sensor.step",
+      "sha": "a4495949b3bcd611abd0815a11b86378d9630ad8",
+      "size": 795328,
+      "designation": "5378 VEML7700 Lux Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3d539990066beccd",
+      "path": "5394 1.9in TFT Display/5394 1.9in TFT Display.step",
+      "sha": "3d539990066beccdb54efdfc58e1f66b87c5e9eb",
+      "size": 5606663,
+      "designation": "5394 1.9in TFT Display",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1d465bf4e3d80af5",
+      "path": "5395 QT Py ESP32 PICO/5395 QT Py ESP32 PICO.step",
+      "sha": "1d465bf4e3d80af54915735b86f283563d6cd5ed",
+      "size": 2078835,
+      "designation": "5395 QT Py ESP32 PICO",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9250bbfc6a8194d1",
+      "path": "5396 VL53L4CD Sensor/5396 Adafruit VL53L4CD.step",
+      "sha": "9250bbfc6a8194d149b54aa8e1f1526a77d7e8c9",
+      "size": 821663,
+      "designation": "5396 Adafruit VL53L4CD",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8e3a00eb015dfb0a",
+      "path": "5397 Lipo Charger BFF/5397 Lipo Charger BFF.step",
+      "sha": "8e3a00eb015dfb0a88f3a8cc719024a94e8e78d4",
+      "size": 657166,
+      "designation": "5397 Lipo Charger BFF",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1b8ba780bdcc7e3b",
+      "path": "5400 ESP32 Feather V2/5400 ESP32 Feather V2.step",
+      "sha": "1b8ba780bdcc7e3b1d3538152585cbdccc90effc",
+      "size": 3645420,
+      "designation": "5400 ESP32 Feather V2",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:32e633aa19691200",
+      "path": "5405 QTPy ESP32 C3/5405 QTPy ESP32 C3.step",
+      "sha": "32e633aa19691200ab07a0c6be276614a7dd6fb4",
+      "size": 1877611,
+      "designation": "5405 QTPy ESP32 C3",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:cde49d5dd067cbd8",
+      "path": "5412 Mag Connector (USB to 4-pin)/5412 Mag Connector (4-pin).step",
+      "sha": "cde49d5dd067cbd89adb1ea5e58a9ebad875c5ea",
+      "size": 90355,
+      "designation": "5412 Mag Connector (4-pin)",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:73515e866b3ffa5a",
+      "path": "5412 Mag Connector (USB to 4-pin)/5412 Mag Connector (USB Connector).step",
+      "sha": "73515e866b3ffa5af6115a2c627c42d7235d1137",
+      "size": 175138,
+      "designation": "5412 Mag Connector (USB Connector)",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:474895b204f7b455",
+      "path": "5413 Mag Connector (5-pin, Straight)/5413 Mag Connector (5-pin, Straight, Pads).step",
+      "sha": "474895b204f7b4558e8b271d7c704b1c56a3e2ec",
+      "size": 138481,
+      "designation": "5413 Mag Connector (5-pin, Straight, Pads)",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:954edeefc59a8509",
+      "path": "5413 Mag Connector (5-pin, Straight)/5413 Mag Connector (5-pin, Straight, Pins).step",
+      "sha": "954edeefc59a85098af9c17fa618927e0441d598",
+      "size": 137514,
+      "designation": "5413 Mag Connector (5-pin, Straight, Pins)",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f98881c8e02ccee9",
+      "path": "5420 MEMENTO/5420 MEMENTO.step",
+      "sha": "f98881c8e02ccee9eb1d1974a1134baa27717b0e",
+      "size": 9076268,
+      "designation": "5420 MEMENTO",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8acbce81def66f39",
+      "path": "5423 TSC2007 I2C Resistive Touch/5423 TSC2007 I2C Resistive Touch.step",
+      "sha": "8acbce81def66f39d386800965213d4aca63378e",
+      "size": 1233346,
+      "designation": "5423 TSC2007 I2C Resistive Touch",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:113376fe5107b20f",
+      "path": "5426 QT Py ESP32-S3/5426 QT Py ESP32-S3.step",
+      "sha": "113376fe5107b20f26d457cec38bf083c1b1a28e",
+      "size": 1355021,
+      "designation": "5426 QT Py ESP32-S3",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:63b7625211f8fca5",
+      "path": "5483 Feather ESP32-S3 TFT/5483 Feather ESP32-S3 TFT.step",
+      "sha": "63b7625211f8fca503116966794de5dfb37eac91",
+      "size": 3724981,
+      "designation": "5483 Feather ESP32-S3 TFT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d86729b1b29f58b5",
+      "path": "5499 PB86-A1R/Adafruit PB86-1AR v1.step",
+      "sha": "d86729b1b29f58b5c57368c4b67366d4532d87f6",
+      "size": 229905,
+      "designation": "Adafruit PB86-1AR v1",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:75598d685c293c73",
+      "path": "5543 LSM6DS3-LIS3MDL/5543 LSM6DS3-LIS3MDL.step",
+      "sha": "75598d685c293c733eeecd028aa3b29760214966",
+      "size": 1018237,
+      "designation": "5543 LSM6DS3-LIS3MDL",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:eeed0ee428447552",
+      "path": "5579 MMC5603 Magnetometer/5579 MMC5603 Magnetometer.step",
+      "sha": "eeed0ee428447552d781ceab8ccb97c5a9af9a90",
+      "size": 673595,
+      "designation": "5579 MMC5603 Magnetometer",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:46a11ee4dca336d6",
+      "path": "5580 MAX17048/5580 MAX17048.step",
+      "sha": "46a11ee4dca336d60026a1cec96952d3c10478b6",
+      "size": 710978,
+      "designation": "5580 MAX17048",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f8325fc104a892d4",
+      "path": "5606 ENS160 Sensor/5606 ENS160 Sensor.step",
+      "sha": "f8325fc104a892d47d62c9f7cc4f3b383acf47c5",
+      "size": 897001,
+      "designation": "5606 ENS160 Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:4e8ddc2dd0f52611",
+      "path": "562 10K Potentiometer/562 10K Potentiometer.step",
+      "sha": "4e8ddc2dd0f52611e7426f958b60d287dcae6d81",
+      "size": 393858,
+      "designation": "562 10K Potentiometer",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e07cced79b8b267a",
+      "path": "5625 Stemma 5 Port Hub/5625 Stemma 5 Port Hub.step",
+      "sha": "e07cced79b8b267a6058e5f3feb4da286193669a",
+      "size": 589050,
+      "designation": "5625 Stemma 5 Port Hub",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:04e89af581742ee1",
+      "path": "5626 PCA9548 Stemma/5626 PCA9548 Stemma.step",
+      "sha": "04e89af581742ee1c5aa8bd83de9597f0b0d3026",
+      "size": 1416410,
+      "designation": "5626 PCA9548 Stemma",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c071efbae1e0893f",
+      "path": "5628 Mini Joycon Thumbstick/5628 Mini Joycon Thumbstick.step",
+      "sha": "c071efbae1e0893f4a60c184a5d37e57e729f08d",
+      "size": 129279,
+      "designation": "5628 Mini Joycon Thumbstick",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:25cb3c4fa5bc54cf",
+      "path": "5631 PB86 Breakout/5631 PB86 Breakout.step",
+      "sha": "25cb3c4fa5bc54cf40005f9edd2bab927e567d99",
+      "size": 38167,
+      "designation": "5631 PB86 Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:df82aa19ca30606d",
+      "path": "5639 IR LED Emitter/5639 IR LED Emitter.step",
+      "sha": "df82aa19ca30606deac2d4b39fafc9ef7c26d7ba",
+      "size": 675775,
+      "designation": "5639 IR LED Emitter",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:14e1aa36557a8440",
+      "path": "5644 TPS61040 Boost/5644 TPS61040 Boost.step",
+      "sha": "14e1aa36557a8440fb9759e7079f7c0649dab524",
+      "size": 249100,
+      "designation": "5644 TPS61040 Boost",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9f377df4071b68b1",
+      "path": "5645 NeoPixel Driver BFF/5645 NeoPixel Driver BFF.step",
+      "sha": "9f377df4071b68b13ae06550f6766cac73b458bc",
+      "size": 417038,
+      "designation": "5645 NeoPixel Driver BFF",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5557165244795401",
+      "path": "5646 NeoPixel Grid 5x5 BFF/5646 NeoPixel Grid 5x5 BFF.step",
+      "sha": "555716524479540139f4c845236ef13748234c84",
+      "size": 251704,
+      "designation": "5646 NeoPixel Grid 5x5 BFF",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8ea5f1f02336fecc",
+      "path": "5648 MOSFET Driver/5648 MOSFET Driver.step",
+      "sha": "8ea5f1f02336fecc23e109f4016be2c5fba334a4",
+      "size": 783419,
+      "designation": "5648 MOSFET Driver",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:385d1fc463efb013",
+      "path": "5649 3V to 5V Level Booster/5649 3V to 5V Level Booster.step",
+      "sha": "385d1fc463efb01361795a35017411874a6f63d5",
+      "size": 689256,
+      "designation": "5649 3V to 5V Level Booster",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:85eda8ebe5cd35bf",
+      "path": "5650 Feather RP2040 Scorpio/5650 Feather RP2040 Scorpio.step",
+      "sha": "85eda8ebe5cd35bfbc97edd150ed77964b4d9105",
+      "size": 2925330,
+      "designation": "5650 Feather RP2040 Scorpio",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:89e1a4d04bb0bfa1",
+      "path": "5663 PCA9546 Multiplexer/5663 PCA9546 Multiplexer.step",
+      "sha": "89e1a4d04bb0bfa1f2ed6c37579c3c1644d69390",
+      "size": 509502,
+      "designation": "5663 PCA9546 Multiplexer",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a33e7d29f48009e5",
+      "path": "5664 PCA9546 Stemma QT/5664 PCA9546 Stemma QT.step",
+      "sha": "a33e7d29f48009e5ad1040553f470b01cf2ed991",
+      "size": 1266038,
+      "designation": "5664 PCA9546 Stemma QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:13a905a7950cf76c",
+      "path": "5665 SHT45 Sensor/5665 SHT45 Sensor.step",
+      "sha": "13a905a7950cf76c2bf85b830a95192facb71a7a",
+      "size": 823139,
+      "designation": "5665 SHT45 Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:2f5ca3c3dd5b9ddf",
+      "path": "5666 Iot Button NeoPixel BFF/5666 Iot Button NeoPixel BFF.step",
+      "sha": "2f5ca3c3dd5b9ddfc5b9a4fbaf48ef4ba1d19b82",
+      "size": 551737,
+      "designation": "5666 Iot Button NeoPixel BFF",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:783df0f1ead3849f",
+      "path": "5691 Feather ESP32 S3 Reverse TFT/5691 ESP32 S3 Reverse TFT Feather.step",
+      "sha": "783df0f1ead3849fd7a712b27a4e9361881c3f8f",
+      "size": 3946964,
+      "designation": "5691 ESP32 S3 Reverse TFT Feather",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:55ced829dfec1d2d",
+      "path": "5703 PiCowbell Adalogger/5703 PiCowbell Adalogger.step",
+      "sha": "55ced829dfec1d2dfaf09d7ee6d9f5b8aa5c0137",
+      "size": 1892232,
+      "designation": "5703 PiCowbell Adalogger",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8546a75c9e1eff22",
+      "path": "5708 CAN Pal/5708 CAN Pal.step",
+      "sha": "8546a75c9e1eff22d823ddba8e280dac63a4100a",
+      "size": 1040289,
+      "designation": "5708 CAN Pal",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:fe135c8c24a1cb52",
+      "path": "5710 Feather RP2040 DVI/5710 Feather RP2040 DVI.step",
+      "sha": "fe135c8c24a1cb52cfe21390d044c08e4b3d5c76",
+      "size": 4316166,
+      "designation": "5710 Feather RP2040 DVI",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:69bd665d168433f1",
+      "path": "5712 Feather RP2040 RFM69/5712 Feather RP2040 RFM69.step",
+      "sha": "69bd665d168433f1b35ef5dba33207246732363c",
+      "size": 3507736,
+      "designation": "5712 Feather RP2040 RFM69",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:416615e45bb7b311",
+      "path": "5723 Feather RP2040 USB Host/5723 Feather RP2040 USB Host.step",
+      "sha": "416615e45bb7b3112788720b6c61e1344589b5a1",
+      "size": 3834378,
+      "designation": "5723 Feather RP2040 USB Host",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8f437ab0bf0822cb",
+      "path": "5724 Feather RP2040 CAN/5724 Feather RP2040 CAN.step",
+      "sha": "8f437ab0bf0822cbca516a99a4778130f9d9beb6",
+      "size": 3684817,
+      "designation": "5724 Feather RP2040 CAN",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:af916346e7192612",
+      "path": "5740 ANO Rotary Encoder QT/5740 ANO Rotary Encoder QT.step",
+      "sha": "af916346e71926123e3be4cae6fffa17a364a378",
+      "size": 905570,
+      "designation": "5740 ANO Rotary Encoder QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ebd21841c481393a",
+      "path": "5743 Mini Gamepad STEMMA QT/5743 Mini Gamepad STEMMA QT.step",
+      "sha": "ebd21841c481393aa3b25cfd404c15642ceb8ffb",
+      "size": 1028935,
+      "designation": "5743 Mini Gamepad STEMMA QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:b805f7fc7d6a260a",
+      "path": "5745 PiCowbell DVI/5745 PiCowbell DVI.step",
+      "sha": "b805f7fc7d6a260ab14460e7daeab37e3965fa3b",
+      "size": 2287275,
+      "designation": "5745 PiCowbell DVI",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f41a942db4b400a3",
+      "path": "5752 Quad Rotary Breakout/5752 Quad Rotary Breakout.step",
+      "sha": "f41a942db4b400a35365adec48f5b7033195a829",
+      "size": 1917697,
+      "designation": "5752 Quad Rotary Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:df29984d80bde1d6",
+      "path": "5753 PC Joystick Adapter/5753 PC Joystick Adapter.step",
+      "sha": "df29984d80bde1d643fbdc8bf3c8ac22dfb16351",
+      "size": 7738417,
+      "designation": "5753 PC Joystick Adapter",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d26eebed81fcf3b9",
+      "path": "5766 NeoDriver STEMMA QT/5766 NeoDriver STEMMA QT.step",
+      "sha": "d26eebed81fcf3b925f2439dc1c93b2aa6c1b46c",
+      "size": 1638447,
+      "designation": "5766 NeoDriver STEMMA QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9c5d0d0a56a96b66",
+      "path": "5768 Feather RP2040 PropMaker/5768 Feather RP2040 PropMaker.step",
+      "sha": "9c5d0d0a56a96b66fae0c0ff39a0b1bd2952d761",
+      "size": 4113680,
+      "designation": "5768 Feather RP2040 PropMaker",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:bd0b1c938f74f458",
+      "path": "5769 Audio BFF/5769 Audio BFF.step",
+      "sha": "bd0b1c938f74f45887b328f45562f7f47d778ce6",
+      "size": 1281802,
+      "designation": "5769 Audio BFF",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8b9fde2cbc677d4e",
+      "path": "5778 Matrix Portal S3/5778 Matrix Portal S3.step",
+      "sha": "8b9fde2cbc677d4e5e0dbae494bab0f0a9e5f01f",
+      "size": 4047617,
+      "designation": "5778 Matrix Portal S3",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c8f04be40a9d2f56",
+      "path": "5800 Qualia ESP32-S3/5800-Qualia-ESP32-S3.step",
+      "sha": "c8f04be40a9d2f56171e96117c4642ff58982f1f",
+      "size": 4456860,
+      "designation": "5800-Qualia-ESP32-S3",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5e67eb8f4855f933",
+      "path": "5807 HUSB238 Breakout/5807 HUSB238 Breakout.step",
+      "sha": "5e67eb8f4855f93314a8187c0f7c74485e5340b3",
+      "size": 1350120,
+      "designation": "5807 HUSB238 Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9025d4ac321b76b2",
+      "path": "5810 VCNL4020 Sensor/5810 VCNL4020 Sensor.step",
+      "sha": "9025d4ac321b76b27d23309b29a97a5fca5839d4",
+      "size": 775330,
+      "designation": "5810 VCNL4020 Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a77d946fe7f7ea02",
+      "path": "5832 INA228 STEMMA QT/5832 INA228 STEMMA QT.step",
+      "sha": "a77d946fe7f7ea026b7fb495f3cadfd76882e162",
+      "size": 1237408,
+      "designation": "5832 INA228 STEMMA QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:341e8fc5f11f4115",
+      "path": "5858 USB Host FeatherWing/5858 USB Host FeatherWing.step",
+      "sha": "341e8fc5f11f4115877ccc0d807d069a685409ce",
+      "size": 2872505,
+      "designation": "5858 USB Host FeatherWing",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:27c156d0db355db2",
+      "path": "5877 CAN Bus BFF/5877 CAN Bus BFF.step",
+      "sha": "27c156d0db355db2acdb95b75c3bcbdd97934531",
+      "size": 932929,
+      "designation": "5877 CAN Bus BFF",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ae13027df9d57837",
+      "path": "5880 Rotary Encoder I2C STEMMA QT/5880 Rotary Encoder I2C STEMMA QT.step",
+      "sha": "ae13027df9d57837329d2738faa7f2e6e2bfa891",
+      "size": 1825334,
+      "designation": "5880 Rotary Encoder I2C STEMMA QT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:769b99ff09cd36fa",
+      "path": "5889 ItsyBitsy ESP32/5889 ItsyBitsy ESP32.step",
+      "sha": "769b99ff09cd36faf782f63662f2df4dd8ab4358",
+      "size": 3176942,
+      "designation": "5889 ItsyBitsy ESP32",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:932f0949fa912787",
+      "path": "5905 Proto PiCowBell/5905 Proto PiCowBell.step",
+      "sha": "932f0949fa91278743c94cf5e2d518a0cb147ebd",
+      "size": 2592067,
+      "designation": "5905 Proto PiCowBell",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:6705e05d746922b9",
+      "path": "5906 Proto Doubler PiCowBell/5906 Proto Doubler PiCowBell.step",
+      "sha": "6705e05d746922b96ee0129f82ea4e561e9e7d4e",
+      "size": 3588170,
+      "designation": "5906 Proto Doubler PiCowBell",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f127b225c0a0d783",
+      "path": "5907 Terminal PiCowbell/5907 Terminal PiCowbell.step",
+      "sha": "f127b225c0a0d783b1e9c5ded66b334bfbfef495",
+      "size": 2626389,
+      "designation": "5907 Terminal PiCowbell",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:4a001a8f369eb8d5",
+      "path": "5913 TCRT1000 Sensor/5913 TCRT1000 Sensor.step",
+      "sha": "4a001a8f369eb8d5abaed87e3f83f6d00425361e",
+      "size": 1140107,
+      "designation": "5913 TCRT1000 Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:05301deced71a0db",
+      "path": "592 microUSB B Connector Cable/592 microUSB B Connector Cable.step",
+      "sha": "05301deced71a0db73d22dcfc69bca4a215ae3ff",
+      "size": 34643,
+      "designation": "592 microUSB B Connector Cable",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ca958ae55111016b",
+      "path": "5939 IR Remote Receiver/5939 IR Remote Receiver.step",
+      "sha": "ca958ae55111016b49fd9be87f671fca846756a0",
+      "size": 945246,
+      "designation": "5939 IR Remote Receiver",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:6de91af0e284337f",
+      "path": "5945 PiCowbell Camera/5945 PiCowbell Camera.step",
+      "sha": "6de91af0e284337fe231b1da8efaafc8335f3e44",
+      "size": 4327453,
+      "designation": "5945 PiCowbell Camera",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9754f2fdbde60197",
+      "path": "5953 Pixel Trinkey/5953 Pixel Trinkey.step",
+      "sha": "9754f2fdbde60197ac8e7b24d6c63929c220aaa9",
+      "size": 2511536,
+      "designation": "5953 Pixel Trinkey",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3a58f6b7cf79fc9f",
+      "path": "5954 TRRS Trinkey/5954 TRRS Trinkey.step",
+      "sha": "3a58f6b7cf79fc9fdcde76203b8524752d2a3988",
+      "size": 2912634,
+      "designation": "5954 TRRS Trinkey",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a1276218e1a2aa65",
+      "path": "5964 SEN5X Adapter Breakout/5964 SEN5X Adapter Breakout.step",
+      "sha": "a1276218e1a2aa6506d2a3cf16ba13bc57932200",
+      "size": 1207453,
+      "designation": "5964 SEN5X Adapter Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:77b9c08154e8140d",
+      "path": "5967 Proto Tripler PiCowBell/5967 Proto Tripler PiCowBell.step",
+      "sha": "77b9c08154e8140d138fc46c57366d6ea576ab93",
+      "size": 8835740,
+      "designation": "5967 Proto Tripler PiCowBell",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3ff6da7e238581cb",
+      "path": "5975 NeoPixel Breakout/5975 NeoPixel Breakout.step",
+      "sha": "3ff6da7e238581cbd25f8630da23938af4b35815",
+      "size": 211659,
+      "designation": "5975 NeoPixel Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:af93fecbe138f4b3",
+      "path": "5978 USB-C Plug Breakout/5978 USB-C Plug Breakout.step",
+      "sha": "af93fecbe138f4b3ba88d6261b462ef28b5c6bcf",
+      "size": 211517,
+      "designation": "5978 USB-C Plug Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:2bd221208d9f5a82",
+      "path": "5980 Feather RP2040 Adalogger/5980 Feather RP2040 Adalogger.step",
+      "sha": "2bd221208d9f5a82b62e12ae24a40889dd5e59bd",
+      "size": 3723774,
+      "designation": "5980 Feather RP2040 Adalogger",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:77a6e9f2903a12c7",
+      "path": "5981 TRRS Trinkey Case/5981 TRRS Trinkey Case.step",
+      "sha": "77a6e9f2903a12c7cb5f2c025fe47e4e7edf1922",
+      "size": 3591253,
+      "designation": "5981 TRRS Trinkey Case",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9138b9ef2688c0e8",
+      "path": "5988 RS-232 Level Shifter/5988 RS-232 Level Shifter.step",
+      "sha": "9138b9ef2688c0e840efd084df93b5d5ddc82dc0",
+      "size": 1156916,
+      "designation": "5988 RS-232 Level Shifter",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:96d8153d26f4ee8f",
+      "path": "5991 HUSB238 USBC/5991 HUSB238 USBC.step",
+      "sha": "96d8153d26f4ee8f39540bb60e5628dd265d1f29",
+      "size": 2409971,
+      "designation": "5991 HUSB238 USBC",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7cf4b56c1f5a95cb",
+      "path": "5993 USB-C Vertical Breakout/5993 USB-C Vertical Breakout.step",
+      "sha": "7cf4b56c1f5a95cb3650e74102093fb6d18370cb",
+      "size": 1918355,
+      "designation": "5993 USB-C Vertical Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:55d18f60d46aa9f0",
+      "path": "5997 CH334F 4-Port Hub/5997-CH334F-4-Port-Hub.step",
+      "sha": "55d18f60d46aa9f0dd693a1e51bfc342ce33320a",
+      "size": 1344354,
+      "designation": "5997-CH334F-4-Port-Hub",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:09d0cf6b9955163d",
+      "path": "5998 Pixel Trinkey Case/5998 Pixel Trinkey Case.step",
+      "sha": "09d0cf6b9955163d52ec866729c501f1ecb50311",
+      "size": 3157183,
+      "designation": "5998 Pixel Trinkey Case",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:8807a7986be2a539",
+      "path": "5999 CH334F 2-Port HUB/5999 CH334F 2-Port HUB.step",
+      "sha": "8807a7986be2a539508807a61fb81e4fcf5db155",
+      "size": 1339621,
+      "designation": "5999 CH334F 2-Port HUB",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7e640223f2954a59",
+      "path": "6000 Feather RP2350/6000 Feather RP2350.step",
+      "sha": "7e640223f2954a59ca18d20f2ef44d8535c256e7",
+      "size": 4137022,
+      "designation": "6000 Feather RP2350",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5afe8bbe97a1b6cf",
+      "path": "6002 QT Py Case/6002 QTPy Case.step",
+      "sha": "5afe8bbe97a1b6cf59fb3ac9b0949c10720f921c",
+      "size": 2695386,
+      "designation": "6002 QTPy Case",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:4923f5cb41cc6d93",
+      "path": "6003 Metro RP2350/6003 Metro RP2350.step",
+      "sha": "4923f5cb41cc6d93d85bd5dec210f4ece6915002",
+      "size": 6121983,
+      "designation": "6003 Metro RP2350",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d6f976b9b0b3e054",
+      "path": "6049 I2S MEMS Microphone/6049 I2S MEMS Microphone.step",
+      "sha": "d6f976b9b0b3e054b0ad0767ee5a2e17af575e4f",
+      "size": 2026653,
+      "designation": "6049 I2S MEMS Microphone",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a365c0db0d1184dd",
+      "path": "6055 HSTX to DVI Adapter/6055 HSTX to DVI Adapter.step",
+      "sha": "a365c0db0d1184ddad592831eb7544ab73d2621f",
+      "size": 2981972,
+      "designation": "6055 HSTX to DVI Adapter",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:b7a79e1523a8e279",
+      "path": "6057 Feather RP2040 USB Case/6057 Feather RP2040 USB Case.step",
+      "sha": "b7a79e1523a8e27938b8a493c8b24fc1600a9774",
+      "size": 4078705,
+      "designation": "6057 Feather RP2040 USB Case",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:bd0c609095de0963",
+      "path": "6062 INA3221 Power Monitor/6062 INA3221 Power Monitor.step",
+      "sha": "bd0c609095de0963d4a6a40f14326d3a84adc00b",
+      "size": 1514913,
+      "designation": "6062 INA3221 Power Monitor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5c11058d628452fc",
+      "path": "6064 VCNL4200 Breakout/6064 VCNL4200 Breakout.step",
+      "sha": "5c11058d628452fc7358a8d9945d97ed7bf48bf1",
+      "size": 877248,
+      "designation": "6064 VCNL4200 Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ed2b28e8a3688454",
+      "path": "6066 Pixel Shifter/6066 Pixel Shifter.step",
+      "sha": "ed2b28e8a36884541d75a9ae7c6f53bb70fe5a71",
+      "size": 1181995,
+      "designation": "6066 Pixel Shifter",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:98c4dc9d1cf3e540",
+      "path": "6067 LPS28 Pressure Sensor/Adafruit LPS28 Pressure Sensor.step",
+      "sha": "98c4dc9d1cf3e540a5499bc57057ef8c836ec112",
+      "size": 5042805,
+      "designation": "Adafruit LPS28 Pressure Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:aa44c4f4fbca0cb7",
+      "path": "6091 bq25185 USB Charger/6091 bq25185 USB Charger.step",
+      "sha": "aa44c4f4fbca0cb7d92e9ccc3c2c152ebc6aad69",
+      "size": 1238086,
+      "designation": "6091 bq25185 USB Charger",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1483525290d8911b",
+      "path": "6092 BQ25185 3V Buck/6092 BQ25185 3V Buck.step",
+      "sha": "1483525290d8911b0b0f49adaed748f186335ff3",
+      "size": 1976135,
+      "designation": "6092 BQ25185 3V Buck",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:80972960103f3b3b",
+      "path": "610 DC Jack/610 DC Jack.step",
+      "sha": "80972960103f3b3b84c820f26c54d528ba3ad480",
+      "size": 89361,
+      "designation": "610 DC Jack",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:a18051c03e32194e",
+      "path": "6100 Sparkle Motion/6100 Sparkle Motion.step",
+      "sha": "a18051c03e32194ed34aad46871bf02777ead819",
+      "size": 6161874,
+      "designation": "6100 Sparkle Motion",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:548a44d436b5294c",
+      "path": "6106 BQ25185 5V/6106 BQ25185 5V.step",
+      "sha": "548a44d436b5294cc8fd32f01568e85716a6923e",
+      "size": 1982538,
+      "designation": "6106 BQ25185 5V",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7bdd4aac1aa430ed",
+      "path": "6109 A4988 Driver/6109 A4988 Driver.step",
+      "sha": "7bdd4aac1aa430ed3f36bc5f202c94ed837a5952",
+      "size": 1992929,
+      "designation": "6109 A4988 Driver",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:fb2729b36ee3ed84",
+      "path": "6114 USB Solar Charger Case/6114 USB Solar Charger Case.step",
+      "sha": "fb2729b36ee3ed8413890f44dfe9a62f9f2259ad",
+      "size": 3919267,
+      "designation": "6114 USB Solar Charger Case",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e92be0d5f76f6d53",
+      "path": "6118 USB-C HDMI Extension Cable/6118 USB-C HDMI Extension Cable.step",
+      "sha": "e92be0d5f76f6d53a53b2fdf4751ae10fb2e8af3",
+      "size": 3550230,
+      "designation": "6118 USB-C HDMI Extension Cable",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:28fa43d2ae85b84c",
+      "path": "6121 TMC2209 Driver/6121 TMC2209 Driver.step",
+      "sha": "28fa43d2ae85b84c60249cfdd366c2eb5d18d1ef",
+      "size": 1976343,
+      "designation": "6121 TMC2209 Driver",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:419a16901bb7ba08",
+      "path": "6124 BQ25185 3V Case/6124 BQ25185 3V Buck Case.step",
+      "sha": "419a16901bb7ba08a8535fe7a73281db83d221cf",
+      "size": 3173213,
+      "designation": "6124 BQ25185 3V Buck Case",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:983d3e9ffaebc44f",
+      "path": "6126 BQ26185 5V Case/6126 BQ25185 5V Buck Case.step",
+      "sha": "983d3e9ffaebc44fa331b77a4bba37ac9c3ca74b",
+      "size": 2385474,
+      "designation": "6126 BQ25185 5V Buck Case",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5b8167cca1912a5e",
+      "path": "6160 Sparkle Motion Mini/6160 Sparkle Motion Mini.step",
+      "sha": "5b8167cca1912a5e7f1fba018c557613d71d0685",
+      "size": 3442488,
+      "designation": "6160 Sparkle Motion Mini",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:66f39106daee442a",
+      "path": "6178 1.28in Round TFT/6178 1.28in Round TFT.step",
+      "sha": "66f39106daee442a08a0b5f994fe7cbfb830bd64",
+      "size": 2667160,
+      "designation": "6178 1.28in Round TFT",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:dc8ae618ec7745a2",
+      "path": "6200 Fruit Jam/6200 Fruit Jam.step",
+      "sha": "dc8ae618ec7745a2b9a7114d71cd2615c6020a39",
+      "size": 12864562,
+      "designation": "6200 Fruit Jam",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1d29e9c9c54570c8",
+      "path": "6223 DAC7578 Breakout/6223 DAC7578 Breakout.step",
+      "sha": "1d29e9c9c54570c8bdc7a8e2b58389c938564120",
+      "size": 857515,
+      "designation": "6223 DAC7578 Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:99776d6e3cf1c017",
+      "path": "6241 Feather DVI Case/6241 Feather DVI Case.step",
+      "sha": "99776d6e3cf1c0170a683935f4cbfa3d681cac8f",
+      "size": 4543221,
+      "designation": "6241 Feather DVI Case",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3ce736503f6ccd9a",
+      "path": "6252 Pico Case/6252 Pico Case.step",
+      "sha": "3ce736503f6ccd9a5e395deaa64f6c9e1e41586b",
+      "size": 12241883,
+      "designation": "6252 Pico Case",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1671a6d5d96c8aad",
+      "path": "6280 TPS65131 Boost Converter/6280 TPS65131 Boost Converter.step",
+      "sha": "1671a6d5d96c8aad530d250bc6d206e020986e86",
+      "size": 1436403,
+      "designation": "6280 TPS65131 Boost Converter",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:ab236415862877b9",
+      "path": "6299 Mini Sparkle Motion Case/6299 Mini Sparkle Motion Case.step",
+      "sha": "ab236415862877b93d87109ff4ef1c472310c59f",
+      "size": 4161853,
+      "designation": "6299 Mini Sparkle Motion Case",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:b48ae3260b39ff5a",
+      "path": "6301 Sparkle Motion Case/6301 Sparkle Motion Case.step",
+      "sha": "b48ae3260b39ff5a4e19ff5d3fbf05ca410e031c",
+      "size": 6823697,
+      "designation": "6301 Sparkle Motion Case",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e20f1fb1d0dca6d2",
+      "path": "6309 TLV320DAC3100 I2S DAC/6309 TLV320DAC3100 I2S DAC.step",
+      "sha": "e20f1fb1d0dca6d2f15e6413adc7b0ddc29ff438",
+      "size": 2210386,
+      "designation": "6309 TLV320DAC3100 I2S DAC",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7589a682aa5343e8",
+      "path": "6318 Solenoid Driver 8 Channel/6318 Solenoid Driver 8 Channel.step",
+      "sha": "7589a682aa5343e80bece8a19aff7cc05729e00e",
+      "size": 2860039,
+      "designation": "6318 Solenoid Driver 8 Channel",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:bc3e6bc9961bf2b1",
+      "path": "6323 USB C Fixer/6323 USB C Fixer.step",
+      "sha": "bc3e6bc9961bf2b1277f36ad6a6e5a109586732b",
+      "size": 6051423,
+      "designation": "6323 USB C Fixer",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1cccfa07ee920a71",
+      "path": "6331 SEN6X Breakout/6331 SEN6X Breakout.step",
+      "sha": "1cccfa07ee920a7121c1d0d39ffae475f2f74c7a",
+      "size": 1231395,
+      "designation": "6331 SEN6X Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:806eaafa01dd5752",
+      "path": "6332 Sparkle Motion Stick/6332 Sparkle Motion Stick.step",
+      "sha": "806eaafa01dd575238f95f6a0d70f7e60947d032",
+      "size": 3925600,
+      "designation": "6332 Sparkle Motion Stick",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:f88a20133211f0f2",
+      "path": "6335 OPT4048 XYZ Color Sensor/6335 OPT4048 XYZ Color Sensor.step",
+      "sha": "f88a20133211f0f2baa1aa7bf39f0abad3fc0dfb",
+      "size": 643708,
+      "designation": "6335 OPT4048 XYZ Color Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:05787f1da1794318",
+      "path": "6340 INA237 Power Monitor/6340 INA237 Power Monitor.step",
+      "sha": "05787f1da1794318274283d1570ad646cf0d5e8e",
+      "size": 1231543,
+      "designation": "6340 INA237 Power Monitor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:efeab4a5b1d52dc7",
+      "path": "6348 Wiz5500 Ethernet Breakout/6348 Wiz5500 Ethernet Breakout.step",
+      "sha": "efeab4a5b1d52dc7b674b487f1a049545e01583f",
+      "size": 3119948,
+      "designation": "6348 Wiz5500 Ethernet Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:502f54c1d84018a5",
+      "path": "6353 STSPIN220 Stepper Motor Driver/6353 STSPIN220 Stepper Motor Driver.step",
+      "sha": "502f54c1d84018a5af96e349a60ef8c531106c77",
+      "size": 2115524,
+      "designation": "6353 STSPIN220 Stepper Motor Driver",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:cd7ea492a5f67055",
+      "path": "6354 TPS61169 Constant Current/6354 TPS61169 Constant Current.step",
+      "sha": "cd7ea492a5f670559a2632d93bfd1cd25e307c15",
+      "size": 1429811,
+      "designation": "6354 TPS61169 Constant Current",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c2f223ac92a90e33",
+      "path": "6357 AS5600 Magnetic Sensor/6357 AS5600 Magnetic Sensor.step",
+      "sha": "c2f223ac92a90e335c36d5603eec6dd56c5674c5",
+      "size": 853993,
+      "designation": "6357 AS5600 Magnetic Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5922ec7a45347f73",
+      "path": "6358 Triple LED Matrix Bonnet/6358 Triple LED Matrix Bonnet.step",
+      "sha": "5922ec7a45347f7367d91e207d8affb4b1a18241",
+      "size": 2450896,
+      "designation": "6358 Triple LED Matrix Bonnet",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d742a562ff27b629",
+      "path": "6359 LM73100 Ideal Diode/6359 LM73100 Ideal Diode.step",
+      "sha": "d742a562ff27b6291d3e0427c785906059ef750b",
+      "size": 1048283,
+      "designation": "6359 LM73100 Ideal Diode",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:7ff7510e88f27887",
+      "path": "6362 Simple Soil Moisture Sensor/6362 Simple Soil Moisture Sensor.step",
+      "sha": "7ff7510e88f2788718f201f6b60f4044b735209c",
+      "size": 357658,
+      "designation": "6362 Simple Soil Moisture Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:eafc38163fae9896",
+      "path": "6363 PiCowBell HSTX DVI/6363 PiCowBell HSTX DVI.step",
+      "sha": "eafc38163fae9896a26ef593623bf5ede1933cef",
+      "size": 2375001,
+      "designation": "6363 PiCowBell HSTX DVI",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3baef0a63af9dcbc",
+      "path": "6365 Pi STEMMA QT Breakout/6365 Pi STEMMA QT Breakout.step",
+      "sha": "3baef0a63af9dcbc5bc5745ec9eb78d18cf7dedc",
+      "size": 682894,
+      "designation": "6365 Pi STEMMA QT Breakout",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c37543d89657089a",
+      "path": "6366 2.13in Tri-Color eInk/6366 2.13in Tri-Color eInk.step",
+      "sha": "c37543d89657089a1f862d1a66d75e1814f87463",
+      "size": 4213527,
+      "designation": "6366 2.13in Tri-Color eInk",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:1860566307c71379",
+      "path": "6387 NeoPot/6387 NeoPot.step",
+      "sha": "1860566307c71379e714d0da574dd3b4d3420b79",
+      "size": 790456,
+      "designation": "6387 NeoPot",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:5b4a84347b738f64",
+      "path": "6388 QMC5883P Magnetometer/6388 QMC5883P Magnetometer.step",
+      "sha": "5b4a84347b738f645f8ea0f9cf584a63913eb743",
+      "size": 772625,
+      "designation": "6388 QMC5883P Magnetometer",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9576628fac323404",
+      "path": "64 Halfsize Breadboard/64 Halfsize Breadboard.step",
+      "sha": "9576628fac323404945134b8ba9743f947d0177d",
+      "size": 23037,
+      "designation": "64 Halfsize Breadboard",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3e5c547e4b1cca57",
+      "path": "6403 MLX90632 FIR Sensor/6403 MLX90632 FIR Sensor.step",
+      "sha": "3e5c547e4b1cca5705b3ca391e6f15ce1fd9ffea",
+      "size": 741322,
+      "designation": "6403 MLX90632 FIR Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:0a5ac07a7d19c023",
+      "path": "6413 BMP585 Pressure Sensor/6413 BMP585 Pressure Sensor.step",
+      "sha": "0a5ac07a7d19c023e134e08d2ae256edb4a092b3",
+      "size": 800306,
+      "designation": "6413 BMP585 Pressure Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:0d9995951ef24f21",
+      "path": "6418 E-Ink Bonnet/6418 E-Ink Bonnet.step",
+      "sha": "0d9995951ef24f211f63e363bb9fe14b81b4c92f",
+      "size": 4900111,
+      "designation": "6418 E-Ink Bonnet",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:334e5ad3c9ce0385",
+      "path": "6420 SPA006-003 Temp Pressure Sensor/6420 SPA006-003 Temp Pressure Sensor.step",
+      "sha": "334e5ad3c9ce0385e7bfc3e8ad1c804b943c723d",
+      "size": 894340,
+      "designation": "6420 SPA006-003 Temp Pressure Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:26ed804e3731066d",
+      "path": "6421 PCM5122 I2S DAC/6421 PCM5122 I2S DAC.step",
+      "sha": "26ed804e3731066d4e436616a06e961553a21338",
+      "size": 2115363,
+      "designation": "6421 PCM5122 I2S DAC",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:23c7dfd22dd40b42",
+      "path": "6425 Fruit Jam Case/6425 Fruit Jam Case.step",
+      "sha": "23c7dfd22dd40b42083428d11acc51aaffb6ad2a",
+      "size": 13704994,
+      "designation": "6425 Fruit Jam Case",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:321769485fccc658",
+      "path": "6426 STHS34PF80 IR Presence Sensor/6426 STHS34PF80 IR Presence Sensor.step",
+      "sha": "321769485fccc6582176df865cb8c9a3fe37a15f",
+      "size": 833811,
+      "designation": "6426 STHS34PF80 IR Presence Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:4f7caf5e5cc014a6",
+      "path": "6431 ENS161 MOX Gas Sensor/6431 ENS161 MOX Gas Sensor.step",
+      "sha": "4f7caf5e5cc014a64af97fed83c5bf8b90fcc3b6",
+      "size": 896719,
+      "designation": "6431 ENS161 MOX Gas Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:eac05046fc3fba08",
+      "path": "6494 ADS7128 ADC GPIO Expander/6494 ADS7128 ADC GPIO Expander.step",
+      "sha": "eac05046fc3fba08d1df059e38b980425b9da5c6",
+      "size": 7425216,
+      "designation": "6494 ADS7128 ADC GPIO Expander",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:572b1c12e510bd6c",
+      "path": "6495 Terminal Block BFF/6495 Terminal Block BFF.step",
+      "sha": "572b1c12e510bd6c2d4563a303b4dffb9222ebc9",
+      "size": 8316429,
+      "designation": "6495 Terminal Block BFF",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:33d3cab3fdb6541a",
+      "path": "6498 MAX44009 Light Sensor/6498 MAX44009 Light Sensor.step",
+      "sha": "33d3cab3fdb6541acb92588118be50adcd08dcea",
+      "size": 722188,
+      "designation": "6498 MAX44009 Light Sensor",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d09d2ca300781f07",
+      "path": "6513 MAX98357 Stereo Amp/6513 MAX98357 Stereo Amp.step",
+      "sha": "d09d2ca300781f073ebee4acf26950071ac49a5f",
+      "size": 5659617,
+      "designation": "6513 MAX98357 Stereo Amp",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:c9b2ece9d2fabf8a",
+      "path": "6516 GP8403 I2C DAC/6516 GP8403 I2C DAC.step",
+      "sha": "c9b2ece9d2fabf8a044754eb2f9d8eaab8bb3af2",
+      "size": 7678498,
+      "designation": "6516 GP8403 I2C DAC",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:2bd72deb1f345ff8",
+      "path": "67 9V Battery Holder/67 9V battery holder.step",
+      "sha": "2bd72deb1f345ff81777fa1df822a7ec1f763445",
+      "size": 37088,
+      "designation": "67 9V battery holder",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:9fcbb777609e2643",
+      "path": "711 DC Toy Motor/711 DC Toy Motor.step",
+      "sha": "9fcbb777609e2643289a8eff55cd4c605fec2dcf",
+      "size": 87264,
+      "designation": "711 DC Toy Motor",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:5b49cdf997e101ce",
+      "path": "723 Minty Perma-Proto/723 Minty Perma-Proto.step",
+      "sha": "5b49cdf997e101ce6979b3ce4594bfa7eda8bf42",
+      "size": 838775,
+      "designation": "723 Minty Perma-Proto",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:41e6aba96ea4732d",
+      "path": "727 3x AAA Battery Holder/727 3xAAA JST Battery Holder.step",
+      "sha": "41e6aba96ea4732d30fb7cbade0b6827c1813fa6",
+      "size": 217436,
+      "designation": "727 3xAAA JST Battery Holder",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:754ded800676f138",
+      "path": "770 2xAA battery holder/770 2xAA battery holder.step",
+      "sha": "754ded800676f1386cd5e47a8521e2c59335ab47",
+      "size": 174549,
+      "designation": "770 2xAA battery holder",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:17b9a4f04afc2a79",
+      "path": "805 slide switch/805 slide switch.step",
+      "sha": "17b9a4f04afc2a7916fae7a06e411051df15be39",
+      "size": 22814,
+      "designation": "805 slide switch",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:320f8f0fff5eb2ca",
+      "path": "815 Servo Driver 16 Channel/815 Servo Driver 16 Channel.step",
+      "sha": "320f8f0fff5eb2ca594e2c3e1092ced7f4f1b4e2",
+      "size": 1803975,
+      "designation": "815 Servo Driver 16 Channel",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:805d6b10e202f325",
+      "path": "817 Zippy Micro Switch/817 micro switch ZIPPY.step",
+      "sha": "805d6b10e202f3250bf678bfdeb957a15fdc8f4a",
+      "size": 49788,
+      "designation": "817 micro switch ZIPPY",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:09323262a987028a",
+      "path": "830 Battery Holder/830 Battery Holder 4xAA.step",
+      "sha": "09323262a987028ae425dd104588115603189e38",
+      "size": 222147,
+      "designation": "830 Battery Holder 4xAA",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:3ca2e4d17b7ae79a",
+      "path": "858 Stepper Motor 5VDC/858 Stepper Motor 5VDC.step",
+      "sha": "3ca2e4d17b7ae79a033da81cdade898652d8e471",
+      "size": 137557,
+      "designation": "858 Stepper Motor 5VDC",
+      "category": "motor"
+    },
+    {
+      "key": "adafruit:6a51d208e1341ebf",
+      "path": "870 Mini 8x8 LED Matrix Backpack/870 Mini 8x8 LED Matrix Backpack.step",
+      "sha": "6a51d208e1341ebf94dd33d844598c4ea8daac87",
+      "size": 946883,
+      "designation": "870 Mini 8x8 LED Matrix Backpack",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:43ff95a93cc47a12",
+      "path": "875 8x AA Battery Holder/875 8xAA Battery Holder.step",
+      "sha": "43ff95a93cc47a12b1ea860ea231a34822e11dae",
+      "size": 31258,
+      "designation": "875 8xAA Battery Holder",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:15a9f739cc918232",
+      "path": "878 7-segment display backpack/878 7-segment display backpack.step",
+      "sha": "15a9f739cc9182320efc7f897bebfeb4eca6466c",
+      "size": 26764,
+      "designation": "878 7-segment display backpack",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:0b55650b245022ca",
+      "path": "904 INA219 Stemma/904 INA219 Stemma.step",
+      "sha": "0b55650b245022ca0c11d5d71efdb665171f4cd9",
+      "size": 587961,
+      "designation": "904 INA219 Stemma",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:0657abc218f229b2",
+      "path": "916 metal button/916 Metal Button.step",
+      "sha": "0657abc218f229b2ddb16960595a0f6938be48e1",
+      "size": 716628,
+      "designation": "916 Metal Button",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:e999dc2ba005df0f",
+      "path": "931 OLED 128x32 I2C/931 OLED 128x32 I2C.step",
+      "sha": "e999dc2ba005df0fb6ef74143bebf3b90173059e",
+      "size": 30906,
+      "designation": "931 OLED 128x32 I2C",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:d69e582dead773cf",
+      "path": "937 Panel Mount USB Cable/937 USB Panel Plug.step",
+      "sha": "d69e582dead773cf524a743923608aedf3671dd4",
+      "size": 33548,
+      "designation": "937 USB Panel Plug",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:99f329e0051aedee",
+      "path": "938 Mono 128x64 OLED Stemma/938 Mono 128x64 OLED Stemma.step",
+      "sha": "99f329e0051aedee7da75708f832f6abb5d6fd28",
+      "size": 1100542,
+      "designation": "938 Mono 128x64 OLED Stemma",
+      "category": "electronics"
+    },
+    {
+      "key": "adafruit:325faafd0e302b32",
+      "path": "987 MAX98306 Stereo Amp/987 MAX98306 Stereo Amp.step",
+      "sha": "325faafd0e302b327d83baacb7cb515348dc77e4",
+      "size": 563474,
+      "designation": "987 MAX98306 Stereo Amp",
+      "category": "electronics"
+    }
+  ]
+}

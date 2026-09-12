@@ -79,7 +79,7 @@ _METRIC_SIZES = ("M2", "M2.5", "M3", "M4", "M5", "M6", "M8", "M10", "M12")
 _PART_CATEGORIES = ("fastener", "bearing", "motor", "extrusion", "electronics",
                     "battery", "propeller", "stock", "pneumatic", "hardware",
                     "other")
-_PART_SOURCES = ("3dfindit", "traceparts", "grabcad", "manufacturer", "other")
+_PART_SOURCES = ("adafruit", "3dfindit", "traceparts", "grabcad", "manufacturer", "other")
 
 # `add_primitive` and `add_modifier` used to declare `params: {"type": "object"}`
 # — an opaque blob whose real shape lived only in prose. That is the one thing a
@@ -2665,7 +2665,9 @@ def _verify_against_spec(doc_id, args):
 
 
 @operation("list_standard_parts", "query",
-           "Browse the purchased parts you can place. Two kinds in one list. "
+           "Browse generated parts, personal imports and original Adafruit CAD. "
+           "Use source='adafruit' for the pinned MIT-licensed electronics catalog; "
+           "Place downloads and imports those models automatically. "
            "Generated: screws, nuts, washers, dowel pins, ball bearings, NEMA "
            "steppers and T-slot extrusion from the published dimensional "
            "standards, plus brushless motors, flight controllers, 4-in-1 ESCs, "
@@ -2686,7 +2688,9 @@ def _verify_against_spec(doc_id, args):
                        "description": "only the parts imported from this "
                                       "portal; omit for the whole catalog"},
             "limit": {"type": "integer", "default": 40,
-                      "description": "how many rows to return"}})
+                      "description": "how many rows to return"},
+            "offset": {"type": "integer", "default": 0,
+                       "description": "skip this many matching catalog rows"}})
 def _list_standard_parts(doc_id, args):
     from app.services import caller, standard_parts
 
@@ -2699,7 +2703,8 @@ def _list_standard_parts(doc_id, args):
     owner = caller.acting_account_id() or doc.owner_id
     return standard_parts.listing(
         owner, category=args.get("category"), search=args.get("search"),
-        source=args.get("source"), limit=int(args.get("limit", 40) or 40))
+        source=args.get("source"), limit=int(args.get("limit", 40) or 40),
+        offset=int(args.get("offset", 0)))
 
 
 @operation("list_templates", "query",

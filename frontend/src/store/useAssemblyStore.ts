@@ -138,7 +138,7 @@ export const useAssemblyStore = create<AssemblyState>((set, get) => ({
 
   insertStandardPart: async (key, quantity = 1, params) => {
     const { assembly } = get()
-    if (!assembly) return
+    if (!assembly || get().busy) return
     set({ busy: true, error: null })
     try {
       // `params` is omitted rather than sent empty when the row takes none: the
@@ -154,6 +154,7 @@ export const useAssemblyStore = create<AssemblyState>((set, get) => ({
       // and this is the assembly changing under our own hand.
       const updated = await api.getAssemblyDoc(assembly.id)
       const last = updated.components[updated.components.length - 1]
+      if (get().assembly?.id !== assembly.id) return
       set({ assembly: updated, selectedComponentId: last?.id ?? null,
             stale: false, ...STALE })
     } catch (e) {
