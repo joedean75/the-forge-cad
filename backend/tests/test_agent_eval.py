@@ -93,9 +93,22 @@ def test_the_loop_checks_the_spec_before_declaring_itself_done():
         {"kind": "bounding_box", "axis": "x", "value": 250, "tolerance": 1}]})
     run = copilot.run(doc_id, "a 250 mm plate", max_steps=4,
                       planner=agent.scripted_planner([]))
-    checks = [s for s in run["steps"] if s.get("op") == "verify_against_spec"]
-    assert len(checks) == 1, "checked once on the way to done, not on every step"
+
+    # The self-check is a `verification` entry rather than a fabricated `op`
+    # one. Asserting on the behaviour instead of on the note's name is the
+    # point: this test pinned the string "verify_against_spec" and went red the
+    # moment the loop renamed it, while the guarantee it exists to defend — the
+    # spec is read before the loop calls itself done — never moved.
+    checks = [s for s in run["steps"] if s.get("kind") == "verification"]
+    assert checks, "the spec must be read before the loop declares itself done"
+    # Bounded: one repair attempt, then a fresh check. Not a check on every step,
+    # which would spend the whole budget checking.
+    assert len(checks) <= 2, f"checked {len(checks)} times, not once plus a retry"
     assert checks[0]["result"]["unmet"]
+    # And a run that never met the spec is not a success, whatever it stopped on.
+    assert run["finished"] is False
+    assert run["stop_reason"] == "verification_failed"
+    assert run["unmet"]
 
 
 def test_a_document_with_no_spec_is_not_given_a_phantom_failure():

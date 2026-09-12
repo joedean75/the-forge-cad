@@ -15,6 +15,32 @@ PREFIX = "adafruit:"
 SOURCE = {"id": "adafruit", "label": "Adafruit", "search": "",
           "note": "Original Adafruit CAD, MIT licensed; downloads on first placement"}
 
+#: Suffixes OpenCascade reads as exact solids. Everything else voxelises, and
+#: so does one of these when OCC is absent — see `_geometry`.
+_EXACT_SUFFIXES = ("step", "stp", "iges", "igs")
+
+
+def _bytes_env(name: str, default_mb: int) -> int:
+    try:
+        return int(float(os.getenv(name, "") or default_mb) * 1024 * 1024)
+    except ValueError:
+        return default_mb * 1024 * 1024
+
+
+#: How much downloaded CAD may sit on disk.
+#:
+#: The whole pinned catalog is 866 MB — 484 files averaging 1.8 MB, the largest
+#: 57 MB — so an instance that places enough parts fills its disk without a
+#: bound. `services/blobs` bounds *bytes* rather than an entry count for exactly
+#: this shape of workload, and a file count would be no budget at all when the
+#: files are two orders of magnitude apart in size.
+#:
+#: Eviction is always safe here, which is what makes a budget the right answer
+#: rather than a refusal: every file is re-downloadable and re-verified against
+#: the pinned checksum, so a deleted one costs a fetch and never correctness —
+#: the same property that lets `blobs` treat a missing blob as recoverable.
+CACHE_BYTES = _bytes_env("FORGE_ADAFRUIT_CACHE_MB", 256)
+
 
 @lru_cache(maxsize=1)
 def manifest():
@@ -30,13 +56,42 @@ def by_key(key):
     return _index().get(key)
 
 
+def _geometry(path):
+    """What placing this row will actually produce — not what its suffix implies.
+
+    `import_service.import_document` is the authority and says so itself:
+    "STEP/IGES import exactly when OpenCascade is present; everything else — and
+    a STEP file OCC cannot read — goes through the voxel path." OCP is optional
+    here, so reading the suffix alone told all 480 STEP rows they were `exact`
+    on a deployment with no exact kernel at all — and `geometry` is the field
+    that decides whether a caller can address, fillet or measure a face.
+    `supplier_parts` already derives it from what the import produced rather
+    than from a filename.
+
+    With OCC present this is still a prediction, because a STEP file OCC cannot
+    read falls back to voxels. But it is then wrong for one file rather than for
+    the entire catalog, and the placed document is the authority either way.
+    """
+    from app.cad_kernel.evaluator import brep
+
+    suffix = path.lower().rsplit(".", 1)[-1]
+    if suffix in _EXACT_SUFFIXES:
+        return "exact" if brep.AVAILABLE else "mesh"
+    return "mesh"
+
+
 def describe(row):
     revision = manifest()["revision"]
+    geometry = _geometry(row["path"])
     return {"key": row["key"], "designation": row["designation"],
             "category": row["category"], "standard": "Adafruit", "material_id": "",
-            "fidelity": "supplier", "geometry": "mesh" if row["path"].lower().endswith(".stl") else "exact",
+            "fidelity": "supplier", "geometry": geometry,
             "size_mm": None, "source": "adafruit", "manufacturer": "Adafruit",
-            "notes": "Original manufacturer geometry. Dimensions measured on import; mass not supplied.",
+            "notes": "Original manufacturer geometry. Dimensions measured on import; "
+                     "mass not supplied."
+                     + ("" if geometry == "exact" else
+                        " Imports as a mesh on this deployment, so its faces and "
+                        "edges are not addressable."),
             "supplier_search": f"https://github.com/adafruit/Adafruit_CAD_Parts/blob/{revision}/{quote(row['path'], safe='/')}",
             "license": "MIT", "download_on_place": True, "removable": False}
 
@@ -44,6 +99,44 @@ def describe(row):
 def _verified(data, row):
     return len(data) == row["size"] and hashlib.sha1(
         b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest() == row["sha"]
+
+
+def _sweep(cache, keep):
+    """Evict least-recently-used downloads until the cache is inside its budget.
+
+    `keep` is the file just written — it is what the caller is about to import,
+    and a sweep that evicted it would re-download the same bytes on the next
+    placement of the same part. A single file larger than the whole budget is
+    kept for the same reason `blobs.MemoryStore.put` keeps an oversized blob:
+    refusing it would turn a 57 MB model into a part that can never be placed.
+
+    In-flight temporaries are skipped by name. Another thread may be writing one,
+    and unlinking it would fail that download rather than free anything durable.
+    """
+    entries = []
+    try:
+        for entry in cache.iterdir():
+            if not entry.is_file() or entry.name.startswith("download-"):
+                continue
+            try:
+                info = entry.stat()
+            except OSError:       # vanished under us; nothing to account for
+                continue
+            entries.append((info.st_mtime, info.st_size, entry))
+    except OSError:
+        return
+
+    total = sum(size for _, size, _ in entries)
+    for _, size, entry in sorted(entries, key=lambda row: row[0]):
+        if total <= CACHE_BYTES:
+            break
+        if entry == keep:
+            continue
+        try:
+            entry.unlink()
+        except OSError:
+            continue
+        total -= size
 
 
 def download(row):
@@ -54,6 +147,13 @@ def download(row):
     if path.exists():
         data = path.read_bytes()
         if _verified(data, row):
+            # Touch it: the sweep evicts by mtime, so without this a part placed
+            # every day ages out behind one placed once, which is the difference
+            # between an LRU and a FIFO.
+            try:
+                os.utime(path, None)
+            except OSError:
+                pass
             return data
     # Only a packaged catalog entry constructs the URL. Callers cannot supply
     # arbitrary URLs, redirects or file paths through the placement operation.
@@ -80,6 +180,7 @@ def download(row):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+    _sweep(cache, path)
     return data
 
 
