@@ -525,3 +525,42 @@ def test_the_planner_is_told_not_to_delete_the_mate():
     # And the part-editing prompt is not cluttered with any of it.
     assert "Do not delete the mate" not in action_space.system_prompt(
         with_tools=True, subject="document")
+
+
+def test_a_second_bounding_box_mate_says_it_replaced_the_first(monkeypatch):
+    """The trap a live build fell into: mate z, then x, then y to centre a plate,
+    and each call returns ok while undoing the last one's placement. The scheme
+    places all three axes from one mate, so the second is a replacement — and
+    nothing said so."""
+    monkeypatch.setattr(copilot, "_plan_next", _box_planner())
+    asm_id = _assembly()
+    from app.services import assembly_service
+
+    ids = [cad_operations.execute("build_part", asm_id, {"goal": f"plate {i}"})
+           ["result"]["component_id"] for i in (1, 2)]
+
+    first = cad_operations.execute("add_mate", asm_id, {
+        "type": "coincident", "base": ids[0], "moved": ids[1], "axis": "z"})
+    assert first["ok"] and "replaced" not in (first["result"].get("note") or "")
+    stacked = next(c.transform.translate.z for c in
+                   assembly_service.get_assembly(asm_id).components if c.id == ids[1])
+    assert stacked > 0, "the z mate should lift the top plate clear"
+
+    second = cad_operations.execute("add_mate", asm_id, {
+        "type": "coincident", "base": ids[0], "moved": ids[1], "axis": "x",
+        "base_face": "center", "moved_face": "center"})
+    assert second["ok"]
+    note = second["result"].get("note") or ""
+    assert "replaced the placement" in note, note
+    assert first["result"]["mate_id"] in note
+    # And the placement really was replaced — which is what the note is for.
+    after = next(c.transform.translate.z for c in
+                 assembly_service.get_assembly(asm_id).components if c.id == ids[1])
+    assert after == 0.0 and after != stacked
+
+
+def test_the_planner_is_told_one_bounding_box_mate_per_pair():
+    from app.services import action_space
+
+    prompt = action_space.system_prompt(with_tools=True, subject="assembly")
+    assert "One bounding-box mate per pair" in prompt

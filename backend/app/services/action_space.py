@@ -73,7 +73,13 @@ a loop rather than a plan you write once:
   a part no mate holds. Do not delete the mate: that leaves the part unheld
   *and* still overlapping, which fails both checks instead of one. A part built
   by `build_part` is centred on the origin, so stacking two of them means
-  mating a `max` face to a `min` face along the stacking axis."""
+  mating a `max` face to a `min` face along the stacking axis.
+- **One bounding-box mate per pair, not one per axis.** A `coincident`,
+  `distance`, `concentric` or `fasten` mate places the component on all three
+  axes at once: the axis you name comes from the faces, and the other two are
+  centred on the base. So "stacked centred on top" is a single `coincident` on
+  z — adding an x and a y mate afterwards replaces that placement and drops the
+  part back through the one below it."""
 
 
 _DONE_PROTOCOL = """

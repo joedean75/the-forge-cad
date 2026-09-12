@@ -409,7 +409,12 @@ def _list_mates(asm_id, args):
            "`ball` and `parallel`. Those six need a connector on each side. "
            "`angle_deg` positions the mate inside the rotation it leaves free — "
            "a hinge has an angle — and `drive_mate` changes it afterwards "
-           "without rebuilding the mate. Use `dof` to see what is still free.",
+           "without rebuilding the mate. Use `dof` to see what is still free. "
+           "**One bounding-box mate fully places a component**: it sets the "
+           "named axis from the faces and centres the other two on the base, so "
+           "a second one between the same pair replaces the first rather than "
+           "adding to it — to stack a plate centred on another, one `coincident` "
+           "on the stacking axis is the whole job. Connector mates do compose.",
            {"type": {"enum": _MATE_TYPES, "required": True,
                      "description": "which constraint to apply"},
             "base": {"type": "string", "required": True,
@@ -507,9 +512,31 @@ def _add_mate(asm_id, args):
     # A mate that positions nothing differently is the assembly-side version of
     # an edit that reports success and changes nothing. Say so rather than
     # leaving the caller to diff two transforms.
+    notes = []
     if before is not None and before == after:
-        result["note"] = ("the mate is satisfied where the part already was — "
-                          "nothing moved")
+        notes.append("the mate is satisfied where the part already was — nothing moved")
+    # **A second bounding-box mate on the same pair does not add a constraint.**
+    # `_apply` places the component on all three axes — the named one by faces,
+    # the other two centred on the base — so the newer mate replaces the older
+    # one's placement outright. A planner that mates z, then x, then y to centre
+    # a plate undoes its own stack twice and cannot see why, because each call
+    # returned ok. Connector mates compose properly and are the way to hold more
+    # than one relationship between two parts.
+    if mate.base_connector is None and mate.moved_connector is None:
+        siblings = [m for m in updated.mates
+                    if m.id != mate.id
+                    and m.base_connector is None and m.moved_connector is None
+                    and {m.base, m.moved} == {mate.base, mate.moved}]
+        if siblings:
+            notes.append(
+                f"this is bounding-box mate {len(siblings) + 1} between these two "
+                f"components and they do not combine: each one places the part on "
+                f"all three axes, so this one replaced the placement from "
+                f"{', '.join(m.id for m in siblings)}. Keep one mate per pair and "
+                f"give it the axis that matters — the other two are centred for "
+                f"you — or use mate connectors, which do compose")
+    if notes:
+        result["note"] = " · ".join(notes)
     return result
 
 
