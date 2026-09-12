@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   ArrowLeft, Plus, Trash2, Boxes, Package, X, Loader2, AlertTriangle, ScanEye, UserCircle2, PencilRuler,
-  Link2,
+  Link2, Bot,
 } from 'lucide-react'
 import { api } from '../api/client'
 import { useAssemblyStore } from '../store/useAssemblyStore'
@@ -10,6 +10,7 @@ import { useAuthStore } from '../store/useAuthStore'
 import { useNavStore } from '../store/useNavStore'
 import { AccountDrawer } from '../components/AccountDrawer'
 import { AssemblyViewport } from '../components/AssemblyViewport'
+import { CopilotPanel } from '../components/CopilotPanel'
 import { PanelRail, usePanelCollapse } from '../components/PanelRail'
 import { BomPanel, ClashPanel, MatesPanel } from '../features/assembly/AssemblyInspector'
 import { StandardPartsPicker } from '../features/assembly/StandardPartsPicker'
@@ -173,6 +174,7 @@ export function AssemblyScreen() {
   const [editingName, setEditingName] = useState(false)
   const [creatingPart, setCreatingPart] = useState(false)
   const [tab, setTab] = useState<InspectorTab>('place')
+  const [copilotOpen, setCopilotOpen] = useState(false)
   const [listHidden, toggleList] = usePanelCollapse('assembly.components')
   const [inspectorHidden, toggleInspector] = usePanelCollapse('assembly.inspector')
 
@@ -253,6 +255,18 @@ export function AssemblyScreen() {
 
         <div className="flex-1" />
         <span className="tabular text-[10px] text-cad-text/60">{assembly.components.length} part{assembly.components.length === 1 ? '' : 's'}</span>
+        <button
+          onClick={() => setCopilotOpen((v) => !v)}
+          title="Forge Copilot — place, mate and measure components"
+          aria-pressed={copilotOpen}
+          className={`flex items-center gap-1.5 h-9 px-2.5 rounded-sm border transition-colors ${
+            copilotOpen
+              ? 'border-cad-accent text-cad-accent bg-cad-accent/10'
+              : 'border-cad-border text-cad-text hover:text-cad-text-heading hover:border-stress-void'
+          }`}
+        >
+          <Bot size={15} /> <span className="text-[11px] font-medium">Copilot</span>
+        </button>
         <button
           onClick={() => setAccountOpen(true)}
           title={account ? `${account.email} · ${account.plan.name} plan` : 'Account'}
@@ -421,6 +435,7 @@ export function AssemblyScreen() {
         />
       )}
       <AccountDrawer open={accountOpen} onClose={() => setAccountOpen(false)} />
+      <CopilotPanel open={copilotOpen} onClose={() => setCopilotOpen(false)} subject="assembly" />
     </div>
   )
 }

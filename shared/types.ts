@@ -912,6 +912,10 @@ export interface CopilotResult {
   summary: string | null
   steps: CopilotStep[]
   document?: DesignDocument | null
+  /** Set instead of `document` when the run was against an assembly. Named
+   *  rather than polymorphic: a client that has to infer which kind it was
+   *  handed from the shape of the value will eventually infer wrong. */
+  assembly?: AssemblyDoc | null
 }
 
 // --- Machines: the shop's real equipment ---

@@ -191,6 +191,11 @@ export interface OperationEnvelope<T = Record<string, unknown>> {
   document?: DesignDocument
 }
 
+/** Which half of the operation catalog a copilot run drives — the id in the
+ *  path names a part document or an assembly, and the server offers the planner
+ *  only the operations that take that kind of id. */
+export type CopilotSubject = 'documents' | 'assemblies'
+
 export const api = {
   health: () => fetchJson<{ status: string }>('/health'),
   /** Every operation the backend can run, with typed arguments — the same
@@ -320,8 +325,8 @@ export const api = {
    * ask, because the id lived in a process-local dict that a restart emptied.
    */
   listJobs: (id: string) => fetchJson<{ jobs: JobRecord[] }>(`/documents/${id}/jobs`),
-  cancelCopilot: (id: string, jobId: string) =>
-    fetchJson<{ ok: boolean }>(`/documents/${id}/copilot/${jobId}/cancel`, { method: 'POST' }),
+  cancelCopilot: (id: string, jobId: string, subject: CopilotSubject = 'documents') =>
+    fetchJson<{ ok: boolean }>(`/${subject}/${id}/copilot/${jobId}/cancel`, { method: 'POST' }),
 
   /**
    * Per-mode readiness and freshness, in one call.
@@ -409,18 +414,22 @@ export const api = {
   runCopilot: async (
     id: string,
     goal: string,
-    maxSteps = 8,
+    // Omitted rather than defaulted to 8: the server picks the budget for the
+    // subject, and an assembly build — a nested part run per part — needs a far
+    // larger one than an edit to a single body.
+    maxSteps: number | undefined = undefined,
     onProgress?: (state: CopilotResult) => void,
+    subject: CopilotSubject = 'documents',
   ): Promise<CopilotResult> => {
-    let state = await fetchJson<CopilotResult>(`/documents/${id}/copilot`, {
+    let state = await fetchJson<CopilotResult>(`/${subject}/${id}/copilot`, {
       method: 'POST',
-      body: JSON.stringify({ goal, max_steps: maxSteps }),
+      body: JSON.stringify(maxSteps === undefined ? { goal } : { goal, max_steps: maxSteps }),
     })
     const deadline = Date.now() + 20 * 60_000
     while (state.status === 'running') {
       if (Date.now() > deadline) throw new Error('Copilot timed out')
       await new Promise((r) => setTimeout(r, 1200))
-      state = await fetchJson<CopilotResult>(`/documents/${id}/copilot/${state.job_id}`)
+      state = await fetchJson<CopilotResult>(`/${subject}/${id}/copilot/${state.job_id}`)
       onProgress?.(state)
     }
     return state
