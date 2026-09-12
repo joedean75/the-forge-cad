@@ -230,6 +230,7 @@ def geometry_fingerprint(doc, resolution: int, chain: tuple = ()) -> str:
     from app.services import document_service
 
     return _digest([
+        "measurements-v2",  # invalidate mesh-derived engineering readings
         tree_hash(doc.feature_tree),
         resolution,
         doc.active_configuration or "",

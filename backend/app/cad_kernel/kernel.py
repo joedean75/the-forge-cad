@@ -97,9 +97,14 @@ class Kernel:
             vertices, faces, owners, face_ids = brep.tessellate_owned(
                 shape, (recorded or {}).get("entities"), resolution=resolution)
             if len(faces):
-                return Kernel.from_mesh(vertices, faces, owners=owners,
-                                        face_ids=face_ids,
-                                        body_kind=brep.body_kind(shape))
+                from app.cad_kernel.geom.measurements import exact_measurements
+
+                kind = brep.body_kind(shape)
+                solid = Kernel.from_mesh(vertices, faces, owners=owners,
+                                         face_ids=face_ids, body_kind=kind)
+                solid.attrs["exact_measurements"] = exact_measurements(shape, kind)
+                solid.attrs["sampler"] = "brep"
+                return solid
 
         if brep.requires_exact(feature):
             # There is no SDF form of an edge fillet or a face shell, so falling
@@ -109,8 +114,11 @@ class Kernel:
 
         native = evaluate_feature_native(feature, resolution=resolution)
         if native is not None:
+            native.attrs["sampler"] = "native"
             return native
-        return evaluate_sdf(sdf_from_feature(feature), resolution=resolution)
+        solid = evaluate_sdf(sdf_from_feature(feature), resolution=resolution)
+        solid.attrs["sampler"] = "numpy"
+        return solid
 
     @staticmethod
     def sampler_for(feature: Feature) -> str:

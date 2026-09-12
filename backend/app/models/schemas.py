@@ -195,13 +195,15 @@ class DerivedCache(BaseModel):
     # "brep" is exact OpenCascade geometry; "native"/"numpy" are the two
     # signed-distance-field samplers.
     sampler: Optional[Literal["brep", "native", "numpy"]] = None
+    # Source of bbox, volume, area and geometric mass; distinct from display quality.
+    measurement_basis: Optional[Literal["exact", "mesh"]] = None
     # What kind of body this is. A `solid` bounds a volume; a `sheet` is surface
     # with no inside, which is the point of it rather than a defect. Defaulted
     # rather than optional, deliberately: every document stored before surfaces
     # existed holds a solid, and a reader that takes `None` for "unknown" would
     # have to decide what to do about it on every path.
     body_kind: Literal["solid", "sheet"] = "solid"
-    # Surface area of the tessellation, m². The number that stands in for volume
+    # Surface area in m², from the declared measurement basis. Stands in for volume
     # on a sheet, and worth having on a solid too — it is what a coating, a
     # finish or a heat-transfer estimate is quoted against.
     area: float = 0.0
