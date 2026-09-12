@@ -60,6 +60,18 @@ def nested_meter() -> Optional[Callable[[], None]]:
     return _ACTIVE_METER.get()
 
 
+#: The model this run was asked to use, carried the same way and for the same
+#: reason: a build that planned the assembly with one model and designed its
+#: parts with another is not a comparison of anything.
+_ACTIVE_MODEL: ContextVar[Optional[str]] = ContextVar(
+    "forge_copilot_model", default=None)
+
+
+def nested_model() -> Optional[str]:
+    """The model of the enclosing run, for a sub-run to use."""
+    return _ACTIVE_MODEL.get()
+
+
 def _doc_summary(doc) -> dict:
     """Compact, LLM-friendly snapshot of the current body.
 
@@ -99,7 +111,7 @@ def _summary(subject: str, obj) -> dict:
 
 
 def _plan_next(goal: str, transcript: List[dict], summary: dict,
-               subject: str = "document") -> dict:
+               subject: str = "document", model: Optional[str] = None) -> dict:
     """Ask the LLM for the next operation. Returns a decision dict.
 
     Two paths, and which one ran is recorded on the decision as ``_via`` the
@@ -138,7 +150,8 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
     ]
     message = llm_client._post_chat(
         messages, timeout=60.0, max_tokens=1200,
-        tools=action_space.tools(subject) if with_tools else None)
+        tools=action_space.tools(subject) if with_tools else None,
+        model=model)
 
     calls = message.get("tool_calls") or []
     if calls:
@@ -223,6 +236,7 @@ def run(
     cancelled: Optional[Callable[[], bool]] = None,
     max_seconds: float = 600,
     subject: str = "document",
+    model: Optional[str] = None,
 ) -> dict:
     """Run the agentic loop until the planner says done or the step budget runs out.
 
@@ -238,7 +252,8 @@ def run(
     """
     from app.services import trajectories
 
-    planner = planner or (lambda g, t, summary: _plan_next(g, t, summary, subject=subject))
+    planner = planner or (
+        lambda g, t, summary: _plan_next(g, t, summary, subject=subject, model=model))
     max_steps = max(1, min(int(max_steps), step_cap(subject)))
     transcript: List[dict] = []
     final_summary: Optional[str] = None
@@ -365,10 +380,12 @@ def run(
         # Scoped around the dispatch only: `build_part` runs a whole part
         # copilot inside this one step, and that sub-run charges the same meter.
         meter_token = _ACTIVE_METER.set(meter)
+        model_token = _ACTIVE_MODEL.set(model)
         try:
             env = cad_operations.execute(op, subject_id, args, rationale=rationale or "")
         finally:
             _ACTIVE_METER.reset(meter_token)
+            _ACTIVE_MODEL.reset(model_token)
         entry = {"kind": "op", "op": op, "args": args, "ok": env["ok"],
                  "rationale": rationale, "result": _trim_result(env.get("result") or {})}
         if env.get("error"):
@@ -420,6 +437,9 @@ def run(
             # that was cut off there are different outcomes.
             "finished": finished, "unmet": outstanding,
             "stop_reason": stop_reason,
+            # Which model produced this run, so two runs of one goal can be told
+            # apart afterwards — the whole point of being able to pick one.
+            "model": model or llm_client.LLM_MODEL,
             "trajectory_id": trajectory_id}
 
 

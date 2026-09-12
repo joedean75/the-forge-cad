@@ -33,6 +33,32 @@ const BLURB: Record<Subject, string> = {
   assembly: 'The copilot designs the parts an assembly needs, places them, mates them, and checks for interference — one part at a time until it holds together.',
 }
 
+const MODEL_KEY = 'forge.copilot.model'
+
+/** The picked model, remembered per browser.
+ *
+ * Wrapped because a browser with site data blocked *throws* on the accessor
+ * rather than returning null, and a thrown read here would take the whole panel
+ * down with it. An empty answer is a real answer: use the server's default.
+ */
+function rememberedModel(): string {
+  try { return localStorage.getItem(MODEL_KEY) || '' } catch { return '' }
+}
+
+function rememberModel(model: string): void {
+  try {
+    if (model) localStorage.setItem(MODEL_KEY, model)
+    else localStorage.removeItem(MODEL_KEY)
+  } catch { /* a blocked store is not a reason to refuse the run */ }
+}
+
+/** `anthropic/claude-sonnet-5` -> `claude-sonnet-5`: the vendor prefix is the
+ *  same for every row of a provider's list and costs the width that tells two
+ *  models apart. */
+function shortModel(id: string): string {
+  return id.includes('/') ? id.slice(id.indexOf('/') + 1) : id
+}
+
 /** Undo is a document-store feature; an assembly has no local history, so
  *  promising one here would be a lie in the one place a user checks. */
 const FOOTNOTE: Record<Subject, string> = {
@@ -74,11 +100,31 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
   const noun = onAssembly ? 'assembly' : 'part'
   const [goal, setGoal] = useState('')
   const [turns, setTurns] = useState<Turn[]>([])
+  const [models, setModels] = useState<string[]>([])
+  const [defaultModel, setDefaultModel] = useState('')
+  const [model, setModel] = useState(rememberedModel)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [turns])
+
+  // Only once the panel is open: the list costs a request, and a closed panel
+  // is the common case on both screens.
+  useEffect(() => {
+    if (!open || models.length) return
+    let live = true
+    api.getLlmConfig()
+      .then((cfg) => {
+        if (!live) return
+        setModels(cfg.available_models || [])
+        setDefaultModel(cfg.model || '')
+      })
+      // A provider that will not list its models is not a reason to hide the
+      // panel — the run still works on the server's default.
+      .catch(() => undefined)
+    return () => { live = false }
+  }, [open, models.length])
 
   if (!open) return null
 
@@ -90,8 +136,10 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
     setTurns((t) => [...t, { goal: text, running: true, subjectId }])
     // Live progress: the copilot runs as a server-side job; each poll delivers
     // the transcript so far.
-    const result = await runCopilot(text, (state) =>
-      setTurns((t) => t.map((x, i) => (i === idx ? { ...x, result: state } : x))),
+    const result = await runCopilot(
+      text,
+      (state) => setTurns((t) => t.map((x, i) => (i === idx ? { ...x, result: state } : x))),
+      model || undefined,
     )
     setTurns((t) => t.map((x, i) => (i === idx ? { ...x, running: false, result } : x)))
   }
@@ -123,6 +171,29 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
           </div>
         </div>
         <button onClick={onClose} className="p-1.5 rounded-sm text-cad-text hover:text-cad-text-heading hover:bg-cad-raised"><X size={16} /></button>
+      </div>
+
+      {/* Which model plans the run, for this run only — the process-wide default
+          is left alone, so comparing two models here does not change what every
+          other session gets. Disabled mid-run: the model is fixed when the job
+          starts and a control that looks live but changes nothing is worse than
+          one that is visibly unavailable. */}
+      <div className="border-b border-cad-border px-4 py-2 flex items-center gap-2 shrink-0">
+        <label htmlFor="copilot-model" className="eyebrow text-cad-text/55 shrink-0">Model</label>
+        <select
+          id="copilot-model"
+          value={model}
+          disabled={busy || models.length === 0}
+          onChange={(e) => { setModel(e.target.value); rememberModel(e.target.value) }}
+          className="flex-1 min-w-0 bg-cad-bg border border-cad-border rounded-sm px-1.5 py-1 text-[11px] text-cad-text-heading outline-none focus:border-cad-accent disabled:opacity-50"
+        >
+          <option value="">
+            {defaultModel ? `Default · ${shortModel(defaultModel)}` : 'Default'}
+          </option>
+          {models.filter((m) => m !== defaultModel).map((m) => (
+            <option key={m} value={m}>{shortModel(m)}</option>
+          ))}
+        </select>
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
@@ -171,7 +242,15 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
                     className="ml-auto px-2 py-1 border border-cad-border rounded-sm disabled:opacity-40">Stop</button>}
                 </div>
               ) : turn.result ? (
-                <div className="text-[12px] text-cad-text-heading pt-1 border-t border-cad-border/60 mt-1">{turn.result.summary}</div>
+                <div className="pt-1 border-t border-cad-border/60 mt-1">
+                  <div className="text-[12px] text-cad-text-heading">{turn.result.summary}</div>
+                  {/* On the turn rather than only in the picker: the picker says
+                      what the *next* run will use, which is the wrong question
+                      when reading back a transcript of several. */}
+                  {turn.result.model && (
+                    <div className="eyebrow text-cad-text/40 mt-1">{shortModel(turn.result.model)}</div>
+                  )}
+                </div>
               ) : (
                 <div className="text-[11px] text-cad-danger">No response.</div>
               )}

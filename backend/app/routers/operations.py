@@ -16,7 +16,7 @@ from app.models.schemas import AssemblyDoc, DesignDocument
 from app.rate_limit import rate_limit
 from app.security import current_account, meter_operation
 from app.services import (accounts, assembly_service, cad_operations, caller, copilot,
-                          document_service)
+                          document_service, llm_client)
 from app.services import op_errors
 
 router = APIRouter(tags=["operations"])
@@ -251,6 +251,10 @@ class CopilotRequest(BaseModel):
     #: build is many steps larger than an edit to one body, and one shared
     #: default would either starve the build or over-budget the edit.
     max_steps: Optional[int] = None
+    #: Which model to plan with, for this run only. `POST /api/llm/model` is the
+    #: other door and it is process-global: comparing two models on one goal
+    #: must not change what every other session's next run uses.
+    model: Optional[str] = None
 
 
 class CopilotJobState(BaseModel):
@@ -259,6 +263,8 @@ class CopilotJobState(BaseModel):
     status: str  # "running" | "done" | "error"
     steps: list[Dict[str, Any]]
     summary: Optional[str] = None
+    #: The model this run planned with, so two runs of one goal can be told apart.
+    model: Optional[str] = None
     document: Optional[DesignDocument] = None
     #: Set instead of `document` when the run was against an assembly. Named
     #: rather than polymorphic, for the reason `summarize_assembly` states its
@@ -277,6 +283,7 @@ def _copilot_state(job: Dict[str, Any], document: Optional[DesignDocument],
     return CopilotJobState(
         ok=job["status"] != "error" and (job["status"] == "running" or job.get("finished", False)),
         job_id=job["id"],
+        model=job.get("model"),
         status=job["status"],
         steps=list(job["steps"]),
         summary=job.get("summary"),
@@ -288,7 +295,8 @@ def _copilot_state(job: Dict[str, Any], document: Optional[DesignDocument],
 
 
 def _run_copilot_job(job: Dict[str, Any], subject_id: str, goal: str, max_steps: int,
-                     acc: accounts.Account, subject: str = "document") -> None:
+                     acc: accounts.Account, subject: str = "document",
+                     model: Optional[str] = None) -> None:
     try:
         outcome = copilot.run(
             subject_id,
@@ -298,7 +306,9 @@ def _run_copilot_job(job: Dict[str, Any], subject_id: str, goal: str, max_steps:
             on_step=lambda entry: job["steps"].append(entry),
             cancelled=lambda: job.get("cancel_requested", False),
             subject=subject,
+            model=model,
         )
+        job["model"] = outcome.get("model")
         job["summary"] = outcome["summary"]
         job["finished"] = outcome["finished"]
         job["stop_reason"] = outcome["stop_reason"]
@@ -350,12 +360,14 @@ def run_copilot(
     if not (body.goal or "").strip():
         raise HTTPException(status_code=422, detail="goal is required")
 
+    model = _checked_model(body.model)
     job = {"id": str(uuid.uuid4()), "subject_id": doc_id, "subject": "document",
-           "status": "running", "steps": [], "summary": None}
+           "status": "running", "steps": [], "summary": None, "model": model}
     _COPILOT_JOBS[job["id"]] = job
     prune_jobs(_COPILOT_JOBS)
     steps = body.max_steps or copilot.step_default("document")
-    background_tasks.add_task(_run_copilot_job, job, doc_id, body.goal.strip(), steps, acc)
+    background_tasks.add_task(_run_copilot_job, job, doc_id, body.goal.strip(), steps,
+                              acc, "document", model)
     return _copilot_state(job, document=None)
 
 
@@ -372,6 +384,24 @@ def copilot_job(doc_id: str, job_id: str, acc: accounts.Account = Depends(curren
         raise HTTPException(status_code=404, detail="Copilot job not found")
     document = document_service.get_document(doc_id) if job["status"] == "done" else None
     return _copilot_state(job, document)
+
+
+def _checked_model(requested: Optional[str]) -> Optional[str]:
+    """A model this provider actually offers, or a 422 naming the ones it does.
+
+    The same rule `POST /api/llm/model` applies, for the same reason: an
+    arbitrary string here is a run that fails at the first planner call with a
+    provider error nobody can act on.
+    """
+    if not requested:
+        return None
+    allowed = llm_client.available_models()
+    if requested not in allowed:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown model {requested!r}; this provider offers: "
+                   f"{', '.join(allowed)}")
+    return requested
 
 
 def _assembly_copilot_access(assembly_id: str, acc: accounts.Account) -> AssemblyDoc:
@@ -421,13 +451,14 @@ def run_assembly_copilot(
     if not (body.goal or "").strip():
         raise HTTPException(status_code=422, detail="goal is required")
 
+    model = _checked_model(body.model)
     job = {"id": str(uuid.uuid4()), "subject_id": assembly_id, "subject": "assembly",
-           "status": "running", "steps": [], "summary": None}
+           "status": "running", "steps": [], "summary": None, "model": model}
     _COPILOT_JOBS[job["id"]] = job
     prune_jobs(_COPILOT_JOBS)
     steps = body.max_steps or copilot.step_default("assembly")
     background_tasks.add_task(_run_copilot_job, job, assembly_id, body.goal.strip(),
-                              steps, acc, "assembly")
+                              steps, acc, "assembly", model)
     return _copilot_state(job, document=None)
 
 

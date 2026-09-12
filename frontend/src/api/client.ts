@@ -420,10 +420,17 @@ export const api = {
     maxSteps: number | undefined = undefined,
     onProgress?: (state: CopilotResult) => void,
     subject: CopilotSubject = 'documents',
+    /** Plan with this model for this run only, leaving the process-wide
+     *  default (and everybody else's next run) alone. */
+    model?: string | null,
   ): Promise<CopilotResult> => {
     let state = await fetchJson<CopilotResult>(`/${subject}/${id}/copilot`, {
       method: 'POST',
-      body: JSON.stringify(maxSteps === undefined ? { goal } : { goal, max_steps: maxSteps }),
+      body: JSON.stringify({
+        goal,
+        ...(maxSteps === undefined ? {} : { max_steps: maxSteps }),
+        ...(model ? { model } : {}),
+      }),
     })
     const deadline = Date.now() + 20 * 60_000
     while (state.status === 'running') {

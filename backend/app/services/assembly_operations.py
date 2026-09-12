@@ -209,7 +209,11 @@ def _build_part(asm_id, args):
     # follows, and for the same reason.
     doc = document_service.create_document(name=name, owner_id=asm.owner_id)
     outcome = copilot.run(doc.id, goal, max_steps=steps, subject="document",
-                          meter=copilot.nested_meter())
+                          meter=copilot.nested_meter(),
+                          # The part is designed by the model the build is being
+                          # run with. A build planned by one and detailed by
+                          # another compares nothing.
+                          model=copilot.nested_model())
 
     built = document_service.get_document(doc.id)
     if built is None or not feature_ops.has_solid(built.feature_tree):

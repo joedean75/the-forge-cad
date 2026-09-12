@@ -3654,6 +3654,25 @@ def catalog() -> List[Dict[str, Any]]:
             for o in OPERATIONS.values()]
 
 
+def _without_blank_target(args: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Drop a `target` that is an empty string.
+
+    `target` is optional wherever it appears and means "the whole body" when it
+    is absent. A model with nothing in particular to target sometimes sends `""`
+    instead of omitting the key — and `feature_ops` then went looking for a
+    feature whose id is the empty string and answered `feature  not found`,
+    which reads as a broken document rather than a malformed call. One live run
+    spent six of its eight steps on that message. An empty string is not an id;
+    it is the absence of one, and this is the one place that can say so without
+    twelve handlers each remembering to.
+    """
+    args = args or {}
+    target = args.get("target")
+    if isinstance(target, str) and not target.strip():
+        return {k: v for k, v in args.items() if k != "target"}
+    return args
+
+
 def dispatch(op_name: str, doc_id: str, args: Dict[str, Any] | None) -> Dict[str, Any]:
     """Run one operation, raising a typed OperationError on failure.
 
@@ -3668,7 +3687,7 @@ def dispatch(op_name: str, doc_id: str, args: Dict[str, Any] | None) -> Dict[str
         raise UnknownOperation(f"unknown operation: {op_name!r}", arg="op")
     # Refuse a malformed call before it can half-apply an edit to the tree.
     op_schema.validate(op.params, args, op=op_name)
-    return op.handler(doc_id, args or {})
+    return op.handler(doc_id, _without_blank_target(args))
 
 
 def _as_operation_error(exc: BaseException) -> OperationError:
@@ -3836,7 +3855,7 @@ def _apply(op, op_name: str, doc_id: str, args: Dict[str, Any] | None,
 
         op_schema.validate(op.params, args, op=op_name)
         with instrumentation.span(f"op.{op_name}"):
-            result = op.handler(doc_id, args or {})
+            result = op.handler(doc_id, _without_blank_target(args))
     except Exception as exc:  # noqa: BLE001 — classified, never swallowed
         err = _as_operation_error(exc)
         if isinstance(err, InternalError):

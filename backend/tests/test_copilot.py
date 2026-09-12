@@ -1,5 +1,7 @@
 """Tests for Forge Copilot — the agentic operation loop (roadmap feature 01)."""
 
+import json
+
 from fastapi.testclient import TestClient
 
 from main import app
@@ -564,3 +566,111 @@ def test_the_planner_is_told_one_bounding_box_mate_per_pair():
 
     prompt = action_space.system_prompt(with_tools=True, subject="assembly")
     assert "One bounding-box mate per pair" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Picking a model, for one run
+# ---------------------------------------------------------------------------
+
+def _capture_model(monkeypatch, decision):
+    """Pretend a provider is configured and record which model each call names."""
+    from app.services import llm_client
+
+    seen = []
+
+    def fake_post(messages, *, timeout=60.0, max_tokens=None, tools=None, model=None):
+        seen.append(model)
+        return {"content": json.dumps(decision)}
+
+    monkeypatch.setattr(llm_client, "is_configured", lambda: True)
+    monkeypatch.setattr(llm_client, "supports_tools", lambda: False)
+    monkeypatch.setattr(llm_client, "_post_chat", fake_post)
+    return seen
+
+
+def test_a_run_plans_with_the_model_it_was_given(monkeypatch):
+    from app.services import llm_client
+
+    seen = _capture_model(monkeypatch, {"done": True, "summary": "nothing to do"})
+    before = llm_client.LLM_MODEL
+
+    out = copilot.run(_new_doc(), "leave it alone", model="openai/gpt-5-mini")
+    assert seen == ["openai/gpt-5-mini"]
+    assert out["model"] == "openai/gpt-5-mini"
+    # And the process-wide default is untouched — the reason this is per run and
+    # not `POST /api/llm/model`.
+    assert llm_client.LLM_MODEL == before
+
+
+def test_without_a_model_the_configured_default_answers(monkeypatch):
+    from app.services import llm_client
+
+    seen = _capture_model(monkeypatch, {"done": True, "summary": "done"})
+    out = copilot.run(_new_doc(), "leave it alone")
+    assert seen == [None], "no override means the client falls back on its own"
+    assert out["model"] == llm_client.LLM_MODEL
+
+
+def test_a_part_designed_inside_a_build_uses_the_builds_model(monkeypatch):
+    """A build planned by one model and detailed by another compares nothing."""
+    seen = _capture_model(monkeypatch, {"done": True, "summary": "part done"})
+    asm_id = _assembly()
+
+    def scripted(goal, transcript, summary, **_):
+        if not [x for x in transcript if x.get("kind") == "op"]:
+            return {"op": "build_part", "args": {"goal": "a plate"}, "rationale": "need one"}
+        return {"done": True, "summary": "done"}
+
+    # The assembly planner is scripted, so every recorded call is the *nested*
+    # part run reaching for the model the build was started with.
+    copilot.run(asm_id, "one plate", planner=scripted, subject="assembly",
+                model="google/gemini-3.5-flash", max_steps=3)
+    assert seen and set(seen) == {"google/gemini-3.5-flash"}, seen
+
+
+def test_an_unknown_model_is_refused_with_the_ones_that_exist():
+    """An arbitrary string is a run that dies at the first planner call with a
+    provider error nobody can act on."""
+    doc_id = _new_doc()
+    r = client.post(f"/api/documents/{doc_id}/copilot",
+                    json={"goal": "x", "model": "not-a-real-model"})
+    assert r.status_code == 422
+    assert "unknown model" in r.text
+
+    asm_id = _assembly()
+    r = client.post(f"/api/assemblies/{asm_id}/copilot",
+                    json={"goal": "x", "model": "not-a-real-model"})
+    assert r.status_code == 422
+
+
+def test_the_job_reports_which_model_ran(monkeypatch):
+    from app.services import llm_client
+
+    _capture_model(monkeypatch, {"done": True, "summary": "done"})
+    allowed = llm_client.available_models()[0]
+    doc_id = _new_doc()
+    r = client.post(f"/api/documents/{doc_id}/copilot",
+                    json={"goal": "leave it", "model": allowed})
+    assert r.status_code == 200, r.text
+    job = r.json()["job_id"]
+    body = client.get(f"/api/documents/{doc_id}/copilot/{job}").json()
+    assert body["model"] == allowed
+
+
+def test_an_empty_target_means_the_whole_body_not_a_missing_feature():
+    """What a live `gpt-5-mini` run did six times: send `target: ""` for an
+    optional reference. `feature  not found` names nothing a caller can fix."""
+    doc_id = _new_doc()
+    env = cad_operations.execute("add_primitive", doc_id, {
+        "shape": "box", "operation": "union", "target": "",
+        "params": {"size": {"x": 0.08, "y": 0.05, "z": 0.01},
+                   "center": {"x": 0, "y": 0, "z": 0}}})
+    assert env["ok"], env.get("error")
+
+    # A target that names something real still has to be honoured, and one that
+    # names something absent must still fail.
+    bad = cad_operations.execute("add_primitive", doc_id, {
+        "shape": "box", "operation": "union", "target": "f999",
+        "params": {"size": {"x": 0.01, "y": 0.01, "z": 0.01},
+                   "center": {"x": 0, "y": 0, "z": 0}}})
+    assert bad["ok"] is False

@@ -161,7 +161,8 @@ export interface DocumentSlice {
   addDimension: (a: Vector3, b: Vector3, label?: string | null) => Promise<void>
   removeDimension: (dimId: string) => Promise<void>
   /** Forge Copilot: run an agentic multi-step plan toward a goal. Returns the transcript. */
-  runCopilot: (goal: string, onProgress?: (state: CopilotResult) => void) => Promise<CopilotResult | undefined>
+  runCopilot: (goal: string, onProgress?: (state: CopilotResult) => void,
+               model?: string | null) => Promise<CopilotResult | undefined>
 }
 
 /** What is picked, what is being sketched, and what the spec says about it. */

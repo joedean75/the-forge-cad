@@ -400,7 +400,8 @@ def _headers() -> dict[str, str]:
 
 def _post_chat(messages: list[dict[str, Any]], *, timeout: float = 60.0,
                max_tokens: Optional[int] = None,
-               tools: Optional[list[dict[str, Any]]] = None) -> dict[str, Any]:
+               tools: Optional[list[dict[str, Any]]] = None,
+               model: Optional[str] = None) -> dict[str, Any]:
     """One chat-completion round trip, returning the whole assistant message.
 
     Separate from `_call_llm` because a tool call has no ``content`` — the model
@@ -412,7 +413,10 @@ def _post_chat(messages: list[dict[str, Any]], *, timeout: float = 60.0,
 
     url = f"{LLM_BASE_URL.rstrip('/')}/chat/completions"
     payload: dict[str, Any] = {
-        "model": LLM_MODEL,
+        # Per call, falling back to the configured default. `set_model` is
+        # process-global and shared by every tenant; comparing two models on one
+        # task must not mean changing what everybody else's next run uses.
+        "model": model or LLM_MODEL,
         "messages": messages,
         "temperature": 0.2,
     }
