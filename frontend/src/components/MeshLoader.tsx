@@ -1,6 +1,7 @@
 import { useRef, useEffect, useMemo } from 'react'
 import { useLoader } from '@react-three/fiber'
 import * as THREE from 'three'
+import { CadMaterial } from './CadAppearance'
 import { ForgeMeshLoader, faceOfTriangle, facesSubGeometry, ownerOfTriangle } from '../util/forgeMesh'
 
 /**
@@ -97,7 +98,6 @@ export function MeshLoader({
 
   useEffect(() => {
     if (!geometry || !meshRef.current) return
-    geometry.computeVertexNormals()
     if (fit) {
       // Frozen document fit: geometry is pre-translated; just apply the scale.
       meshRef.current.scale.setScalar(fit.s)
@@ -132,8 +132,6 @@ export function MeshLoader({
   return (
     <mesh
       ref={meshRef}
-      castShadow
-      receiveShadow
       onPointerMove={
         onHoverTopology
           ? (e) => {
@@ -166,16 +164,7 @@ export function MeshLoader({
       }
     >
       <primitive object={geometry} attach="geometry" />
-      <meshStandardMaterial
-        color="#c2ccd8"
-        metalness={0.25}
-        roughness={0.55}
-        emissive="#e8683c"
-        emissiveIntensity={dim ? 0 : 0.05}
-        transparent={dim}
-        opacity={dim ? 0.16 : 1}
-        flatShading={false}
-      />
+      <CadMaterial dim={dim} />
       {/* Drawn as children so they inherit the mesh's scale and translation:
           the overlay shares the parent's position buffer, so any transform
           applied to one has to apply to the other or they separate. */}

@@ -114,8 +114,39 @@ export async function fetchForgeMesh(url: string): Promise<ForgeMesh> {
 
 export function toGeometry(mesh: ForgeMesh): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3))
-  geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1))
+  // The transport is welded for topology/analysis. Rendering must split a
+  // shared vertex at CAD face boundaries, otherwise a box's corner averages
+  // three perpendicular normals and puts curved shading on its flat faces.
+  // Within each face vertices remain shared, so cylindrical surfaces stay
+  // smooth. Triangle order and the original mesh are never changed.
+  let positions = mesh.positions
+  let indices = mesh.indices
+  const labels = mesh.faceIds
+  if (labels?.length === indices.length / 3 && labels.some((id) => id !== null)) {
+    const vertices: number[] = []
+    const splitIndices = new Uint32Array(indices.length)
+    const byFace = new Map<string | number, Map<number, number>>()
+    for (let t = 0; t < labels.length; t++) {
+      // Unlabelled triangles cannot safely be assigned to a neighbouring face.
+      const key = labels[t] ?? t
+      let face = byFace.get(key)
+      if (!face) { face = new Map(); byFace.set(key, face) }
+      for (let corner = 0; corner < 3; corner++) {
+        const source = indices[t * 3 + corner]
+        let target = face.get(source)
+        if (target === undefined) {
+          target = vertices.length / 3
+          face.set(source, target)
+          vertices.push(positions[source * 3], positions[source * 3 + 1], positions[source * 3 + 2])
+        }
+        splitIndices[t * 3 + corner] = target
+      }
+    }
+    positions = new Float32Array(vertices)
+    indices = splitIndices
+  }
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1))
   geometry.computeVertexNormals()
   // Carried on the geometry so a raycast hit — which reports a triangle index
   // against this exact buffer — can be turned into a feature id without the
@@ -166,7 +197,7 @@ export function facesSubGeometry(
   // The same position buffer, not a copy: the overlay is the same triangles.
   out.setAttribute('position', geometry.getAttribute('position'))
   out.setIndex(kept)
-  out.computeVertexNormals()
+  // Highlight overlays use an unlit material and do not need normals.
   return out
 }
 

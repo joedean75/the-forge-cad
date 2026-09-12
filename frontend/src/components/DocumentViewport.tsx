@@ -7,6 +7,7 @@ import { DatumPlanes } from './DatumPlanes'
 import { EmptyDocumentGuide } from './EmptyDocumentGuide'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { MeshLoader } from './MeshLoader'
+import { CadLighting } from './CadAppearance'
 import { MoveHandles, movableCenter } from './MoveHandles'
 import { collectSnapPoints, collectProxies, findNode, geometryTree, pickFeatureAt, type FeatureProxy } from '../util/featureTree'
 import type { BBox, Dimension, Vector3, FeatureNode } from '../../../shared/types'
@@ -440,13 +441,11 @@ export function DocumentViewport() {
           viewed from 0.08–50 units with thin/coplanar CAD faces; a linear depth
           buffer z-fights and "glitches" the model at certain distances. Log depth
           + a tighter near/far ratio give stable precision across the whole range. */}
-      <Canvas camera={{ position: [2.6, -3.4, 1.9], fov: 45, near: 0.02, far: 100, up: [0, 0, 1] }} shadows
+      <Canvas camera={{ position: [2.6, -3.4, 1.9], fov: 45, near: 0.02, far: 100, up: [0, 0, 1] }}
         gl={{ logarithmicDepthBuffer: true }}
         onPointerMissed={() => { if (!measuring && !sketchPick) select(null) }}>
         <Suspense fallback={null}>
-          <ambientLight intensity={0.6} />
-          <directionalLight position={[5, 10, 7]} intensity={1.2} castShadow />
-          <directionalLight position={[-5, -5, -5]} intensity={0.4} />
+          <CadLighting />
 
           {/* Rotated onto XY and dropped along -Z: the ground plane has to be
               the one the part is built on (every template starts at part z=0),
