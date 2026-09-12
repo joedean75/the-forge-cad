@@ -172,6 +172,71 @@ def _insert_part(asm_id, args):
             "component_count": len(updated.components)}
 
 
+@operation("build_part", "mutate",
+           "**Design a part that does not exist yet, then place it here.** This "
+           "is how an assembly gets a part nobody has modelled: it runs the part "
+           "copilot on a new document — the same step-by-step operation loop, "
+           "against the part catalog — and inserts the result as a component. "
+           "Use it for bespoke geometry (a bracket, a housing, a chassis plate); "
+           "for anything purchased, insert_standard_part is cheaper and more "
+           "accurate than modelling a screw. The `goal` is a self-contained "
+           "part description with real millimetre dimensions, because the part "
+           "run cannot see this assembly: say \"a 120 x 80 x 6 mm plate with M4 "
+           "clearance holes 10 mm in from each corner\", not \"the base plate\". "
+           "The new component still has to be mated: building it places it at "
+           "the origin, which is where everything else built this way already "
+           "is. Costs one step here and a whole part run inside it.",
+           {"goal": {"type": "string", "required": True,
+                     "description": "what the part is, with explicit mm dimensions"},
+            "name": {"type": "string",
+                     "description": "what to call the part document; defaults to "
+                                    "the first few words of the goal"},
+            "steps": {"type": "number", "default": 8,
+                      "description": "step budget for the part's own copilot run"}},
+           subject="assembly")
+def _build_part(asm_id, args):
+    from app.services import copilot, document_service, feature_ops
+
+    asm = _assembly(asm_id)
+    goal = str(require(args, "goal")).strip()
+    if not goal:
+        raise BadArgument("a part needs a description to be built from", arg="goal")
+    name = str(args.get("name") or " ".join(goal.split()[:6]))[:80]
+    steps = max(1, min(int(args.get("steps", 8)), copilot.MAX_STEPS_CAP))
+
+    # Built under the *assembly's* owner, because `add_component` refuses a part
+    # its owner cannot open — the same rule `standard_parts.document_for`
+    # follows, and for the same reason.
+    doc = document_service.create_document(name=name, owner_id=asm.owner_id)
+    outcome = copilot.run(doc.id, goal, max_steps=steps, subject="document",
+                          meter=copilot.nested_meter())
+
+    built = document_service.get_document(doc.id)
+    if built is None or not feature_ops.has_solid(built.feature_tree):
+        # A component whose part has no body is a row in the BOM, a name in the
+        # tree and nothing in the viewport — harder to notice than a refusal.
+        # The empty document goes with it rather than being left in the library.
+        document_service.delete_document(doc.id)
+        raise PreconditionFailed(
+            f"the part run finished without building a body, so nothing was "
+            f"placed: {outcome.get('summary')}")
+
+    updated = assembly_service.add_component(asm_id, doc.id)
+    if updated is None:
+        raise NoSuchDocument(f"no assembly {asm_id!r}")
+    placed = updated.components[-1]
+    return {"message": f"designed and placed {name}",
+            "part_id": doc.id,
+            "component_id": placed.id,
+            "component_count": len(updated.components),
+            # What the sub-run did, so the assembly planner can tell a part that
+            # was built as asked from one that ran out of budget half way.
+            "part_steps": len([x for x in outcome["steps"] if x.get("kind") == "op"]),
+            "part_finished": outcome["finished"],
+            "part_summary": outcome["summary"],
+            "next": "mate this component — building it leaves it at the origin"}
+
+
 @operation("insert_standard_part", "mutate",
            "Place a purchased part without modelling it — a screw, nut, washer, "
            "dowel pin, bearing, stepper or T-slot extrusion from the published "

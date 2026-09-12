@@ -216,8 +216,14 @@ def describe(name: str, kind: str, description: str, params: Dict[str, Any]) -> 
     }
 
 
-def tool_definitions() -> List[Dict[str, Any]]:
-    """The whole catalog as OpenAI-style function/tool definitions."""
+def tool_definitions(subject: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The whole catalog as OpenAI-style function/tool definitions.
+
+    `subject` narrows it to the operations that take one kind of id. Handing a
+    planner that is driving an assembly the 96 document operations is not merely
+    untidy: it calls them against an assembly id, `execute` correctly refuses,
+    and the step budget is spent discovering what it was never offered.
+    """
     from app.services import cad_operations
 
     return [{
@@ -230,4 +236,5 @@ def tool_definitions() -> List[Dict[str, Any]]:
                             if op.subject == "assembly" else op.description),
             "parameters": json_schema(annotated(op.params)),
         },
-    } for op in cad_operations.OPERATIONS.values()]
+    } for op in cad_operations.OPERATIONS.values()
+      if subject is None or op.subject == subject]

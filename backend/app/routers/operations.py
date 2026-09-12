@@ -12,10 +12,11 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app.models.schemas import DesignDocument
+from app.models.schemas import AssemblyDoc, DesignDocument
 from app.rate_limit import rate_limit
 from app.security import current_account, meter_operation
-from app.services import accounts, cad_operations, caller, copilot, document_service
+from app.services import (accounts, assembly_service, cad_operations, caller, copilot,
+                          document_service)
 from app.services import op_errors
 
 router = APIRouter(tags=["operations"])
@@ -246,7 +247,10 @@ def run_operation(
 
 class CopilotRequest(BaseModel):
     goal: str
-    max_steps: int = copilot.MAX_STEPS_DEFAULT
+    #: Left unset the route picks the default for its own subject — an assembly
+    #: build is many steps larger than an edit to one body, and one shared
+    #: default would either starve the build or over-budget the edit.
+    max_steps: Optional[int] = None
 
 
 class CopilotJobState(BaseModel):
@@ -256,6 +260,10 @@ class CopilotJobState(BaseModel):
     steps: list[Dict[str, Any]]
     summary: Optional[str] = None
     document: Optional[DesignDocument] = None
+    #: Set instead of `document` when the run was against an assembly. Named
+    #: rather than polymorphic, for the reason `summarize_assembly` states its
+    #: kind: a client that infers which it got will eventually infer wrong.
+    assembly: Optional[AssemblyDoc] = None
     finished: bool = False
     stop_reason: Optional[str] = None
 
@@ -264,7 +272,8 @@ class CopilotJobState(BaseModel):
 _COPILOT_JOBS: Dict[str, Dict[str, Any]] = {}
 
 
-def _copilot_state(job: Dict[str, Any], document: Optional[DesignDocument]) -> CopilotJobState:
+def _copilot_state(job: Dict[str, Any], document: Optional[DesignDocument],
+                   assembly: Optional[AssemblyDoc] = None) -> CopilotJobState:
     return CopilotJobState(
         ok=job["status"] != "error" and (job["status"] == "running" or job.get("finished", False)),
         job_id=job["id"],
@@ -272,20 +281,23 @@ def _copilot_state(job: Dict[str, Any], document: Optional[DesignDocument]) -> C
         steps=list(job["steps"]),
         summary=job.get("summary"),
         document=document,
+        assembly=assembly,
         finished=job.get("finished", False),
         stop_reason=job.get("stop_reason"),
     )
 
 
-def _run_copilot_job(job: Dict[str, Any], doc_id: str, goal: str, max_steps: int, acc: accounts.Account) -> None:
+def _run_copilot_job(job: Dict[str, Any], subject_id: str, goal: str, max_steps: int,
+                     acc: accounts.Account, subject: str = "document") -> None:
     try:
         outcome = copilot.run(
-            doc_id,
+            subject_id,
             goal,
             max_steps=max_steps,
             meter=lambda: meter_operation(acc),
             on_step=lambda entry: job["steps"].append(entry),
             cancelled=lambda: job.get("cancel_requested", False),
+            subject=subject,
         )
         job["summary"] = outcome["summary"]
         job["finished"] = outcome["finished"]
@@ -308,7 +320,7 @@ def _copilot_access(doc_id: str, acc: accounts.Account) -> None:
 def cancel_copilot(doc_id: str, job_id: str, acc: accounts.Account = Depends(current_account)):
     _copilot_access(doc_id, acc)
     job = _COPILOT_JOBS.get(job_id)
-    if job is None or job["doc_id"] != doc_id:
+    if job is None or job["subject_id"] != doc_id:
         raise HTTPException(status_code=404, detail="Copilot job not found")
     if job["status"] == "running":
         job["cancel_requested"] = True
@@ -338,10 +350,12 @@ def run_copilot(
     if not (body.goal or "").strip():
         raise HTTPException(status_code=422, detail="goal is required")
 
-    job = {"id": str(uuid.uuid4()), "doc_id": doc_id, "status": "running", "steps": [], "summary": None}
+    job = {"id": str(uuid.uuid4()), "subject_id": doc_id, "subject": "document",
+           "status": "running", "steps": [], "summary": None}
     _COPILOT_JOBS[job["id"]] = job
     prune_jobs(_COPILOT_JOBS)
-    background_tasks.add_task(_run_copilot_job, job, doc_id, body.goal.strip(), body.max_steps, acc)
+    steps = body.max_steps or copilot.step_default("document")
+    background_tasks.add_task(_run_copilot_job, job, doc_id, body.goal.strip(), steps, acc)
     return _copilot_state(job, document=None)
 
 
@@ -354,10 +368,91 @@ def copilot_job(doc_id: str, job_id: str, acc: accounts.Account = Depends(curren
     """Poll a copilot job: live transcript while running, summary + document when done."""
     _copilot_access(doc_id, acc)
     job = _COPILOT_JOBS.get(job_id)
-    if job is None or job["doc_id"] != doc_id:
+    if job is None or job["subject_id"] != doc_id:
         raise HTTPException(status_code=404, detail="Copilot job not found")
     document = document_service.get_document(doc_id) if job["status"] == "done" else None
     return _copilot_state(job, document)
+
+
+def _assembly_copilot_access(assembly_id: str, acc: accounts.Account) -> AssemblyDoc:
+    """The assembly, if this account may drive it.
+
+    `can_access` is the whole check here because an assembly has one role —
+    owner or nothing — unlike a document, which can be shared read-only. It is
+    the same boundary `add_component` applies to a part, and for the same
+    reason: a copilot run reads every component's geometry back out through the
+    interference check and the BOM.
+    """
+    a = assembly_service.get_assembly(assembly_id)
+    if a is None or not assembly_service.can_access(a, acc.id):
+        raise HTTPException(status_code=404, detail="Assembly not found")
+    return a
+
+
+def _assembly_copilot_job(job_id: str, assembly_id: str) -> Dict[str, Any]:
+    job = _COPILOT_JOBS.get(job_id)
+    # The subject check is the access check: the caller has already been cleared
+    # for *this* assembly, and a job id belonging to another subject must not
+    # resolve through it.
+    if job is None or job["subject_id"] != assembly_id or job.get("subject") != "assembly":
+        raise HTTPException(status_code=404, detail="Copilot job not found")
+    return job
+
+
+@router.post(
+    "/api/assemblies/{assembly_id}/copilot",
+    response_model=CopilotJobState,
+)
+def run_assembly_copilot(
+    assembly_id: str,
+    body: CopilotRequest,
+    background_tasks: BackgroundTasks,
+    acc: accounts.Account = Depends(current_account),
+    _rl: None = Depends(_job_limit),
+):
+    """Forge Copilot against an assembly: place parts, mate them, measure the result.
+
+    The same agentic loop the part editor runs, pointed at the other half of the
+    operation catalog — the planner is offered only the fifteen operations that
+    take an assembly id, because handing it the ninety-six that take a document
+    id spends the step budget discovering they do not apply here.
+    """
+    _assembly_copilot_access(assembly_id, acc)
+    if not (body.goal or "").strip():
+        raise HTTPException(status_code=422, detail="goal is required")
+
+    job = {"id": str(uuid.uuid4()), "subject_id": assembly_id, "subject": "assembly",
+           "status": "running", "steps": [], "summary": None}
+    _COPILOT_JOBS[job["id"]] = job
+    prune_jobs(_COPILOT_JOBS)
+    steps = body.max_steps or copilot.step_default("assembly")
+    background_tasks.add_task(_run_copilot_job, job, assembly_id, body.goal.strip(),
+                              steps, acc, "assembly")
+    return _copilot_state(job, document=None)
+
+
+@router.get(
+    "/api/assemblies/{assembly_id}/copilot/{job_id}",
+    response_model=CopilotJobState,
+)
+def assembly_copilot_job(assembly_id: str, job_id: str,
+                         acc: accounts.Account = Depends(current_account)):
+    """Poll an assembly copilot job: live transcript while running, the assembly when done."""
+    _assembly_copilot_access(assembly_id, acc)
+    job = _assembly_copilot_job(job_id, assembly_id)
+    assembly = (assembly_service.get_assembly(assembly_id)
+                if job["status"] == "done" else None)
+    return _copilot_state(job, document=None, assembly=assembly)
+
+
+@router.post("/api/assemblies/{assembly_id}/copilot/{job_id}/cancel")
+def cancel_assembly_copilot(assembly_id: str, job_id: str,
+                            acc: accounts.Account = Depends(current_account)):
+    _assembly_copilot_access(assembly_id, acc)
+    job = _assembly_copilot_job(job_id, assembly_id)
+    if job["status"] == "running":
+        job["cancel_requested"] = True
+    return {"ok": True, "cancel_requested": job.get("cancel_requested", False)}
 
 
 @router.post("/api/assemblies/{assembly_id}/op", response_model=OperationResponse)

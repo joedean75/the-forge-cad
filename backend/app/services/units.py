@@ -95,6 +95,9 @@ UNITLESS = frozenset({
     "material_id", "modifier", "name", "notes", "on_face", "operation",
     "parameters", "params", "plane", "power", "printer_url", "process",
     "profile", "profile_a", "profile_b", "requirements", "resolution", "ruled",
+    # `steps` is a count of copilot turns, not a distance — `build_part` budgets
+    # the part run it starts.
+    "steps",
     "scale", "section", "sections", "settings", "shape", "sketch", "sketch_a",
     "sketch_b", "spec", "start", "state", "suppressed", "target", "tolerances",
     "count", "annotations", "dimensions", "projection", "sheet", "show_hidden",

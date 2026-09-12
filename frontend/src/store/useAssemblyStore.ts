@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type {
-  AssemblyDoc, AssemblyMate, BomReport, ComponentTransform, InterferenceReport,
+  AssemblyDoc, AssemblyMate, BomReport, ComponentTransform, CopilotResult, InterferenceReport,
 } from '../../../shared/types'
 import { api } from '../api/client'
 
@@ -24,6 +24,17 @@ interface AssemblyState {
   removeComponent: (componentId: string) => Promise<void>
   setTransform: (componentId: string, transform: ComponentTransform) => Promise<void>
   select: (componentId: string | null) => void
+
+  /**
+   * Forge Copilot, pointed at this assembly.
+   *
+   * The same agentic loop the part editor runs, against the other half of the
+   * operation catalog: it places components, mates them and measures the
+   * result. It cannot change a part's own geometry — that is a run against the
+   * part document.
+   */
+  runCopilot: (goal: string, onProgress?: (state: CopilotResult) => void)
+    => Promise<CopilotResult | undefined>
 
   /** Add a mate and re-solve every placement; the server returns the whole assembly. */
   addMate: (mate: Omit<AssemblyMate, 'id'>) => Promise<void>
@@ -201,6 +212,38 @@ export const useAssemblyStore = create<AssemblyState>((set, get) => ({
   },
 
   select: (componentId) => set({ selectedComponentId: componentId }),
+
+  runCopilot: async (goal, onProgress) => {
+    const { assembly } = get()
+    if (!assembly || !goal.trim()) return undefined
+    set({ busy: true, error: null })
+    try {
+      // No step budget: the server's assembly default covers a whole build,
+      // where each part is a nested part-copilot run.
+      const res = await api.runCopilot(assembly.id, goal, undefined, onProgress, 'assemblies')
+      // A run takes minutes and places and mates components as it goes, so what
+      // comes back *is* the assembly — but only adopt it if this is still the
+      // one on screen, the rule every other long call here follows.
+      if (res.assembly && get().assembly?.id === assembly.id) {
+        const kept = res.assembly.components.some((c) => c.id === get().selectedComponentId)
+        set({
+          assembly: res.assembly,
+          // The copilot may have removed the selected component; a selection
+          // naming a component that is gone reads as a broken inspector.
+          selectedComponentId: kept ? get().selectedComponentId : null,
+          ...STALE,
+        })
+      }
+      return res
+    } catch (e) {
+      if (get().assembly?.id === assembly.id) {
+        set({ error: e instanceof Error ? e.message : 'Copilot failed' })
+      }
+      return undefined
+    } finally {
+      set({ busy: false })
+    }
+  },
 
   addMate: async (mate) => {
     const { assembly } = get()

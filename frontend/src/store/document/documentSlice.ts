@@ -278,7 +278,7 @@ export function createDocumentSlice(set: Set, get: Get): DocumentSlice {
       const ticket = issue(get)
       set({ past: pushHistory(get().past, doc), future: [], busy: true, error: null })
       try {
-        const res = await api.runCopilot(doc.id, goal, 8, onProgress)
+        const res = await api.runCopilot(doc.id, goal, undefined, onProgress)
         if (res.document && sameDocument(get, ticket)) {
           set({
             ...adopt(get, res.document),

@@ -3,7 +3,7 @@
 from fastapi.testclient import TestClient
 
 from main import app
-from app.services import copilot
+from app.services import cad_operations, copilot
 
 client = TestClient(app)
 
@@ -14,8 +14,12 @@ def _new_doc() -> str:
     return r.json()["id"]
 
 
-def _scripted(goal, transcript, summary):
-    """A deterministic stand-in for the LLM planner: plate, then a hole, then done."""
+def _scripted(goal, transcript, summary, **_):
+    """A deterministic stand-in for the LLM planner: plate, then a hole, then done.
+
+    Takes `**_` because it stands in for two things: the three-argument
+    `planner` protocol, and `_plan_next` itself, which is also told the subject.
+    """
     n = len([s for s in transcript if s.get("kind") == "op"])
     if n == 0:
         return {"op": "add_primitive", "rationale": "base plate",
@@ -133,7 +137,10 @@ def test_result_summary_is_bounded_and_removes_nested_geometry():
 def test_cancel_requires_matching_document():
     from app.routers.operations import _COPILOT_JOBS
     doc_id, other = _new_doc(), _new_doc()
-    _COPILOT_JOBS["cancel-test"] = {"id": "cancel-test", "doc_id": doc_id, "status": "running", "steps": []}
+    # `subject_id`, not `doc_id`: the job store now holds assembly runs too, and
+    # the key names whichever kind of subject the run is against.
+    _COPILOT_JOBS["cancel-test"] = {"id": "cancel-test", "subject_id": doc_id,
+                                    "subject": "document", "status": "running", "steps": []}
     assert client.post(f"/api/documents/{other}/copilot/cancel-test/cancel").status_code == 404
     assert client.post(f"/api/documents/{doc_id}/copilot/cancel-test/cancel").status_code == 200
     assert _COPILOT_JOBS["cancel-test"]["cancel_requested"] is True
@@ -149,3 +156,270 @@ def test_invalid_geometry_cannot_finish_without_a_spec(monkeypatch):
     out = copilot.run(_new_doc(), "plate", planner=_scripted)
     assert not out["finished"]
     assert out["stop_reason"] == "verification_failed"
+
+
+# ---------------------------------------------------------------------------
+# The assembly subject: the same loop against the other half of the catalog.
+# ---------------------------------------------------------------------------
+
+def _assembly() -> str:
+    return client.post("/api/assemblies", json={"name": "rig"}).json()["id"]
+
+
+def _part() -> str:
+    from conftest import base_box
+
+    doc_id = _new_doc()
+    base_box(client, doc_id, size=(0.1, 0.06, 0.02), center=(0.0, 0.0, 0.0))
+    return doc_id
+
+
+def test_the_copilot_composes_an_assembly():
+    """The loop is the same; what changes is which id it is handed and therefore
+    which operations exist. Inserting a part and reading the components back is
+    the smallest run that proves the assembly path is wired end to end."""
+    asm_id, part_id = _assembly(), _part()
+
+    def scripted(goal, transcript, summary, **_):
+        n = len([s for s in transcript if s.get("kind") == "op"])
+        if n == 0:
+            return {"op": "insert_part", "args": {"part_id": part_id},
+                    "rationale": "the plate"}
+        if n == 1:
+            return {"op": "list_components", "args": {}, "rationale": "check it landed"}
+        return {"done": True, "summary": "Placed the plate."}
+
+    out = copilot.run(asm_id, "put the plate in", planner=scripted, subject="assembly")
+    ops = [s for s in out["steps"] if s.get("kind") == "op"]
+    assert len(ops) == 2 and all(o["ok"] for o in ops), ops
+    # The subject comes back under its own name, and the other one is empty.
+    assert out["assembly"] is not None and out["document"] is None
+    assert len(out["assembly"].components) == 1
+    assert out["finished"] is True
+
+
+def test_the_planner_is_only_offered_the_operations_that_take_this_id():
+    """A planner driving an assembly that is handed the document catalog calls it,
+    and every call is refused against an assembly id — the budget goes on
+    discovering what was never applicable."""
+    from app.services import action_space
+
+    assembly = {t["function"]["name"] for t in action_space.tools("assembly")}
+    document = {t["function"]["name"] for t in action_space.tools("document")}
+    assert "insert_part" in assembly and "add_hole" not in assembly
+    assert "add_hole" in document and "insert_part" not in document
+    assert not (assembly & document)
+
+    prompt = action_space.system_prompt(with_tools=False, subject="assembly")
+    assert "check_interference" in prompt and "add_hole" not in prompt
+
+
+def test_a_part_operation_against_an_assembly_says_which_it_is():
+    """`execute` would refuse this as a missing document, which is a confusing
+    answer to a real mistake: the id is fine, the operation is for another kind
+    of thing."""
+    asm_id = _assembly()
+
+    def scripted(goal, transcript, summary, **_):
+        if not transcript:
+            return {"op": "add_hole", "args": {}, "rationale": "wrong subject"}
+        return {"done": True, "summary": "stopped"}
+
+    out = copilot.run(asm_id, "drill it", planner=scripted, subject="assembly")
+    bad = [s for s in out["steps"] if s.get("kind") == "op"][0]
+    assert bad["ok"] is False
+    assert "operates on a document" in bad["error"]
+
+
+def test_interference_is_the_assemblys_check_before_it_claims_done(monkeypatch):
+    """A part is checked for a valid solid; an assembly is checked for parts
+    passing through each other, which is the failure that looks correct in every
+    other reading it has."""
+    asm_id, part_id = _assembly(), _part()
+    execute = copilot.cad_operations.execute
+
+    def checked(op, *args, **kwargs):
+        if op == "check_interference":
+            return {"ok": True, "result": {"clear": False, "interferences": 2}}
+        return execute(op, *args, **kwargs)
+
+    monkeypatch.setattr(copilot.cad_operations, "execute", checked)
+
+    def scripted(goal, transcript, summary, **_):
+        if not [s for s in transcript if s.get("kind") == "op"]:
+            return {"op": "insert_part", "args": {"part_id": part_id}, "rationale": "part"}
+        return {"done": True, "summary": "placed"}
+
+    out = copilot.run(asm_id, "stack them", planner=scripted, subject="assembly")
+    checks = [s for s in out["steps"] if s.get("kind") == "verification"]
+    assert checks and checks[0]["op"] == "check_interference"
+    assert checks[0]["ok"] is False
+    # And it does not get to claim success with parts intersecting.
+    assert out["finished"] is False
+    assert "2 pair(s)" in " ".join(out["unmet"])
+
+
+def test_the_assembly_copilot_endpoint_runs_a_scripted_plan(monkeypatch):
+    asm_id, part_id = _assembly(), _part()
+
+    def scripted(goal, transcript, summary, **_):
+        if not [s for s in transcript if s.get("kind") == "op"]:
+            return {"op": "insert_part", "args": {"part_id": part_id}, "rationale": "part"}
+        return {"done": True, "summary": "Placed one part."}
+
+    monkeypatch.setattr(copilot, "_plan_next", scripted)
+    r = client.post(f"/api/assemblies/{asm_id}/copilot", json={"goal": "place the plate"})
+    assert r.status_code == 200, r.text
+    job = r.json()["job_id"]
+    body = client.get(f"/api/assemblies/{asm_id}/copilot/{job}").json()
+    assert body["ok"] is True and body["status"] == "done"
+    # The assembly comes back on the assembly route; the document field stays empty.
+    assert body["assembly"] is not None and body["document"] is None
+    assert len(body["assembly"]["components"]) == 1
+
+
+def test_an_assembly_job_id_does_not_resolve_through_another_assembly():
+    from app.routers.operations import _COPILOT_JOBS
+
+    mine, theirs = _assembly(), _assembly()
+    _COPILOT_JOBS["asm-cancel"] = {"id": "asm-cancel", "subject_id": mine,
+                                   "subject": "assembly", "status": "running", "steps": []}
+    assert client.post(f"/api/assemblies/{theirs}/copilot/asm-cancel/cancel").status_code == 404
+    assert client.post(f"/api/assemblies/{mine}/copilot/asm-cancel/cancel").status_code == 200
+    assert _COPILOT_JOBS["asm-cancel"]["cancel_requested"] is True
+
+
+def test_a_document_job_id_does_not_resolve_through_the_assembly_route():
+    """The two stores are one dict, so the subject is part of the identity."""
+    from app.routers.operations import _COPILOT_JOBS
+
+    asm_id = _assembly()
+    _COPILOT_JOBS["doc-job"] = {"id": "doc-job", "subject_id": asm_id,
+                                "subject": "document", "status": "running", "steps": []}
+    assert client.post(f"/api/assemblies/{asm_id}/copilot/doc-job/cancel").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# build_part: the assembly loop designs the parts it needs
+# ---------------------------------------------------------------------------
+
+def _box_planner(*, size=(0.08, 0.05, 0.01)):
+    """A part planner that builds one box and stops — a stand-in for the part
+    copilot's own LLM, so an assembly build is deterministic in tests."""
+    def plan(goal, transcript, summary, **_):
+        if [x for x in transcript if x.get("kind") == "op"]:
+            return {"done": True, "summary": "built a block"}
+        return {"op": "add_primitive", "rationale": "the body",
+                "args": {"shape": "box", "operation": "union",
+                         "params": {"size": dict(zip("xyz", size)),
+                                    "center": {"x": 0, "y": 0, "z": 0}}}}
+    return plan
+
+
+def test_build_part_designs_a_part_and_places_it(monkeypatch):
+    """The recursion that makes a whole assembly possible: one assembly step
+    runs a whole part run, and what it produces is a component."""
+    monkeypatch.setattr(copilot, "_plan_next", _box_planner())
+    asm_id = _assembly()
+    env = cad_operations.execute("build_part", asm_id,
+                                 {"goal": "an 80 x 50 x 10 mm plate", "name": "plate"})
+    assert env["ok"], env.get("error")
+    result = env["result"]
+    assert result["component_count"] == 1
+    assert result["part_finished"] is True and result["part_steps"] == 1
+
+    # The part is a real document with a real body, not a placeholder.
+    from app.services import document_service, feature_ops
+    built = document_service.get_document(result["part_id"])
+    assert feature_ops.has_solid(built.feature_tree)
+    assert built.derived.volume > 0
+
+
+def test_a_part_that_never_got_a_body_is_not_placed(monkeypatch):
+    """A component whose part has no body is a BOM row and an empty viewport —
+    harder to notice than a refusal, so the empty document goes with it."""
+    monkeypatch.setattr(copilot, "_plan_next",
+                        lambda goal, transcript, summary, **_: {"done": True, "summary": "did nothing"})
+    asm_id = _assembly()
+    env = cad_operations.execute("build_part", asm_id, {"goal": "a bracket"})
+    assert env["ok"] is False
+    assert env["error"]["code"] == "PRECONDITION"
+
+    from app.services import assembly_service, document_service
+    assert assembly_service.get_assembly(asm_id).components == []
+    # And no empty document was left behind in the library.
+    named = [d for d in document_service.list_documents() if d.name == "a bracket"]
+    assert named == []
+
+
+def test_the_nested_part_run_is_charged_to_the_same_account(monkeypatch):
+    """Otherwise every operation a part run performs is free, and the cheapest
+    way to spend somebody's quota is to ask for an assembly."""
+    monkeypatch.setattr(copilot, "_plan_next", _box_planner())
+    asm_id = _assembly()
+    charged = []
+
+    def scripted(goal, transcript, summary, **_):
+        if not [x for x in transcript if x.get("kind") == "op"]:
+            return {"op": "build_part", "args": {"goal": "a plate"}, "rationale": "need one"}
+        return {"done": True, "summary": "done"}
+
+    copilot.run(asm_id, "make a plate", planner=scripted, subject="assembly",
+                meter=lambda: charged.append(1))
+    # One for `build_part` itself, and one for the mutation inside its sub-run.
+    assert len(charged) >= 2, charged
+
+
+def test_a_build_is_not_done_while_a_component_is_unmated(monkeypatch):
+    """"Assembled" means held. A part that was placed and never constrained sits
+    at the origin, inside whatever else is there."""
+    monkeypatch.setattr(copilot, "_plan_next", _box_planner())
+    asm_id = _assembly()
+
+    def scripted(goal, transcript, summary, **_):
+        built = [x for x in transcript if x.get("op") == "build_part" and x.get("ok")]
+        if len(built) < 2:
+            return {"op": "build_part", "args": {"goal": f"plate {len(built) + 1}"},
+                    "rationale": "a part"}
+        return {"done": True, "summary": "two plates, unmated"}
+
+    out = copilot.run(asm_id, "two plates", planner=scripted, subject="assembly", max_steps=6)
+    assert out["finished"] is False
+    assert any("not held by any mate" in u for u in out["unmet"]), out["unmet"]
+
+
+def test_the_loop_finishes_once_every_part_is_built_and_mated(monkeypatch):
+    """The whole shape the loop exists for: plan parts, build each with the part
+    copilot, mate them, check interference, and only then report done."""
+    monkeypatch.setattr(copilot, "_plan_next", _box_planner())
+    asm_id = _assembly()
+
+    def scripted(goal, transcript, summary, **_):
+        built = [x for x in transcript if x.get("op") == "build_part" and x.get("ok")]
+        mated = [x for x in transcript if x.get("op") == "add_mate" and x.get("ok")]
+        if len(built) < 2:
+            return {"op": "build_part", "args": {"goal": f"plate {len(built) + 1}"},
+                    "rationale": "a part the assembly needs"}
+        if not mated:
+            # The component ids come back from the build steps themselves.
+            ids = [x["result"]["component_id"] for x in built]
+            return {"op": "add_mate", "rationale": "stack them",
+                    "args": {"type": "coincident", "base": ids[0], "moved": ids[1],
+                             "axis": "z"}}
+        return {"done": True, "summary": "Built two plates and stacked them."}
+
+    out = copilot.run(asm_id, "a two-plate stack", planner=scripted,
+                      subject="assembly", max_steps=8)
+    ops = [x["op"] for x in out["steps"] if x.get("kind") == "op"]
+    assert ops == ["build_part", "build_part", "add_mate"], ops
+    checks = [x for x in out["steps"] if x.get("kind") == "verification"]
+    assert any(c["op"] == "check_interference" for c in checks)
+    assert out["finished"] is True and out["unmet"] == [], (out["stop_reason"], out["unmet"])
+    assert len(out["assembly"].components) == 2 and len(out["assembly"].mates) == 1
+
+
+def test_an_assembly_build_gets_a_bigger_budget_than_an_edit():
+    """A part is a whole nested run, so a budget tuned for editing one body
+    stops a build halfway and reports it as out of budget."""
+    assert copilot.step_default("assembly") > copilot.step_default("document")
+    assert copilot.step_cap("assembly") > copilot.step_cap("document")

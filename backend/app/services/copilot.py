@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Optional
 
 from app.services import cad_operations, document_service, llm_client
@@ -25,8 +26,38 @@ _LOGGER = logging.getLogger(__name__)
 MAX_STEPS_DEFAULT = 8
 MAX_STEPS_CAP = 16
 
+#: An assembly run is a different size of job. One part is a whole nested
+#: copilot run, so "design four parts, place them, mate them and check" is
+#: already a dozen steps before anything goes wrong — budgets tuned for editing
+#: one body stop it halfway through and report it as out of budget, which looks
+#: exactly like a loop that gave up.
+ASSEMBLY_MAX_STEPS_DEFAULT = 24
+ASSEMBLY_MAX_STEPS_CAP = 60
+
+
+def step_cap(subject: str) -> int:
+    return ASSEMBLY_MAX_STEPS_CAP if subject == "assembly" else MAX_STEPS_CAP
+
+
+def step_default(subject: str) -> int:
+    return ASSEMBLY_MAX_STEPS_DEFAULT if subject == "assembly" else MAX_STEPS_DEFAULT
+
 # A decision is either {"op", "args", "rationale"} or {"done": true, "summary"}.
 Planner = Callable[[str, List[dict], dict], dict]
+
+#: The quota meter of the run in progress, so a *nested* run is charged to the
+#: same account. `build_part` runs a whole part copilot inside one assembly
+#: step; without this every operation it performs would be free, and the cheapest
+#: way to spend someone else's quota would be to ask for an assembly. A
+#: ContextVar rather than an argument for the reason `services/caller` is one:
+#: threading it through `execute` would put metering inside every handler.
+_ACTIVE_METER: ContextVar[Optional[Callable[[], None]]] = ContextVar(
+    "forge_copilot_meter", default=None)
+
+
+def nested_meter() -> Optional[Callable[[], None]]:
+    """The meter of the enclosing run, for a sub-run to charge against."""
+    return _ACTIVE_METER.get()
 
 
 def _doc_summary(doc) -> dict:
@@ -40,7 +71,35 @@ def _doc_summary(doc) -> dict:
     return observation.summarize(doc)
 
 
-def _plan_next(goal: str, transcript: List[dict], summary: dict) -> dict:
+def _fetch(subject: str, subject_id: str):
+    """The thing this run is editing — a part document or an assembly.
+
+    `cad_operations.execute` already routes operations through a subject table
+    rather than special-casing the one caller that noticed; this is the same
+    idea for the half of the loop that lives here.
+    """
+    from app.services import assembly_service
+
+    if subject == "assembly":
+        return assembly_service.get_assembly(subject_id)
+    return document_service.get_document(subject_id)
+
+
+def _summary(subject: str, obj) -> dict:
+    """The compact state the planner reads, in that subject's own shape.
+
+    `summarize_assembly` states `kind: "assembly"` for the reason the catalog
+    publishes a subject at all — an agent that infers which it is holding from
+    the presence of a key will eventually infer wrong.
+    """
+    from app.services import observation
+
+    return (observation.summarize_assembly(obj) if subject == "assembly"
+            else observation.summarize(obj))
+
+
+def _plan_next(goal: str, transcript: List[dict], summary: dict,
+               subject: str = "document") -> dict:
     """Ask the LLM for the next operation. Returns a decision dict.
 
     Two paths, and which one ran is recorded on the decision as ``_via`` the
@@ -73,12 +132,13 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict) -> dict:
     )
     with_tools = llm_client.supports_tools()
     messages = [
-        {"role": "system", "content": action_space.system_prompt(with_tools=with_tools)},
+        {"role": "system", "content": action_space.system_prompt(
+            with_tools=with_tools, subject=subject)},
         {"role": "user", "content": user},
     ]
     message = llm_client._post_chat(
         messages, timeout=60.0, max_tokens=1200,
-        tools=action_space.tools() if with_tools else None)
+        tools=action_space.tools(subject) if with_tools else None)
 
     calls = message.get("tool_calls") or []
     if calls:
@@ -103,8 +163,58 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict) -> dict:
     return {**json.loads(raw), "_via": "prose"}
 
 
+def _verify(subject: str, subject_id: str, note: Callable[[dict], None]) -> List[str]:
+    """Check the work before claiming it is done, in that subject's own terms.
+
+    A part is checked for a valid solid. An assembly is checked for parts
+    passing through each other — which is the failure mode that looks perfectly
+    correct in every other reading the assembly has, and so the one worth
+    spending a step on before reporting success.
+    """
+    op = "check_interference" if subject == "assembly" else "check_geometry"
+    env = cad_operations.execute(op, subject_id, {}, include_state=False)
+    result = env.get("result") or {}
+    if subject == "assembly":
+        # **Interferences only, never the clearance warnings.** `clear` is false
+        # for a near miss as well as a clash, and mating two parts is what puts
+        # their faces in contact — a coincident mate holds them at a 0 mm gap by
+        # definition. Gating on `clear` therefore failed every correctly
+        # assembled stack, and said "0 pair(s) of parts intersect" while doing
+        # it. A near miss is worth reporting and is not a reason to refuse.
+        clashes = int(result.get("interferences") or 0)
+        near = int(result.get("clearance_warnings") or 0)
+        if not env["ok"]:
+            failures = [f"Interference check failed: {env.get('error')}"]
+        elif clashes:
+            # Named, with the depth. "1 pair(s) intersect" is a fact the planner
+            # cannot act on: it does not say which two parts, or whether it is
+            # out by half a millimetre or by the whole thickness of a plate.
+            worst = sorted((p for p in (result.get("pairs") or [])
+                            if p.get("status") == "interference"),
+                           key=lambda p: -(p.get("penetration_mm") or 0))[:3]
+            detail = "; ".join(
+                f"{p.get('a')} into {p.get('b')} by {p.get('penetration_mm', 0):.1f} mm"
+                for p in worst)
+            failures = [f"{clashes} pair(s) of parts occupy the same space"
+                        + (f": {detail}" if detail else "")
+                        + ". Adjust the mate that positions them — its faces, "
+                          "axis or offset_mm — rather than deleting it."]
+        else:
+            failures = []
+        passed = ("No parts intersect" if not near else
+                  f"No parts intersect ({near} pair(s) touching or within the "
+                  f"clearance threshold, which a mate normally causes)")
+    else:
+        failures = [] if env["ok"] and result.get("valid") else [
+            "Geometry validation failed: " + str(result.get("failed") or env.get("error"))]
+        passed = "Geometry check passed"
+    note({"kind": "verification", "op": op, "ok": not failures,
+          "result": {"summary": passed if not failures else failures[0]}})
+    return failures
+
+
 def run(
-    doc_id: str,
+    subject_id: str,
     goal: str,
     max_steps: int = MAX_STEPS_DEFAULT,
     planner: Optional[Planner] = None,
@@ -112,8 +222,13 @@ def run(
     on_step: Optional[Callable[[dict], None]] = None,
     cancelled: Optional[Callable[[], bool]] = None,
     max_seconds: float = 600,
+    subject: str = "document",
 ) -> dict:
     """Run the agentic loop until the planner says done or the step budget runs out.
+
+    ``subject`` is ``"document"`` (a part) or ``"assembly"``, and it decides
+    three things: what ``subject_id`` names, which half of the operation catalog
+    the planner is offered, and what checking your work means at the end.
 
     ``planner(goal, transcript, doc_summary) -> decision`` is injectable for tests.
     ``meter()`` is called before each *mutating* op (raise to stop on quota).
@@ -123,8 +238,8 @@ def run(
     """
     from app.services import trajectories
 
-    planner = planner or _plan_next
-    max_steps = max(1, min(int(max_steps), MAX_STEPS_CAP))
+    planner = planner or (lambda g, t, summary: _plan_next(g, t, summary, subject=subject))
+    max_steps = max(1, min(int(max_steps), step_cap(subject)))
     transcript: List[dict] = []
     final_summary: Optional[str] = None
     deadline = time.monotonic() + max(1, min(max_seconds, 1800))
@@ -137,9 +252,9 @@ def run(
     # A copilot run is the archetypal training example: a natural-language goal
     # and the operation sequence that satisfied it. It was previously discarded
     # when the process ended. `execute` records each step into this trajectory.
-    doc0 = document_service.get_document(doc_id)
+    doc0 = _fetch(subject, subject_id)
     trajectory_id = trajectories.start(
-        doc_id, goal=goal, kind="copilot", actor="copilot",
+        subject_id, goal=goal, kind="copilot", actor="copilot",
         owner_id=getattr(doc0, "owner_id", None))
 
     def note(entry: dict) -> None:
@@ -158,12 +273,12 @@ def run(
         if time.monotonic() >= deadline:
             stop_reason = "timeout"
             break
-        doc = document_service.get_document(doc_id)
+        doc = _fetch(subject, subject_id)
         if doc is None:
-            stop_reason = "missing_document"
+            stop_reason = f"missing_{subject}"
             break
         try:
-            decision = planner(goal, transcript, _doc_summary(doc))
+            decision = planner(goal, transcript, _summary(subject, doc))
         except Exception as exc:  # LLM / parse failure — surface and stop
             _LOGGER.warning("copilot planner failed: %s", exc)
             note({"kind": "error", "error": f"planner error: {exc}"})
@@ -187,14 +302,10 @@ def run(
             break
         if decision.get("done"):
             final_summary = (decision or {}).get("summary") if isinstance(decision, dict) else None
-            unmet = _unmet_requirements(doc_id)
+            unmet = (_unmet_requirements(subject_id) if subject == "document"
+                     else _unmated_components(subject_id))
             if mutated:
-                verification = cad_operations.execute("check_geometry", doc_id, {}, include_state=False)
-                result = verification.get("result") or {}
-                geometry_failures = [] if verification["ok"] and result.get("valid") else [
-                    "Geometry validation failed: " + str(result.get("failed") or verification.get("error"))]
-                note({"kind": "verification", "op": "check_geometry", "ok": not geometry_failures,
-                      "result": {"summary": "Geometry check passed" if not geometry_failures else geometry_failures[0]}})
+                geometry_failures = _verify(subject, subject_id, note)
                 unmet += geometry_failures
             if unmet:
                 # Allow one repair attempt, then require a fresh passing check.
@@ -202,7 +313,12 @@ def run(
                 note({"kind": "verification", "op": "completion_check", "args": {}, "ok": False,
                       "rationale": "self-check before finishing",
                       "result": {"unmet": unmet, "summary": "; ".join(unmet)}})
-                if verification_attempts >= 2:
+                # One repair attempt is right for an edit to one body. A build
+                # that is assembling six parts legitimately finds work left on
+                # several passes — mate the part it just made, then the next —
+                # and cutting it off after one makes a working loop look like a
+                # loop that gave up.
+                if verification_attempts >= (5 if subject == "assembly" else 2):
                     stop_reason = "verification_failed"
                     break
                 continue
@@ -226,6 +342,18 @@ def run(
             failure_counts[signature] = failure_counts.get(signature, 0) + 1
             continue
 
+        # An operation for the *other* kind of id would be dispatched against
+        # this one, and `execute` would refuse it as a missing document — a
+        # confusing answer to a real mistake. Say which it is instead.
+        if cad_operations.OPERATIONS[op].subject != subject:
+            note({"kind": "op", "op": op, "args": args, "ok": False,
+                  "error": f"'{op}' operates on a "
+                           f"{cad_operations.OPERATIONS[op].subject}, not on the "
+                           f"{subject} this run is editing",
+                  "rationale": rationale})
+            failure_counts[signature] = failure_counts.get(signature, 0) + 1
+            continue
+
         if cad_operations.OPERATIONS[op].kind == "mutate" and meter is not None:
             try:
                 meter()
@@ -234,7 +362,13 @@ def run(
                 stop_reason = "permission_denied"
                 break
 
-        env = cad_operations.execute(op, doc_id, args, rationale=rationale or "")
+        # Scoped around the dispatch only: `build_part` runs a whole part
+        # copilot inside this one step, and that sub-run charges the same meter.
+        meter_token = _ACTIVE_METER.set(meter)
+        try:
+            env = cad_operations.execute(op, subject_id, args, rationale=rationale or "")
+        finally:
+            _ACTIVE_METER.reset(meter_token)
         entry = {"kind": "op", "op": op, "args": args, "ok": env["ok"],
                  "rationale": rationale, "result": _trim_result(env.get("result") or {})}
         if env.get("error"):
@@ -253,7 +387,7 @@ def run(
             entry["delta"] = env["delta"]
         note(entry)
 
-    doc = document_service.get_document(doc_id)
+    doc = _fetch(subject, subject_id)
     if final_summary is None:
         n_ok = sum(1 for s in transcript if s.get("kind") == "op" and s.get("ok"))
         final_summary = f"Ran {n_ok} operation(s) toward: {goal}"
@@ -261,7 +395,8 @@ def run(
     # requirements outstanding is a different outcome from one that finished,
     # and a summary that reads the same for both is the silent success this
     # whole surface is built to avoid.
-    outstanding = _unmet_requirements(doc_id) + geometry_failures
+    outstanding = ((_unmet_requirements(subject_id) if subject == "document"
+                    else _unmated_components(subject_id)) + geometry_failures)
     if outstanding:
         finished = False
         if stop_reason == "done":
@@ -273,13 +408,42 @@ def run(
         final_summary = f"Stopped ({stop_reason}). Goal not confirmed complete. {final_summary}"
     trajectories.finish(trajectory_id, outcome=stop_reason,
                         summary=final_summary)
-    return {"steps": transcript, "document": doc, "summary": final_summary,
+    return {"steps": transcript,
+            # Under its own name rather than one polymorphic key: a caller that
+            # has to infer which kind it was handed from the shape of the value
+            # will eventually infer wrong.
+            "document": doc if subject == "document" else None,
+            "assembly": doc if subject == "assembly" else None,
+            "summary": final_summary,
             # Whether the planner *said* it was done, rather than inferred from
             # the step count — a run that used its last step to finish and one
             # that was cut off there are different outcomes.
             "finished": finished, "unmet": outstanding,
             "stop_reason": stop_reason,
             "trajectory_id": trajectory_id}
+
+
+def _unmated_components(asm_id: str) -> List[str]:
+    """Components no mate holds — which is what stops a build calling itself done.
+
+    A part that was inserted and never constrained sits wherever it was dropped,
+    usually at the origin and usually inside something else. In a finished
+    assembly every component is named by at least one mate, including the one
+    held fixed: it is a mate's `base`. So the rule needs no "except the first"
+    exception, and a single-component assembly has nothing to constrain against.
+    """
+    from app.services import assembly_service
+
+    asm = assembly_service.get_assembly(asm_id)
+    if asm is None or len(asm.components) < 2:
+        return []
+    held = {m.base for m in asm.mates} | {m.moved for m in asm.mates}
+    loose = [c for c in asm.components if c.id not in held]
+    if not loose:
+        return []
+    names = ", ".join((c.name or c.id) for c in loose[:6])
+    return [f"{len(loose)} component(s) are not held by any mate: {names}. "
+            f"Add a mate for each, or say why it is meant to float."]
 
 
 def _unmet_requirements(doc_id: str) -> List[str]:
