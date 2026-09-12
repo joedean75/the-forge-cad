@@ -2,13 +2,13 @@
 
 Center of gravity, volume, mass, surface area, and the inertia tensor about the
 COG — the quantitative read engineers check constantly — computed from the
-evaluated triangle mesh via the divergence-theorem (signed-tetrahedron) method,
+exact B-rep when available, otherwise from the evaluated triangle mesh,
 scaled by the document's assigned material density.
 """
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict
 
 import numpy as np
 
@@ -18,7 +18,8 @@ from app.services import document_service, materials
 def _tri_mesh(doc_id: str):
     from app.cad_kernel.kernel import Kernel
 
-    solid = document_service.get_solid(doc_id)
+    doc = document_service.get_document(doc_id)
+    solid = document_service.get_solid(doc_id, resolution=doc.derived.resolution or 128)
     mesh = Kernel.tessellate(solid)
     return np.asarray(mesh.vertices, dtype=float), np.asarray(mesh.faces, dtype=int)
 
@@ -33,6 +34,10 @@ def mass_properties(doc_id: str) -> Dict:
     doc = document_service.get_document(doc_id)
     if doc is None:
         raise KeyError(doc_id)
+    solid = document_service.get_solid(doc_id, resolution=doc.derived.resolution or 128)
+    exact = solid.attrs.get("exact_measurements")
+    if exact is not None:
+        return _exact_report(doc, exact)
     verts, faces = _tri_mesh(doc_id)
     if len(faces) == 0:
         raise ValueError("The part has no solid geometry to measure.")
@@ -113,16 +118,6 @@ def mass_properties(doc_id: str) -> Dict:
     inertia_cog = inertia_o - shift
     _ = d2  # (kept for clarity of the parallel-axis relation)
 
-    # Where the body has an exact form, take volume, area and centre of mass from
-    # the geometry rather than from its triangulation. The mesh figures are only
-    # as good as the tessellation — a bored plate came out ~0.001% heavy — and on
-    # a part being quoted or balanced that is a number someone will rely on.
-    exact = _exact_properties(doc)
-    if exact is not None:
-        volume, surface_area = exact["volume"], exact["area"]
-        centroid = np.asarray(exact["center_of_mass"], dtype=float)
-        mass = volume * density
-
     mat = materials.get_material(doc.material_id)
     return {
         # Stated rather than inferred, for the same reason
@@ -139,7 +134,7 @@ def mass_properties(doc_id: str) -> Dict:
         "inertia_kg_mm2": [[round(float(inertia_cog[i, j] * 1e6), 3) for j in range(3)] for i in range(3)],
         "bbox_mm": _bbox_mm(verts),
         # Whether these came from exact geometry or from a triangulation of it.
-        "exact": exact is not None,
+        "exact": False,
     }
 
 
@@ -170,21 +165,30 @@ def _sheet_properties(doc, verts: np.ndarray, faces: np.ndarray) -> Dict:
     }
 
 
-def _exact_properties(doc) -> Optional[Dict]:
-    """Volume, area and centre of mass straight from the B-rep, or None."""
-    from app.cad_kernel.evaluator import brep
-    from app.services import document_service
-
-    if not brep.AVAILABLE:
-        return None
-    try:
-        shape = document_service.get_exact_shape(doc.id)
-        if shape is None:
-            return None
-        return {"volume": brep.volume(shape), "area": brep.surface_area(shape),
-                "center_of_mass": brep.center_of_mass(shape)}
-    except Exception:  # noqa: BLE001 — exactness is a bonus, never a hard failure
-        return None
+def _exact_report(doc, measured: dict) -> Dict:
+    mat = materials.get_material(doc.material_id)
+    lo, hi = np.asarray(measured["bbox"]["min"]), np.asarray(measured["bbox"]["max"])
+    report = {
+        "kind": measured["kind"],
+        "material": {"id": mat.id, "name": mat.name, "density": mat.density},
+        "surface_area_cm2": round(measured["area"] * 1e4, 5),
+        "bbox_mm": _bbox_mm(np.array([lo, hi])),
+        "exact": True,
+    }
+    center_mm = [round(v * 1000, 5) for v in measured["center"]]
+    if measured["kind"] == "sheet":
+        report.update(centroid_mm=center_mm,
+                      note="This surface has no enclosed volume, mass or inertia. Thicken it to a solid to measure those.")
+    else:
+        density = materials.density_of(doc.material_id)
+        report.update(
+            volume_cm3=round(measured["volume"] * 1e6, 6),
+            mass_kg=round(measured["volume"] * density, 9),
+            center_of_mass_mm=center_mm,
+            inertia_kg_mm2=[[round(v * density * 1e6, 3) for v in row]
+                            for row in measured["inertia"]],
+        )
+    return report
 
 
 def _bbox_mm(verts: np.ndarray) -> Dict:

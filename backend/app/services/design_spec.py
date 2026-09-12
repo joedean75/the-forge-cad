@@ -293,7 +293,8 @@ def _context(doc) -> Dict[str, Any]:
         "body_kind": str(getattr(derived, "body_kind", "solid")),
         "material_id": doc.material_id,
         "nodes": list(walk_nodes(doc.feature_tree)),
-        "geometry": geometry_check.check_solid(document_service.get_solid(doc.id)),
+        "geometry": geometry_check.check_solid(document_service.get_solid(
+            doc.id, resolution=derived.resolution or 128)),
         "cylinders": None,
         "topology_error": "",
     }

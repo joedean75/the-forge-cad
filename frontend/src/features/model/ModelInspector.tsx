@@ -271,6 +271,7 @@ function MassPropertiesPanel() {
         <dl className="space-y-1 text-[10px] text-cad-text">
           <Row label="Body" value="sheet — no enclosed volume" />
           <Row label="Surface" value={`${mp.surface_area_cm2.toFixed(1)} cm²`} />
+          <Row label="Measurements" value={mp.exact ? 'Exact geometry' : 'Approximate mesh'} />
           <Row label="Centroid" value={mp.centroid_mm.map((v) => v.toFixed(1)).join(', ') + ' mm'} />
           <p className="text-[9px] text-cad-text/50 leading-snug pt-1">{mp.note}</p>
         </dl>
@@ -280,6 +281,7 @@ function MassPropertiesPanel() {
           <Row label="Mass" value={`${mp.mass_kg.toFixed(4)} kg`} />
           <Row label="Volume" value={`${mp.volume_cm3.toFixed(2)} cm³`} />
           <Row label="Surface" value={`${mp.surface_area_cm2.toFixed(1)} cm²`} />
+          <Row label="Measurements" value={mp.exact ? 'Exact geometry' : 'Approximate mesh'} />
           <Row label="COG" value={mp.center_of_mass_mm.map((v) => v.toFixed(1)).join(', ') + ' mm'} />
         </dl>
       )}
@@ -612,6 +614,7 @@ function FeatureFields() {
         <div className="pt-3 border-t border-cad-border">
           <h3 className="sec-head mb-2">Body</h3>
           <dl className="space-y-1 text-[10px] text-cad-text">
+            <Readout label="Measurements" value={doc.derived.measurement_basis === 'exact' ? 'Exact geometry' : doc.derived.measurement_basis === 'mesh' ? 'Approximate mesh' : 'Not evaluated'} />
             <Readout label="Mass" value={`${doc.derived.mass.toFixed(3)} kg`} />
             <Readout label="Volume" value={`${(doc.derived.volume * 1e6).toFixed(1)} cm³`} />
           </dl>

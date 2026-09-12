@@ -438,6 +438,7 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
         instrumentation.count(f"sampler.{sampler}")
         with instrumentation.span("eval.kernel"):
             solid = Kernel.evaluate_tree(tree, resolution=resolution)
+        sampler = solid.attrs.get("sampler", sampler)
         with instrumentation.span("eval.tessellate"):
             mesh = Kernel.tessellate(solid)
 
@@ -459,6 +460,13 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
                 min=Vector3(x=float(mn[0]), y=float(mn[1]), z=float(mn[2])),
                 max=Vector3(x=float(mx[0]), y=float(mx[1]), z=float(mx[2])),
             )
+
+        exact = solid.attrs.get("exact_measurements")
+        if exact is not None:
+            volume, area = exact["volume"], exact["area"]
+            lo, hi = exact["bbox"]["min"], exact["bbox"]["max"]
+            bbox = BBox(min=Vector3(x=lo[0], y=lo[1], z=lo[2]),
+                        max=Vector3(x=hi[0], y=hi[1], z=hi[2]))
 
         from app.services import materials
 
@@ -492,6 +500,7 @@ def evaluate_document(doc: DesignDocument, resolution: int = 128, persist: bool 
             area=round(area, 15),
             resolution=resolution,
             sampler=sampler,
+            measurement_basis="exact" if exact is not None else "mesh",
             mesh_hash=digest,
             numeric_tree=_numeric_tree(doc),
         )

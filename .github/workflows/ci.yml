@@ -102,6 +102,9 @@ jobs:
       - name: Lint
         working-directory: frontend
         run: npm run lint
+      - name: Frontend behavior tests
+        working-directory: frontend
+        run: npm test
       - name: Build (type-check gate)
         working-directory: frontend
         run: npm run build

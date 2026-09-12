@@ -1,8 +1,9 @@
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useLoader } from '@react-three/fiber'
 import { CameraControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei'
 import { ForgeMeshLoader } from '../util/forgeMesh'
-import { Boxes, Link2 } from 'lucide-react'
+import { DoubleSide } from 'three'
+import { Boxes, Link2, Maximize } from 'lucide-react'
 import { MoveHandles } from './MoveHandles'
 import type { AssemblyComponent, BBox, ComponentTransform, Vector3 } from '../../../shared/types'
 
@@ -10,8 +11,14 @@ type Vec3 = [number, number, number]
 const DEG = Math.PI / 180
 
 /** Shared part-space (metres) → display transform over the whole assembly envelope. */
-function useFit(bbox: BBox | null | undefined) {
+function useFit(assemblyId: string, bbox: BBox | null | undefined, nonce: number) {
+  const frozen = useRef<{ key: string; bbox: BBox } | null>(null)
+  const key = `${assemblyId}|${!!bbox}|${nonce}`
+  if (!bbox) frozen.current = null
+  if (bbox && frozen.current?.key !== key) frozen.current = { key, bbox }
+  const envelope = bbox ? frozen.current?.bbox : undefined
   return useMemo(() => {
+    const bbox = envelope
     if (!bbox) return null
     const sx = bbox.max.x - bbox.min.x
     const sy = bbox.max.y - bbox.min.y
@@ -21,7 +28,7 @@ function useFit(bbox: BBox | null | undefined) {
     const cy = (bbox.min.y + bbox.max.y) / 2
     const cz = (bbox.min.z + bbox.max.z) / 2
     return { s, toDisplay: (p: Vector3): Vec3 => [(p.x - cx) * s, (p.y - cy) * s, (p.z - cz) * s] }
-  }, [bbox])
+  }, [envelope])
 }
 
 function ComponentMesh({
@@ -78,6 +85,7 @@ function ComponentMesh({
 }
 
 export function AssemblyViewport({
+  assemblyId,
   components,
   bbox,
   selectedId,
@@ -86,6 +94,7 @@ export function AssemblyViewport({
   onSelect,
   onMove,
 }: {
+  assemblyId: string
   components: AssemblyComponent[]
   bbox: BBox | null | undefined
   selectedId: string | null
@@ -95,7 +104,8 @@ export function AssemblyViewport({
   onSelect: (id: string | null) => void
   onMove: (componentId: string, transform: ComponentTransform) => void
 }) {
-  const fit = useFit(bbox)
+  const [fitNonce, setFitNonce] = useState(0)
+  const fit = useFit(assemblyId, bbox, fitNonce)
   const [orbit, setOrbit] = useState(true)
   // Where the dragged component is *right now*, in assembly metres. Held here
   // rather than pushed at the store because nothing outside this viewport can
@@ -112,24 +122,37 @@ export function AssemblyViewport({
   const draggable = selected && !drivenSelection ? selected : null
   // CameraControls doesn't auto-frame — explicitly frame the origin-normalized
   // assembly once components are placed, so it isn't an empty viewport on open.
-  const controlsRef = useRef<{ setLookAt: (px: number, py: number, pz: number, tx: number, ty: number, tz: number, t?: boolean) => void } | null>(null)
-  useEffect(() => {
-    if (fit && placed.length) controlsRef.current?.setLookAt(2.6, 1.9, 3.4, 0, 0, 0, false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fit, placed.length])
+  const controlsRef = useRef<{ updateCameraUp: () => void; setLookAt: (px: number, py: number, pz: number, tx: number, ty: number, tz: number, t?: boolean) => void } | null>(null)
+  const framedFor = useRef<string | null>(null)
+  const frameModel = useCallback(() => {
+    const controls = controlsRef.current
+    if (!controls) return
+    controls.updateCameraUp()
+    const key = `${assemblyId}|${fitNonce}`
+    if (!fit) {
+      framedFor.current = null
+      return
+    }
+    if (framedFor.current === key) return
+    controls.setLookAt(2.6, -3.4, 1.9, 0, 0, 0, false)
+    framedFor.current = key
+  }, [assemblyId, fitNonce, fit])
+  useEffect(frameModel, [frameModel])
 
   return (
     <div
       className="relative flex-1 min-w-0"
       style={{ background: 'radial-gradient(120% 120% at 50% 20%, #1a1f27 0%, var(--color-cad-bg) 55%, #0e1116 100%)' }}
     >
-      <Canvas camera={{ position: [3, 2, 4], fov: 45, near: 0.02, far: 100 }} shadows gl={{ logarithmicDepthBuffer: true }} onPointerMissed={() => onSelect(null)}>
+      <Canvas camera={{ position: [2.6, -3.4, 1.9], up: [0, 0, 1], fov: 45, near: 0.02, far: 100 }} shadows gl={{ logarithmicDepthBuffer: true }} onPointerMissed={() => onSelect(null)}>
         <Suspense fallback={null}>
           <ambientLight intensity={0.6} />
           <directionalLight position={[5, 10, 7]} intensity={1.2} castShadow />
           <directionalLight position={[-5, -5, -5]} intensity={0.4} />
           <Grid
-            position={[0, -1, 0]}
+            position={[0, 0, -1]}
+            rotation={[Math.PI / 2, 0, 0]}
+            side={DoubleSide}
             args={[20, 20]}
             cellSize={0.5}
             cellThickness={0.5}
@@ -178,7 +201,11 @@ export function AssemblyViewport({
             />
           )}
           <CameraControls
-            ref={controlsRef as never}
+            ref={(controls) => {
+              controlsRef.current = controls
+              // Suspense may delay controls until after the framing effect ran.
+              if (controls) frameModel()
+            }}
             enabled={orbit}
             makeDefault
             minDistance={0.08}
@@ -192,6 +219,12 @@ export function AssemblyViewport({
           </GizmoHelper>
         </Suspense>
       </Canvas>
+
+      <button type="button" onClick={() => setFitNonce((n) => n + 1)}
+        disabled={!fit} title="Fit assembly to view" aria-label="Fit assembly to view"
+        className="absolute top-3 right-3 flex items-center gap-1.5 rounded-sm border border-cad-border bg-cad-panel/90 px-2.5 py-1.5 text-[11px] text-cad-text-heading disabled:opacity-40">
+        <Maximize size={13} /> Fit
+      </button>
 
       {placed.length === 0 && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none">

@@ -200,13 +200,15 @@ export interface DerivedCache {
    *  existed holds a solid, and a reader taking `undefined` for "unknown" would
    *  have to decide what to do about it on every path. */
   body_kind: BodyKind
-  /** Surface area of the tessellation, m². The number that stands in for volume
+  /** Surface area in m², from the declared measurement basis. Stands in for volume
    *  on a sheet, and worth having on a solid too. */
   area: number
   /** The conditions the geometry was produced under. Two meshes are only
    *  comparable when these match. */
   resolution?: number
   sampler?: 'brep' | 'native' | 'numpy'
+  /** Source of bbox, volume, area and geometric mass, independent of display quality. */
+  measurement_basis?: 'exact' | 'mesh' | null
   sim?: SimulationResult
   dfm?: DfmReport
   cam?: CamResult
@@ -782,6 +784,7 @@ export type BodyKind = 'solid' | 'sheet'
  *  switch on `kind`, never on whether `mass_kg` is present. */
 export interface MassProperties {
   kind: 'solid'
+  exact: boolean
   material: { id: string; name: string; density: number }
   volume_cm3: number
   mass_kg: number

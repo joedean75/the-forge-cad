@@ -163,7 +163,7 @@ const TAB_TITLE: Record<InspectorTab, string> = {
 
 export function AssemblyScreen() {
   const { assembly, busy, error, selectedComponentId, insertPart, removeComponent, setTransform,
-    rename, select, markStale, refresh, drivenComponentIds } = useAssemblyStore()
+    rename, select, markStale, refresh, stale, refreshing, drivenComponentIds } = useAssemblyStore()
   const { openDocument, newBlank } = useDocumentStore()
   const account = useAuthStore((s) => s.account)
   const go = useNavStore((s) => s.go)
@@ -342,6 +342,7 @@ export function AssemblyScreen() {
         {/* viewport */}
         <div className="relative flex flex-1 min-w-0">
           <AssemblyViewport
+            assemblyId={assembly.id}
             components={assembly.components}
             bbox={assembly.bbox}
             selectedId={selectedComponentId}
@@ -350,6 +351,13 @@ export function AssemblyScreen() {
             onSelect={select}
             onMove={setTransform}
           />
+          {stale && (
+            <div role="status" className="absolute top-3 left-3 max-w-[70%] flex items-center gap-3 rounded-sm border border-cad-warning/40 bg-cad-panel/95 px-3 py-2 text-[11px] text-cad-warning">
+              <span>{refreshing ? 'Refreshing assembly…' : 'Parts may be out of date.'}</span>
+              <button type="button" disabled={refreshing} onClick={() => void refresh()}
+                className="underline disabled:opacity-50">Retry</button>
+            </div>
+          )}
           {/* The inspector is where a failure is reported, so collapsing it
               would silently swallow one. Shown over the viewport instead —
               the editor solves the same problem with `FailureNotice`, for the
