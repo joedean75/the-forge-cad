@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "benchmark:highlight": "node --expose-gc benchmarks/face-highlighting.mjs"
   },
   "dependencies": {
     "@fontsource/archivo": "^5.3.0",

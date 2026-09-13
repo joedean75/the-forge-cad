@@ -105,6 +105,9 @@ jobs:
       - name: Frontend behavior tests
         working-directory: frontend
         run: npm test
+      - name: Face highlight benchmark (timings reported, not gated)
+        working-directory: frontend
+        run: npm run benchmark:highlight
       - name: Build (type-check gate)
         working-directory: frontend
         run: npm run build

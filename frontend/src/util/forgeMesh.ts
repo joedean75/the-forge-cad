@@ -172,11 +172,32 @@ export function faceOfTriangle(
   return ids[faceIndex] ?? null
 }
 
+// Render geometry carries immutable triangle labels. Keep the lookup outside
+// userData so Three.js clones do not serialize it, and let GC reclaim it with
+// the label array. Clones with their own label arrays build their own lookup.
+const trianglesByFace = new WeakMap<(string | null)[], Map<string, number[]>>()
+
+function faceTriangles(labels: (string | null)[]): Map<string, number[]> {
+  let lookup = trianglesByFace.get(labels)
+  if (!lookup) {
+    lookup = new Map()
+    for (let triangle = 0; triangle < labels.length; triangle++) {
+      const id = labels[triangle]
+      if (!id) continue
+      let triangles = lookup.get(id)
+      if (!triangles) { triangles = []; lookup.set(id, triangles) }
+      triangles.push(triangle)
+    }
+    trianglesByFace.set(labels, lookup)
+  }
+  return lookup
+}
+
 /** A geometry of only the triangles belonging to `ids` — the highlight overlay.
  *
  *  Built from the index buffer of the mesh already on the GPU rather than
- *  fetched: the labels are in the browser, so a hover costs a filter over the
- *  triangle array and no network at all. */
+ *  fetched. The first highlight indexes the immutable labels once; later hovers
+ *  visit only the requested faces, with no network or whole-body scan. */
 export function facesSubGeometry(
   geometry: THREE.BufferGeometry | undefined,
   ids: Iterable<string>,
@@ -187,13 +208,21 @@ export function facesSubGeometry(
   const wanted = new Set(ids)
   if (!wanted.size) return null
 
+  const lookup = faceTriangles(labels)
+  const triangles: number[] = []
+  for (const id of wanted) {
+    const face = lookup.get(id)
+    if (face) for (const triangle of face) triangles.push(triangle)
+  }
+  // Preserve body triangle order for multi-face selections, independent of the
+  // order the user selected them. Single-face lists are already ordered.
+  if (wanted.size > 1) triangles.sort((a, b) => a - b)
+
   const kept: number[] = []
   const positions: number[] = []
   const remap = new Map<number, number>()
   const source = geometry.getAttribute('position')
-  for (let t = 0; t < labels.length; t++) {
-    const id = labels[t]
-    if (!id || !wanted.has(id)) continue
+  for (const t of triangles) {
     for (let corner = 0; corner < 3; corner++) {
       const original = index.getX(t * 3 + corner)
       let local = remap.get(original)
