@@ -33,6 +33,7 @@ import type {
   BomReport,
   InterferenceReport,
   AssemblyPromptJob,
+  AssemblyImportResult,
   AssemblySummary,
   ComponentTransform,
   CopilotResult,
@@ -695,6 +696,24 @@ export const api = {
   },
   createAssembly: (name?: string) =>
     fetchJson<AssemblyDoc>('/assemblies', { method: 'POST', body: JSON.stringify({ name }) }),
+  /** STEP assembly import: one exact part per distinct part, one placed
+   *  component per instance. */
+  importAssembly: async (file: File, opts?: { units?: string; name?: string }) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (opts?.units) form.append('units', opts.units)
+    if (opts?.name) form.append('name', opts.name)
+    const res = await fetch('/api/assemblies/import', { method: 'POST', body: form, headers: authHeaders() })
+    if (!res.ok) {
+      let detail: unknown = res.statusText
+      try { detail = (await res.json())?.detail ?? detail } catch { /* non-JSON */ }
+      // The body-size guard answers with an object, not a string.
+      const message = typeof detail === 'string' ? detail
+        : (detail as { message?: string } | null)?.message ?? 'Assembly import failed'
+      throw new Error(message)
+    }
+    return res.json() as Promise<AssemblyImportResult>
+  },
   getAssemblyDoc: (id: string) => fetchJson<AssemblyDoc>(`/assemblies/${id}`),
   renameAssembly: (id: string, name: string) =>
     fetchJson<AssemblyDoc>(`/assemblies/${id}`, { method: 'PUT', body: JSON.stringify({ name }) }),

@@ -143,6 +143,29 @@ def create_assembly(name: Optional[str] = None, owner_id: Optional[str] = None) 
     return _resolve(asm)
 
 
+def create_assembly_with_components(name: Optional[str], owner_id: Optional[str],
+                                    placements) -> AssemblyDoc:
+    """A new assembly holding every ``(part document, transform)`` given, persisted once.
+
+    For an import. Looping `add_component` and `update_component` would resolve
+    the whole assembly after every call, re-reading every part each time, so a
+    thirty-part file would cost hundreds of reads for one result. The access
+    rule `add_component` applies is applied here too, for the same reason.
+    """
+    now = _now()
+    components = []
+    for part, transform in placements:
+        if owner_id and not document_service.can_access(part, owner_id):
+            raise ValueError("part not found")
+        components.append(AssemblyComponent(
+            id=str(uuid.uuid4()), part_id=part.id, name=part.name, transform=transform))
+    asm = AssemblyDoc(id=str(uuid.uuid4()), name=name or "Untitled Assembly",
+                      owner_id=owner_id, components=components,
+                      created_at=now, updated_at=now)
+    _persist(asm)
+    return _resolve(asm)
+
+
 def get_assembly(asm_id: str) -> Optional[AssemblyDoc]:
     asm = _load(asm_id)
     return _resolve(asm) if asm else None

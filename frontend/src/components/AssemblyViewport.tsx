@@ -59,7 +59,12 @@ function ComponentMesh({
     <mesh
       position={position}
       scale={scale}
-      rotation={rotation}
+      // 'ZYX' because the server composes a placement as Rz . Ry . Rx
+      // (`sdf._euler_matrix`), and three.js's default 'XYZ' is Rx . Ry . Rz. The
+      // two agree about a turn on one axis and disagree about any compound one,
+      // so an imported part turned on two axes drew somewhere the interference
+      // check and the mass roll-up did not think it was.
+      rotation={[rotation[0], rotation[1], rotation[2], 'ZYX']}
       onClick={(e) => {
         e.stopPropagation()
         onSelect()

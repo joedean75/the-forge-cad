@@ -62,6 +62,7 @@ UPLOAD_PATHS: Tuple[str, ...] = (
     "/api/documents/import",
     "/api/documents/from-image",
     "/api/documents/meta/supplier-parts",
+    "/api/assemblies/import",
 )
 
 

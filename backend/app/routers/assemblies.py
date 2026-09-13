@@ -7,10 +7,11 @@ access gets a 404 (existence not leaked).
 
 import logging
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from app.models.schemas import (
     AddComponentRequest,
@@ -28,6 +29,8 @@ router = APIRouter(prefix="/api/assemblies", tags=["assemblies"])
 
 # Text-to-assembly is an LLM job that then evaluates every part it invents.
 _job_limit = rate_limit(max_hits=20, window_seconds=300.0)
+# The same budget part import has: each upload reads and meshes whole files.
+_upload_limit = rate_limit(max_hits=30, window_seconds=300.0)
 
 
 def owned_assembly(assembly_id: str, acc: accounts.Account = Depends(current_account)) -> AssemblyDoc:
@@ -113,6 +116,48 @@ def assembly_from_prompt(
     _prune_jobs()
     background_tasks.add_task(_run_prompt_job, job, body.prompt.strip(), body.resolution, acc.id)
     return AssemblyPromptJob(job_id=job["id"], status=job["status"], progress=job["progress"])
+
+
+class AssemblyImportResult(BaseModel):
+    assembly: AssemblyDoc
+    #: False when the file had no assembly structure and each solid became a
+    #: component where the file put it. Said, because it was inferred.
+    structured: bool
+    units: str
+    parts_created: int
+    instances: int
+    #: Parts created as mirror images, because a placement cannot reflect.
+    mirrored: int = 0
+    #: What did not become a component, with why, rather than dropped silently.
+    skipped: List[Dict[str, Any]] = []
+
+
+@router.post("/import", response_model=AssemblyImportResult)
+async def import_assembly(
+    _rl: None = Depends(_upload_limit),
+    file: UploadFile = File(...),
+    name: Optional[str] = Form(None),
+    units: str = Form("auto"),
+    acc: accounts.Account = Depends(current_account),
+):
+    """A STEP assembly → one exact part per distinct part, one component per instance.
+
+    Run in the thread pool: a large assembly is many OCC reads and meshes, and
+    doing that on the event loop would stall every other request meanwhile.
+    """
+    from app.services import import_service
+
+    data = await file.read()
+    try:
+        assembly, report = await run_in_threadpool(
+            import_service.import_assembly, file.filename or "assembly.step", data,
+            name=name, units=units, owner_id=acc.id)
+    except import_service.ImportError_ as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception:
+        logging.getLogger(__name__).exception("assembly import failed")
+        raise HTTPException(status_code=400, detail="Could not import this assembly")
+    return AssemblyImportResult(assembly=assembly, **report)
 
 
 @router.get("/from-prompt/{job_id}", response_model=AssemblyPromptJob)

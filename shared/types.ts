@@ -1010,6 +1010,20 @@ export interface AssemblyPromptJob {
   remedy?: string | null
 }
 
+/** What `POST /api/assemblies/import` made of a STEP file. */
+export interface AssemblyImportResult {
+  assembly: AssemblyDoc
+  /** False when the file had no assembly structure, so each solid became a
+   *  component where the file put it. */
+  structured: boolean
+  units: string
+  parts_created: number
+  instances: number
+  /** Parts created as mirror images, because a placement cannot reflect. */
+  mirrored: number
+  skipped: { name: string; reason: string }[]
+}
+
 export interface ComponentTransform {
   translate: Vector3
   rotate_deg: Vector3

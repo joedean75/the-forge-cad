@@ -228,23 +228,39 @@ def unpack_density(cache: dict) -> np.ndarray:
     return bits[:n].astype(float).reshape(dims)
 
 
-def _exact_tree(data: bytes, base: str, stem: str, ext: str, units: str) -> dict:
-    """Read a STEP/IGES file as exact B-rep and wrap it in a feature tree."""
+def _brep_tree(shape, source: dict, label: str) -> dict:
+    """An exact shape wrapped in a one-feature tree."""
     from app.cad_kernel.evaluator import brep
 
-    shape, info = step_import.read_exact(data, ext, units=units)
     return {
         "version": "brep-v1",
         "root": {
             "type": "BrepBodyFeature",
             "id": "f1",
-            "name": f"Import · {stem}",
-            "params": {
-                "payload": brep.serialize(shape),
-                "source": dict(info, filename=base, format=ext, exact=True),
-            },
+            "name": f"Import · {label}",
+            "params": {"payload": brep.serialize(shape), "source": source},
         },
     }
+
+
+def _exact_tree(data: bytes, base: str, stem: str, ext: str, units: str) -> dict:
+    """Read a STEP/IGES file as exact B-rep and wrap it in a feature tree."""
+    shape, info = step_import.read_exact(data, ext, units=units)
+    return _brep_tree(shape, dict(info, filename=base, format=ext, exact=True), stem)
+
+
+def _create_imported(name: str, tree: dict, owner_id: Optional[str],
+                     resolution: int) -> DesignDocument:
+    """A new document whose body is `tree`, marked as imported."""
+    doc = document_service.create_document(name=name, owner_id=owner_id)
+    updated = document_service.update_document(
+        doc.id, feature_tree=tree, resolution=min(128, max(64, resolution))
+    )
+    if updated is None:  # pragma: no cover — we just created it
+        raise ImportError_("Document creation failed.")
+    updated.provenance = "imported"
+    document_service._persist(updated)
+    return updated
 
 
 def import_document(
@@ -312,12 +328,123 @@ def import_document(
             },
         }
 
-    doc = document_service.create_document(name=name or stem, owner_id=owner_id)
-    updated = document_service.update_document(
-        doc.id, feature_tree=tree, resolution=min(128, max(64, resolution))
-    )
-    if updated is None:  # pragma: no cover — we just created it
-        raise ImportError_("Document creation failed.")
-    updated.provenance = "imported"
-    document_service._persist(updated)
-    return updated
+    return _create_imported(name or stem, tree, owner_id, resolution)
+
+
+def _placement(matrix) -> Tuple[Optional["ComponentTransform"], Optional[str]]:
+    """A 4x4 proper placement as a component transform, or why it cannot be one.
+
+    Round-tripped through `_euler_matrix` before it is accepted: the Euler
+    convention is the one thing here that is wrong silently, with the part
+    landing somewhere plausible.
+    """
+    from app.cad_kernel.evaluator.sdf import _euler_matrix
+    from app.models.schemas import ComponentTransform, Vector3
+    from app.services.assembly_mates import _euler_degrees
+
+    m = np.asarray(matrix, dtype=float)
+    linear = m[:3, :3]
+    scale = abs(float(np.linalg.det(linear))) ** (1.0 / 3.0)
+    if scale <= 1e-12:
+        return None, "a placement that collapses the part to nothing"
+    rotation = linear / scale
+    if not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-6):
+        return None, ("a placement with non-uniform scale or shear, which a "
+                      "component's rotation, translation and scale cannot express")
+    rx, ry, rz = _euler_degrees(rotation)
+    if not np.allclose(_euler_matrix(rx, ry, rz), rotation, atol=1e-6):
+        return None, "a rotation that did not survive conversion to angles"
+    t = m[:3, 3]
+    return ComponentTransform(
+        translate=Vector3(x=float(t[0]), y=float(t[1]), z=float(t[2])),
+        rotate_deg=Vector3(x=round(rx, 9) + 0.0, y=round(ry, 9) + 0.0, z=round(rz, 9) + 0.0),
+        scale=1.0 if abs(scale - 1.0) < 1e-9 else scale,
+    ), None
+
+
+def import_assembly(
+    filename: str,
+    data: bytes,
+    name: Optional[str] = None,
+    units: str = "auto",
+    owner_id: Optional[str] = None,
+    resolution: int = DEFAULT_RESOLUTION,
+):
+    """Create an assembly from a STEP file's product structure.
+
+    One exact part document per distinct part and one placed component per
+    instance, so two copies of a pin are one part with qty 2. Returns
+    ``(assembly, report)``. STEP only: IGES and mesh formats carry no assembly
+    structure, and a file OCC cannot read is refused with its reason rather than
+    voxelised, because a voxel blob has no parts to place.
+    """
+    from app.services import assembly_service
+
+    base = filename.rsplit("/", 1)[-1]
+    stem = base.rsplit(".", 1)[0] if "." in base else base
+    ext = base.rsplit(".", 1)[-1].lower() if "." in base else ""
+
+    if ext not in step_import.STEP_FORMATS:
+        raise ImportError_(
+            "Assembly import reads the product structure in a STEP file (.step or "
+            ".stp). IGES and mesh files carry no assembly structure; import them "
+            "as a part instead.")
+    cap = max_bytes_for(ext)
+    if len(data) > cap:
+        raise ImportError_(
+            f"File too large ({len(data) // (1024 * 1024)} MB > {cap // (1024 * 1024)} MB).")
+    if not step_import.available():
+        raise ImportError_("Assembly import needs OpenCascade (pip install cadquery-ocp).")
+
+    try:
+        read = step_import.read_assembly(data, units=units)
+    except step_import.ExactImportError as exc:
+        raise ImportError_(str(exc))
+    except Exception as exc:  # OCC can fail in ways it does not name well
+        raise ImportError_(f"STEP assembly import failed: {exc}")
+
+    names = {p["key"]: p["name"] for p in read["parts"]}
+    skipped = list(read["skipped"])
+    placements = []
+    for instance in read["instances"]:
+        transform, reason = _placement(instance["matrix"])
+        if transform is None:
+            skipped.append({"name": names[instance["part"]], "reason": reason})
+            continue
+        placements.append((instance["part"], transform))
+    if not placements:
+        detail = "; ".join(f"{s['name']}: {s['reason']}" for s in skipped[:5])
+        raise ImportError_("No part in this file could be placed" +
+                           (f" ({detail})." if detail else "."))
+
+    used = {key for key, _ in placements}
+    created = {}
+    try:
+        for part in read["parts"]:
+            if part["key"] not in used:
+                continue
+            source = dict(part["info"], filename=base, format=ext, exact=True,
+                          assembly_file=base, part=part["name"])
+            created[part["key"]] = _create_imported(
+                part["name"], _brep_tree(part["shape"], source, part["name"]),
+                owner_id, resolution)
+        assembly = assembly_service.create_assembly_with_components(
+            name or read["name"] or stem, owner_id,
+            [(created[key], transform) for key, transform in placements])
+    except Exception:
+        # All or nothing: half an assembly's parts left in the library, with no
+        # assembly placing them, is clutter nobody asked for.
+        for doc in created.values():
+            document_service.delete_document(doc.id)
+        raise
+
+    report = {
+        "structured": read["structured"],
+        "units": read["units"],
+        "parts_created": len(created),
+        "instances": len(placements),
+        "mirrored": sum(1 for p in read["parts"]
+                        if p["key"] in used and p["info"].get("mirrored")),
+        "skipped": skipped,
+    }
+    return assembly, report

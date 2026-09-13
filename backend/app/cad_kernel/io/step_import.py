@@ -278,3 +278,261 @@ def read_exact(data: bytes, fmt: str, units: str = "auto") -> Tuple[Any, Dict[st
         "volume_mm3": round(enclosed * 1e9, 6),
     }
     return shape, info
+
+
+# ---------------------------------------------------------------------------
+# Assemblies: the product structure a STEP file carries, not just its bodies
+# ---------------------------------------------------------------------------
+
+#: Refused past these before a single document is created. Every distinct part
+#: becomes a document that is evaluated and meshed on import, and the route is
+#: reachable by anyone who can sign in.
+MAX_ASSEMBLY_PARTS = 200
+MAX_ASSEMBLY_INSTANCES = 1000
+_MAX_ASSEMBLY_DEPTH = 32
+
+
+def _mirror_z(shape):
+    """The shape reflected through its own XY plane."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+    from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf
+
+    trsf = gp_Trsf()
+    trsf.SetMirror(gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)))
+    return BRepBuilderAPI_Transform(shape, trsf, True).Shape()
+
+
+def _location_matrix(location):
+    """A `TopLoc_Location` as a 4x4 numpy matrix. `gp_Trsf.Value` includes scale."""
+    import numpy as np
+
+    t = location.Transformation()
+    return np.array([[t.Value(i, j) for j in (1, 2, 3, 4)] for i in (1, 2, 3)]
+                    + [[0.0, 0.0, 0.0, 1.0]])
+
+
+def unmirror(matrix):
+    """Split a placement into (proper placement, mirrored?).
+
+    A component placement is a rotation, a translation and a positive scale, and
+    none of those can express a reflection. Decomposing a mirrored matrix anyway
+    yields a plausible rotation of the *unmirrored* part — a left-hand bracket
+    placed as a right-hand one, with nothing to say so. So the reflection is
+    moved into the part: ``M = M' . diag(1, 1, -1)``, where ``M'`` is proper and
+    the part is mirrored through its own XY plane. A mirrored bracket is also a
+    different part to order, which is what the BOM should then say.
+    """
+    import numpy as np
+
+    if np.linalg.det(matrix[:3, :3]) >= 0:
+        return matrix, False
+    return matrix @ np.diag([1.0, 1.0, -1.0, 1.0]), True
+
+
+def read_assembly(data: bytes, units: str = "auto") -> Dict[str, Any]:
+    """Read a STEP file's product structure: distinct parts and placed instances.
+
+    Returns ``{name, structured, units, parts, instances, skipped}``:
+
+    - ``parts``: ``[{key, name, shape, info}]``, one per distinct part. Two
+      instances of one part in the file share a key, which is what lets the
+      importer make one document and the BOM say qty 2 rather than two lines.
+    - ``instances``: ``[{part, matrix}]``, each a 4x4 placement in metres with
+      every enclosing sub-assembly's location already composed in, because an
+      assembly here is flat.
+    - ``structured``: False when the file had no assembly structure at all —
+      many exporters flatten to one compound — in which case each solid is a
+      part placed where the file put it. Reported, because it is inferred.
+    - ``skipped``: what could not become a part, with the reason, rather than
+      silently dropped.
+    """
+    if not brep.AVAILABLE:
+        raise ExactImportError(
+            "STEP assembly import needs OpenCascade (pip install cadquery-ocp).")
+
+    import numpy as np
+    from OCP.IFSelect import IFSelect_ReturnStatus
+    from OCP.Interface import Interface_Static
+    from OCP.STEPCAFControl import STEPCAFControl_Reader
+    from OCP.TCollection import TCollection_AsciiString, TCollection_ExtendedString
+    from OCP.TDataStd import TDataStd_Name
+    from OCP.TDF import TDF_Label, TDF_LabelSequence, TDF_Tool
+    from OCP.TDocStd import TDocStd_Document
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopLoc import TopLoc_Location
+    from OCP.XCAFApp import XCAFApp_Application
+    from OCP.XCAFDoc import XCAFDoc_DocumentTool
+
+    from app.cad_kernel.io.step_brep import _quiet
+
+    _quiet()
+    # **Millimetres here, and the opposite of `read_exact` on purpose.** The
+    # XCAF transfer scales into the *document's* length unit (pinned to metres
+    # below) relative to this global. Left at "M" — which `read_exact` sets, and
+    # which persists for the life of the process — the two compound and every
+    # part and placement comes back 1000x too large. "MM" is OCC's own base, so
+    # the document unit alone decides, whichever reader ran last.
+    Interface_Static.SetCVal_s("xstep.cascade.unit", "MM")
+
+    handle, path = tempfile.mkstemp(suffix=".step")
+    try:
+        with os.fdopen(handle, "wb") as fh:
+            fh.write(data)
+        reader = STEPCAFControl_Reader()
+        reader.SetNameMode(True)
+        if reader.ReadFile(path) != IFSelect_ReturnStatus.IFSelect_RetDone:
+            raise ExactImportError(
+                "OpenCascade could not parse this file — it may be truncated or "
+                "not really a STEP file.")
+        step = reader.Reader()
+        if step.NbRootsForTransfer() < 1:
+            raise ExactImportError("The file contains no transferable geometry.")
+        file_unit = _file_unit(step, "step")
+        doc = TDocStd_Document(TCollection_ExtendedString("XmlXCAF"))
+        XCAFApp_Application.GetApplication_s().InitDocument(doc)
+        # **The document's unit, not the reader's, decides the XCAF transfer.**
+        # `STEPCAFControl_Reader.Transfer` ignores `SetSystemLengthUnit` in
+        # favour of the document's length unit, and a document with none takes
+        # a cached global that STEP writers and `read_exact` both move. Measured
+        # across every combination: only this, with the global at "MM" above,
+        # reads metres on every call regardless of what ran before.
+        XCAFDoc_DocumentTool.SetLengthUnit_s(doc, 1.0)
+        if not reader.Transfer(doc):
+            raise ExactImportError("The file's product structure could not be transferred.")
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    factor = 1.0
+    if units != "auto":
+        wanted = _UNIT_METRES.get(units.strip().lower())
+        if wanted is None:
+            raise ExactImportError(f"Unknown units '{units}'. Use auto, m, mm, cm or inch.")
+        factor = wanted / _UNIT_METRES.get(file_unit or "", 1.0)
+        units_note = f"{units} (override; file said {file_unit or 'nothing'})"
+    else:
+        units_note = f"{file_unit} (from file)" if file_unit else "unspecified"
+
+    tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+
+    def name_of(label) -> Optional[str]:
+        attr = TDataStd_Name()
+        if label.FindAttribute(TDataStd_Name.GetID_s(), attr):
+            text = attr.Get().ToExtString().strip()
+            return text or None
+        return None
+
+    def entry_of(label) -> str:
+        text = TCollection_AsciiString()
+        TDF_Tool.Entry_s(label, text)
+        return text.ToCString()
+
+    parts: Dict[str, Dict[str, Any]] = {}
+    refused: set = set()
+    instances: list = []
+    skipped: list = []
+
+    def add(key: str, name: str, shape, matrix) -> None:
+        matrix, mirrored = unmirror(matrix)
+        if mirrored:
+            key, name = f"{key}#mirrored", f"{name} (mirrored)"
+        if key in refused:
+            return
+        if key not in parts:
+            body = _solidify(_mirror_z(shape) if mirrored else shape)
+            solids = _count(body, TopAbs_SOLID)
+            enclosed = brep.volume(body) if solids else 0.0
+            if not solids or enclosed <= 0.0:
+                refused.add(key)
+                skipped.append({"name": name, "reason":
+                                f"read as {_count(body, TopAbs_FACE)} loose face(s) "
+                                "rather than a closed solid"})
+                return
+            if factor != 1.0:
+                body = _scaled(body, factor)
+                enclosed = brep.volume(body)
+            if len(parts) >= MAX_ASSEMBLY_PARTS:
+                raise ExactImportError(
+                    f"This assembly has more than {MAX_ASSEMBLY_PARTS} distinct parts, "
+                    "which is more than one import can create.")
+            parts[key] = {"key": key, "name": name, "shape": body, "info": {
+                "units": units_note, "solids": solids,
+                "faces": _count(body, TopAbs_FACE),
+                "volume_mm3": round(enclosed * 1e9, 6), "mirrored": mirrored}}
+        if len(instances) >= MAX_ASSEMBLY_INSTANCES:
+            raise ExactImportError(
+                f"This assembly places more than {MAX_ASSEMBLY_INSTANCES} parts, "
+                "which is more than one import can create.")
+        placed = matrix.copy()
+        placed[:3, 3] *= factor
+        instances.append({"part": key, "matrix": placed})
+
+    def walk(label, matrix, depth: int) -> None:
+        if depth > _MAX_ASSEMBLY_DEPTH:
+            raise ExactImportError(
+                f"The assembly is nested more than {_MAX_ASSEMBLY_DEPTH} levels deep.")
+        if tool.IsAssembly_s(label):
+            components = TDF_LabelSequence()
+            tool.GetComponents_s(label, components, False)
+            for i in range(1, components.Length() + 1):
+                component = components.Value(i)
+                referred = TDF_Label()
+                if not tool.GetReferredShape_s(component, referred):
+                    skipped.append({"name": name_of(component) or entry_of(component),
+                                    "reason": "an instance that names no part"})
+                    continue
+                walk(referred, matrix @ _location_matrix(tool.GetLocation_s(component)),
+                     depth + 1)
+            return
+        shape = tool.GetShape_s(label)
+        # A part's own shape can carry a location; fold it into the placement so
+        # the document holds the part in its own frame, the same for every
+        # instance that shares it.
+        add(entry_of(label), name_of(label) or f"Part {len(parts) + 1}",
+            shape.Located(TopLoc_Location()), matrix @ _location_matrix(shape.Location()))
+
+    roots = TDF_LabelSequence()
+    tool.GetFreeShapes(roots)
+    labels = [roots.Value(i) for i in range(1, roots.Length() + 1)]
+    structured = any(tool.IsAssembly_s(label) for label in labels)
+
+    for label in labels:
+        if structured:
+            start = (_location_matrix(tool.GetShape_s(label).Location())
+                     if tool.IsAssembly_s(label) else np.eye(4))
+            walk(label, start, 0)
+            continue
+        # No structure: each solid is its own part, left where the file put it.
+        shape = tool.GetShape_s(label)
+        matrix = _location_matrix(shape.Location())
+        body = _solidify(shape.Located(TopLoc_Location()))
+        found = []
+        explorer = TopExp_Explorer(body, TopAbs_SOLID)
+        while explorer.More():
+            found.append(explorer.Current())
+            explorer.Next()
+        base = name_of(label) or "Body"
+        if not found:
+            skipped.append({"name": base, "reason":
+                            f"read as {_count(body, TopAbs_FACE)} loose face(s) "
+                            "rather than a closed solid"})
+        for i, solid in enumerate(found, start=1):
+            add(f"{entry_of(label)}/solid{i}",
+                base if len(found) == 1 else f"{base} {i}", solid, matrix)
+
+    if not parts:
+        detail = "; ".join(f"{s['name']}: {s['reason']}" for s in skipped[:5])
+        raise ExactImportError(
+            "The file contains no solid parts" + (f" ({detail})." if detail else "."))
+
+    return {
+        "name": name_of(labels[0]) if len(labels) == 1 else None,
+        "structured": structured,
+        "units": units_note,
+        "parts": list(parts.values()),
+        "instances": instances,
+        "skipped": skipped,
+    }

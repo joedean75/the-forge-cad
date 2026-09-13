@@ -108,10 +108,13 @@ export function LibraryScreen() {
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
+  // A finished import that left something out. Not an error: the assembly exists.
+  const [importNote, setImportNote] = useState<string | null>(null)
   const [genPrompt, setGenPrompt] = useState('')
   const [generating, setGenerating] = useState(false)
   const [genMsg, setGenMsg] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const asmFileRef = useRef<HTMLInputElement>(null)
 
   const reload = () => {
     setLoading(true)
@@ -169,6 +172,30 @@ export function LibraryScreen() {
     } finally {
       setImporting(false)
       if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  const importAssemblyFile = async (file: File) => {
+    setImporting(true)
+    setImportError(null)
+    setImportNote(null)
+    try {
+      const r = await api.importAssembly(file)
+      if (r.skipped.length) {
+        // Stay here and say what was left out, rather than opening an assembly
+        // that looks complete. It is in the list below either way.
+        const what = r.skipped.slice(0, 3).map((s) => `${s.name}: ${s.reason}`).join('; ')
+        setImportNote(`Imported ${r.instances} components from ${r.parts_created} parts. `
+          + `Skipped ${r.skipped.length}: ${what}${r.skipped.length > 3 ? '; ...' : ''}`)
+        reload()
+      } else {
+        await openAsm(r.assembly.id)
+      }
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : 'Assembly import failed')
+    } finally {
+      setImporting(false)
+      if (asmFileRef.current) asmFileRef.current.value = ''
     }
   }
 
@@ -244,6 +271,9 @@ export function LibraryScreen() {
         ))}
         <div className="flex-1" />
         {importError && <span className="text-[10px] text-cad-danger mr-3 max-w-xs truncate" title={importError}>{importError}</span>}
+        {importNote && tab === 'assemblies' && (
+          <span className="text-[10px] text-cad-accent-hot mr-3 max-w-md truncate" title={importNote}>{importNote}</span>
+        )}
         {tab === 'parts' && (
           <>
             <input
@@ -266,6 +296,22 @@ export function LibraryScreen() {
         )}
         {tab === 'assemblies' && (
           <div className="flex items-center gap-2 mr-2">
+            <input
+              ref={asmFileRef}
+              type="file"
+              accept=".step,.stp"
+              className="hidden"
+              onChange={(e) => e.target.files?.[0] && importAssemblyFile(e.target.files[0])}
+            />
+            <button
+              onClick={() => asmFileRef.current?.click()}
+              disabled={importing}
+              title="Import a STEP assembly: each distinct part becomes an exact part, each instance a placed component"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm border border-cad-border text-cad-text hover:text-cad-text-heading hover:border-cad-accent/50 text-[11px] font-medium transition-colors disabled:opacity-40"
+            >
+              {importing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={13} />}
+              {importing ? 'Importing…' : 'Import'}
+            </button>
             {genMsg && (
               <span className="text-[10px] text-cad-accent-hot max-w-56 truncate" title={genMsg}>
                 {genMsg}
