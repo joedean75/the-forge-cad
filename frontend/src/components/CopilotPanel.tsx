@@ -4,9 +4,9 @@ import { useDocumentStore } from '../store/useDocumentStore'
 import { useAssemblyStore } from '../store/useAssemblyStore'
 import { api } from '../api/client'
 import type { CopilotResult, CopilotStep } from '../../../shared/types'
-import { prepareImage } from '../util/imageAttach'
+import { prepareImage, dataUriBytes, MAX_IMAGES, MAX_TOTAL_IMAGE_BYTES } from '../util/imageAttach'
 
-type Turn = { goal: string; image?: string; running: boolean; subjectId: string; stopping?: boolean; stopError?: string; result?: CopilotResult }
+type Turn = { goal: string; images?: string[]; running: boolean; subjectId: string; stopping?: boolean; stopError?: string; result?: CopilotResult }
 
 /** Which thing the panel is driving. One panel rather than two, because the
  *  loop, the transcript and the stop button are identical — what differs is
@@ -106,7 +106,7 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
   const [model, setModel] = useState(rememberedModel)
   // `null` means the provider publishes no modalities: unknown, so allowed.
   const [visionModels, setVisionModels] = useState<string[] | null>(null)
-  const [image, setImage] = useState<string | null>(null)
+  const [images, setImages] = useState<string[]>([])
   const [imageError, setImageError] = useState<string | null>(null)
   const [preparing, setPreparing] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -140,37 +140,58 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
   const textOnly = (m: string) => visionModels !== null && !visionModels.includes(m)
   // Refused here rather than sent: the server would answer 422, and switching
   // the model silently would run the comparison the user did not ask for.
-  const imageBlocked = !!image && !!effectiveModel && textOnly(effectiveModel)
+  const imageBlocked = images.length > 0 && !!effectiveModel && textOnly(effectiveModel)
 
-  const attach = async (file: File | undefined) => {
-    if (!file) return
+  const attach = async (files: File[]) => {
+    // Cleared so choosing the same files again still fires `change`. The File
+    // objects were already copied out of the input before this ran.
+    if (fileRef.current) fileRef.current.value = ''
+    const picked = files.filter((f) => f.type.startsWith('image/'))
+    if (!picked.length || busy || !subjectId) return
+    const room = MAX_IMAGES - images.length
+    if (room <= 0) { setImageError(`Up to ${MAX_IMAGES} images per goal`); return }
     setImageError(null)
     setPreparing(true)
-    try { setImage(await prepareImage(file)) }
-    catch (e) { setImageError(e instanceof Error ? e.message : 'Could not read that image') }
-    finally {
-      setPreparing(false)
-      // Cleared so choosing the same file again still fires `change`.
-      if (fileRef.current) fileRef.current.value = ''
+    let problem: string | null = picked.length > room
+      ? `Only ${room} more image${room === 1 ? '' : 's'} fit. A goal takes up to ${MAX_IMAGES}.` : null
+    let total = images.reduce((n, uri) => n + dataUriBytes(uri), 0)
+    const added: string[] = []
+    // One at a time: each is decoded onto a canvas, and six full-size photos
+    // decoded at once is several hundred megabytes of bitmap.
+    for (const file of picked.slice(0, room)) {
+      try {
+        const uri = await prepareImage(file)
+        if (total + dataUriBytes(uri) > MAX_TOTAL_IMAGE_BYTES) {
+          problem = 'Those images are too large to send together. Remove one and try again.'
+          break
+        }
+        total += dataUriBytes(uri)
+        added.push(uri)
+      } catch (e) {
+        problem = e instanceof Error ? e.message : 'Could not read that image'
+      }
     }
+    setImages((cur) => [...cur, ...added].slice(0, MAX_IMAGES))
+    setImageError(problem)
+    setPreparing(false)
   }
 
   const submit = async (g: string) => {
     const text = g.trim()
     if (!text || busy || !subjectId || preparing || imageBlocked) return
-    const sentImage = image
+    const sentImages = images
     setGoal('')
-    setImage(null)
+    setImages([])
     setImageError(null)
     const idx = turns.length
-    setTurns((t) => [...t, { goal: text, image: sentImage ?? undefined, running: true, subjectId }])
+    setTurns((t) => [...t, { goal: text, images: sentImages.length ? sentImages : undefined, running: true, subjectId }])
     // Live progress: the copilot runs as a server-side job; each poll delivers
     // the transcript so far.
     const result = await runCopilot(
       text,
       (state) => setTurns((t) => t.map((x, i) => (i === idx ? { ...x, result: state } : x))),
       model || undefined,
-      sentImage,
+      sentImages,
     )
     setTurns((t) => t.map((x, i) => (i === idx ? { ...x, running: false, result } : x)))
   }
@@ -253,9 +274,13 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
             {/* user goal */}
             <div className="flex justify-end">
               <div className="max-w-[85%] text-[12px] bg-cad-accent/12 border border-cad-accent/30 text-cad-text-heading rounded-md rounded-tr-sm px-2.5 py-1.5">
-                {turn.image && (
-                  <img src={turn.image} alt="Reference sent with this goal"
-                       className="block max-h-32 max-w-full rounded-sm border border-cad-border mb-1.5" />
+                {turn.images && (
+                  <div className={`mb-1.5 grid gap-1 ${turn.images.length === 1 ? 'grid-cols-1' : 'grid-cols-3'}`}>
+                    {turn.images.map((uri, j) => (
+                      <img key={j} src={uri} alt={`Reference ${j + 1} sent with this goal`}
+                           className={`block rounded-sm border border-cad-border ${turn.images!.length === 1 ? 'max-h-32 max-w-full' : 'h-16 w-full object-cover'}`} />
+                    ))}
+                  </div>
                 )}
                 {turn.goal}
               </div>
@@ -296,37 +321,50 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
       </div>
 
       <div className="border-t border-cad-border p-2.5 shrink-0">
-        {(image || preparing) && (
-          <div className="mb-2 flex items-start gap-2">
-            {image ? (
-              <div className="relative">
-                <img src={image} alt="Attached reference" className="h-16 max-w-[140px] object-contain rounded-sm border border-cad-border bg-cad-bg" />
-                <button onClick={() => setImage(null)} aria-label="Remove image"
-                  className="absolute -top-1.5 -right-1.5 h-5 w-5 flex items-center justify-center rounded-full bg-cad-panel border border-cad-border text-cad-text hover:text-cad-text-heading">
-                  <X size={11} />
-                </button>
-              </div>
-            ) : (
-              <div className="h-16 w-16 flex items-center justify-center rounded-sm border border-cad-border"><Loader2 size={14} className="animate-spin text-cad-text/60" /></div>
+        {(images.length > 0 || preparing) && (
+          <div className="mb-2 space-y-1.5">
+            <div className="flex flex-wrap items-start gap-2">
+              {images.map((uri, i) => (
+                <div key={i} className="relative">
+                  <img src={uri} alt={`Attached reference ${i + 1}`} className="h-14 w-14 object-cover rounded-sm border border-cad-border bg-cad-bg" />
+                  <button onClick={() => setImages((cur) => cur.filter((_, j) => j !== i))} aria-label={`Remove image ${i + 1}`}
+                    className="absolute -top-1.5 -right-1.5 h-5 w-5 flex items-center justify-center rounded-full bg-cad-panel border border-cad-border text-cad-text hover:text-cad-text-heading">
+                    <X size={11} />
+                  </button>
+                </div>
+              ))}
+              {preparing && (
+                <div className="h-14 w-14 flex items-center justify-center rounded-sm border border-cad-border"><Loader2 size={14} className="animate-spin text-cad-text/60" /></div>
+              )}
+            </div>
+            {images.length > 0 && (
+              <p className="text-[10px] text-cad-text/50">{images.length} of {MAX_IMAGES} images · each is re-sent on every step</p>
             )}
             {imageBlocked && (
               <p role="alert" className="text-[11px] text-cad-danger">
-                {shortModel(effectiveModel)} does not accept images. Pick another model or remove the image.
+                {shortModel(effectiveModel)} does not accept images. Pick another model or remove the images.
               </p>
             )}
           </div>
         )}
         {imageError && <p role="alert" className="mb-2 text-[11px] text-cad-danger">{imageError}</p>}
-        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden"
-               onChange={(e) => attach(e.target.files?.[0])} />
-        <div className="flex items-end gap-2 rounded-sm bg-cad-bg border border-cad-border focus-within:border-cad-accent transition-colors px-2.5 py-1.5">
+        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple className="hidden"
+               onChange={(e) => attach(Array.from(e.target.files ?? []))} />
+        <div
+          className="flex items-end gap-2 rounded-sm bg-cad-bg border border-cad-border focus-within:border-cad-accent transition-colors px-2.5 py-1.5"
+          onDragOver={(e) => { if (Array.from(e.dataTransfer.items).some((it) => it.kind === 'file')) e.preventDefault() }}
+          onDrop={(e) => {
+            const files = Array.from(e.dataTransfer.files)
+            if (files.length) { e.preventDefault(); attach(files) }
+          }}
+        >
           <textarea
             value={goal}
             onChange={(e) => setGoal(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(goal) } }}
             onPaste={(e) => {
-              const file = Array.from(e.clipboardData.files).find((f) => f.type.startsWith('image/'))
-              if (file) { e.preventDefault(); attach(file) }
+              const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'))
+              if (files.length) { e.preventDefault(); attach(files) }
             }}
             rows={1}
             disabled={!subjectId}
@@ -336,9 +374,9 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
           />
           <button
             onClick={() => fileRef.current?.click()}
-            disabled={busy || !subjectId || preparing}
-            aria-label="Attach an image"
-            title="Attach a reference image (or paste one)"
+            disabled={busy || !subjectId || preparing || images.length >= MAX_IMAGES}
+            aria-label="Attach images"
+            title={`Attach up to ${MAX_IMAGES} reference images (or paste or drop them)`}
             className="flex items-center justify-center h-7 w-7 rounded-sm text-cad-text hover:text-cad-text-heading hover:bg-cad-raised transition-colors disabled:opacity-40 shrink-0"
           >
             <ImagePlus size={14} />

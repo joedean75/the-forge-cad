@@ -11,8 +11,12 @@
 /** The longest side sent. Larger images are resized by the providers anyway. */
 export const MAX_IMAGE_EDGE = 1568
 
-/** What the server accepts, decoded. Kept in step with `MAX_IMAGE_BYTES`. */
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+/** How many images one goal may carry. Kept in step with `copilot.MAX_IMAGES`. */
+export const MAX_IMAGES = 6
+
+/** Decoded bytes across all of a goal's images. Kept in step with the server's
+ *  `MAX_TOTAL_IMAGE_BYTES`, which exists to stay under the 8 MB JSON body limit. */
+export const MAX_TOTAL_IMAGE_BYTES = 5_500_000
 
 /** The size that fits within `max` on its longest side, keeping the aspect. */
 export function fitWithin(width: number, height: number, max = MAX_IMAGE_EDGE): { width: number; height: number } {
@@ -51,7 +55,7 @@ export async function prepareImage(file: File): Promise<string> {
     ctx.fillRect(0, 0, width, height)
     ctx.drawImage(bitmap, 0, 0, width, height)
     const uri = canvas.toDataURL('image/jpeg', 0.85)
-    if (dataUriBytes(uri) > MAX_IMAGE_BYTES) throw new Error('That image is too large to send')
+    if (dataUriBytes(uri) > MAX_TOTAL_IMAGE_BYTES) throw new Error('That image is too large to send')
     return uri
   } finally {
     bitmap.close()

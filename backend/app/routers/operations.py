@@ -257,9 +257,11 @@ class CopilotRequest(BaseModel):
     #: other door and it is process-global: comparing two models on one goal
     #: must not change what every other session's next run uses.
     model: Optional[str] = None
-    #: A reference image as a `data:image/...;base64,` URI, shown to the planner
-    #: on every turn. Only a data URI: an http URL would have the provider fetch
-    #: whatever it names, server-side.
+    #: Reference images as `data:image/...;base64,` URIs, shown to the planner on
+    #: every turn in this order. Only data URIs: an http URL would have the
+    #: provider fetch whatever it names, server-side.
+    images: Optional[List[str]] = None
+    #: The single-image form, merged in front of `images`.
     image: Optional[str] = None
 
 
@@ -274,6 +276,7 @@ class CopilotJobState(BaseModel):
     #: Whether a reference image went with the goal. The image itself is not kept
     #: on the job: the store holds two hundred of them in process memory.
     has_image: bool = False
+    image_count: int = 0
     document: Optional[DesignDocument] = None
     #: Set instead of `document` when the run was against an assembly. Named
     #: rather than polymorphic, for the reason `summarize_assembly` states its
@@ -294,6 +297,7 @@ def _copilot_state(job: Dict[str, Any], document: Optional[DesignDocument],
         job_id=job["id"],
         model=job.get("model"),
         has_image=bool(job.get("has_image")),
+        image_count=int(job.get("image_count") or 0),
         status=job["status"],
         steps=list(job["steps"]),
         summary=job.get("summary"),
@@ -306,7 +310,8 @@ def _copilot_state(job: Dict[str, Any], document: Optional[DesignDocument],
 
 def _run_copilot_job(job: Dict[str, Any], subject_id: str, goal: str, max_steps: int,
                      acc: accounts.Account, subject: str = "document",
-                     model: Optional[str] = None, image: Optional[str] = None) -> None:
+                     model: Optional[str] = None,
+                     images: Optional[List[str]] = None) -> None:
     try:
         outcome = copilot.run(
             subject_id,
@@ -317,7 +322,7 @@ def _run_copilot_job(job: Dict[str, Any], subject_id: str, goal: str, max_steps:
             cancelled=lambda: job.get("cancel_requested", False),
             subject=subject,
             model=model,
-            image=image,
+            images=images,
         )
         job["model"] = outcome.get("model")
         job["summary"] = outcome["summary"]
@@ -372,15 +377,15 @@ def run_copilot(
         raise HTTPException(status_code=422, detail="goal is required")
 
     model = _checked_model(body.model)
-    image = _checked_image(body.image, model)
+    images = _checked_images(body, model)
     job = {"id": str(uuid.uuid4()), "subject_id": doc_id, "subject": "document",
            "status": "running", "steps": [], "summary": None, "model": model,
-           "has_image": bool(image)}
+           "has_image": bool(images), "image_count": len(images)}
     _COPILOT_JOBS[job["id"]] = job
     prune_jobs(_COPILOT_JOBS)
     steps = body.max_steps or copilot.step_default("document")
     background_tasks.add_task(_run_copilot_job, job, doc_id, body.goal.strip(), steps,
-                              acc, "document", model, image)
+                              acc, "document", model, images)
     return _copilot_state(job, document=None)
 
 
@@ -417,34 +422,52 @@ def _checked_model(requested: Optional[str]) -> Optional[str]:
     return requested
 
 
-#: Decoded bytes. The JSON body limit is 8 MB and base64 adds a third, so this
-#: leaves room for the rest of the request. The panel downscales to well under it.
-MAX_IMAGE_BYTES = 5 * 1024 * 1024
+#: Decoded bytes across every image on one request. The JSON body limit is
+#: 8 MB and base64 adds a third, so 5.5 MB decoded leaves room for the rest of
+#: the body. The panel downscales, so six photos normally come to well under it.
+MAX_TOTAL_IMAGE_BYTES = 5_500_000
 
 
-def _checked_image(image: Optional[str], model: Optional[str]) -> Optional[str]:
-    """A well-formed image data URI a vision model can take, or a 422 saying why.
-
-    Refused here rather than forwarded, because the provider's answer to a bad
-    image or a text-only model arrives mid-run as a planner error.
-    """
-    if not image:
-        return None
+def _checked_image_uri(image: str, which: str) -> int:
+    """Decoded size of one well-formed image data URI, or a 422 naming which one."""
     header, sep, payload = image.partition(",")
     mime = header[5:].split(";", 1)[0] if header.startswith("data:") else ""
     if not sep or not header.endswith(";base64") or mime not in copilot.IMAGE_MIME_TYPES:
         raise HTTPException(
             status_code=422,
-            detail="image must be a data URI of type "
+            detail=f"{which} must be a data URI of type "
                    + ", ".join(copilot.IMAGE_MIME_TYPES) + " (data:image/png;base64,...)")
     try:
         size = len(base64.b64decode(payload, validate=True))
     except (binascii.Error, ValueError):
-        raise HTTPException(status_code=422, detail="image is not valid base64")
-    if size == 0 or size > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=422, detail=f"{which} is not valid base64")
+    if size == 0:
+        raise HTTPException(status_code=422, detail=f"{which} is empty")
+    return size
+
+
+def _checked_images(body: "CopilotRequest", model: Optional[str]) -> List[str]:
+    """Well-formed image data URIs a vision model can take, or a 422 saying why.
+
+    Refused here rather than forwarded, because the provider's answer to a bad
+    image or a text-only model arrives mid-run as a planner error. `image` is the
+    single-image form and is merged in front rather than ignored: pydantic drops
+    fields it does not know, so a client still sending it would lose its image
+    without any error at all.
+    """
+    images = ([body.image] if body.image else []) + [i for i in (body.images or []) if i]
+    if not images:
+        return []
+    if len(images) > copilot.MAX_IMAGES:
         raise HTTPException(
             status_code=422,
-            detail=f"image must be between 1 byte and {MAX_IMAGE_BYTES // (1024 * 1024)} MB")
+            detail=f"at most {copilot.MAX_IMAGES} images per goal; got {len(images)}")
+    total = sum(_checked_image_uri(uri, f"image {i + 1}") for i, uri in enumerate(images))
+    if total > MAX_TOTAL_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"images total {total / 1e6:.1f} MB; the limit is "
+                   f"{MAX_TOTAL_IMAGE_BYTES / 1e6:.1f} MB. Send fewer or smaller images")
     resolved = model or llm_client.LLM_MODEL
     if llm_client.accepts_images(resolved) is False:
         vision = llm_client.vision_models() or []
@@ -452,7 +475,7 @@ def _checked_image(image: Optional[str], model: Optional[str]) -> Optional[str]:
             status_code=422,
             detail=f"{resolved} does not accept images; pick one that does: "
                    + (", ".join(vision) or "none offered"))
-    return image
+    return images
 
 
 def _assembly_copilot_access(assembly_id: str, acc: accounts.Account) -> AssemblyDoc:
@@ -503,15 +526,15 @@ def run_assembly_copilot(
         raise HTTPException(status_code=422, detail="goal is required")
 
     model = _checked_model(body.model)
-    image = _checked_image(body.image, model)
+    images = _checked_images(body, model)
     job = {"id": str(uuid.uuid4()), "subject_id": assembly_id, "subject": "assembly",
            "status": "running", "steps": [], "summary": None, "model": model,
-           "has_image": bool(image)}
+           "has_image": bool(images), "image_count": len(images)}
     _COPILOT_JOBS[job["id"]] = job
     prune_jobs(_COPILOT_JOBS)
     steps = body.max_steps or copilot.step_default("assembly")
     background_tasks.add_task(_run_copilot_job, job, assembly_id, body.goal.strip(),
-                              steps, acc, "assembly", model, image)
+                              steps, acc, "assembly", model, images)
     return _copilot_state(job, document=None)
 
 

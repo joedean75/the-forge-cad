@@ -922,6 +922,8 @@ export interface CopilotResult {
   model?: string | null
   /** Whether a reference image went with the goal. */
   has_image?: boolean
+  /** How many reference images went with the goal. */
+  image_count?: number
   /** Set instead of `document` when the run was against an assembly. Named
    *  rather than polymorphic: a client that has to infer which kind it was
    *  handed from the shape of the value will eventually infer wrong. */

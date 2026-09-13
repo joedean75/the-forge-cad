@@ -711,7 +711,7 @@ def test_the_image_reaches_the_planner_on_every_turn(monkeypatch):
                              "center": {"x": 0, "y": 0, "z": 0}}}},
         {"done": True, "summary": "built it"},
     ])
-    out = copilot.run(_new_doc(), "make what is in the picture", image=_PNG, max_steps=4)
+    out = copilot.run(_new_doc(), "make what is in the picture", images=[_PNG], max_steps=4)
     assert len(sent) >= 2
     for messages in sent:
         content = messages[-1]["content"]
@@ -777,7 +777,7 @@ def test_the_job_says_an_image_went_with_it_and_does_not_keep_it(monkeypatch):
     assert r.status_code == 200, r.text
     job_id = r.json()["job_id"]
     body = client.get(f"/api/documents/{doc_id}/copilot/{job_id}").json()
-    assert body["has_image"] is True
+    assert body["has_image"] is True and body["image_count"] == 1
     assert _PNG not in json.dumps(operations._COPILOT_JOBS[job_id], default=str)
 
 
@@ -787,3 +787,59 @@ def test_an_assembly_run_gets_more_time_as_well_as_more_steps():
     assert copilot.seconds_default("assembly") > copilot.seconds_default("document")
     # And inside the twenty minutes the client polls for.
     assert copilot.seconds_default("assembly") < 20 * 60
+
+
+_JPEG = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ=="
+
+
+def test_several_images_all_reach_the_planner_in_order(monkeypatch):
+    sent = _capture_messages(monkeypatch, [{"done": True, "summary": "done"}])
+    out = copilot.run(_new_doc(), "match these views", images=[_PNG, _JPEG, _PNG])
+    content = sent[0][-1]["content"]
+    urls = [p["image_url"]["url"] for p in content if p["type"] == "image_url"]
+    assert urls == [_PNG, _JPEG, _PNG]
+    assert "3 attached images" in content[0]["text"]
+    assert out["image_count"] == 3
+
+
+def test_the_route_takes_a_list_and_the_single_form_together(monkeypatch):
+    """`image` is merged in front rather than ignored: pydantic drops unknown
+    fields, so a client still sending it would lose its image without an error."""
+    from app.routers import operations
+
+    _capture_model(monkeypatch, {"done": True, "summary": "done"})
+    monkeypatch.setattr(operations.llm_client, "accepts_images", lambda m=None: True)
+    asm_id = _assembly()
+    r = client.post(f"/api/assemblies/{asm_id}/copilot",
+                    json={"goal": "leave it", "image": _PNG, "images": [_JPEG, _PNG]})
+    assert r.status_code == 200, r.text
+    assert r.json()["image_count"] == 3
+
+
+def test_too_many_images_are_refused():
+    doc_id = _new_doc()
+    r = client.post(f"/api/documents/{doc_id}/copilot",
+                    json={"goal": "x", "images": [_PNG] * (copilot.MAX_IMAGES + 1)})
+    assert r.status_code == 422
+    assert f"at most {copilot.MAX_IMAGES}" in r.text
+
+
+def test_images_are_limited_by_their_total_size_not_only_each(monkeypatch):
+    """Each image passing on its own is not enough: together they have to fit
+    under the JSON body limit."""
+    from app.routers import operations
+
+    one = len(__import__("base64").b64decode(_PNG.split(",", 1)[1]))
+    monkeypatch.setattr(operations, "MAX_TOTAL_IMAGE_BYTES", one * 2)
+    doc_id = _new_doc()
+    r = client.post(f"/api/documents/{doc_id}/copilot", json={"goal": "x", "images": [_PNG] * 3})
+    assert r.status_code == 422
+    assert "the limit is" in r.text
+
+
+def test_a_bad_image_in_a_list_is_named_by_position():
+    doc_id = _new_doc()
+    r = client.post(f"/api/documents/{doc_id}/copilot",
+                    json={"goal": "x", "images": [_PNG, "https://example.com/b.png"]})
+    assert r.status_code == 422
+    assert "image 2" in r.text

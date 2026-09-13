@@ -35,7 +35,7 @@ interface AssemblyState {
    * part document.
    */
   runCopilot: (goal: string, onProgress?: (state: CopilotResult) => void,
-               model?: string | null, image?: string | null) => Promise<CopilotResult | undefined>
+               model?: string | null, images?: string[] | null) => Promise<CopilotResult | undefined>
 
   /** Add a mate and re-solve every placement; the server returns the whole assembly. */
   addMate: (mate: Omit<AssemblyMate, 'id'>) => Promise<void>
@@ -234,7 +234,7 @@ export const useAssemblyStore = create<AssemblyState>((set, get) => ({
 
   select: (componentId) => set({ selectedComponentId: componentId }),
 
-  runCopilot: async (goal, onProgress, model, image) => {
+  runCopilot: async (goal, onProgress, model, images) => {
     const { assembly } = get()
     if (!assembly || !goal.trim()) return undefined
     set({ busy: true, error: null })
@@ -242,7 +242,7 @@ export const useAssemblyStore = create<AssemblyState>((set, get) => ({
       // No step budget: the server's assembly default covers a whole build,
       // where each part is a nested part-copilot run.
       const res = await api.runCopilot(assembly.id, goal, undefined, onProgress,
-                                      'assemblies', model, image)
+                                      'assemblies', model, images)
       // A run takes minutes and places and mates components as it goes, so what
       // comes back *is* the assembly — but only adopt it if this is still the
       // one on screen, the rule every other long call here follows.
