@@ -1,37 +1,10 @@
-import { useRef, useEffect, useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useLoader } from '@react-three/fiber'
 import * as THREE from 'three'
+import { CadMaterial } from './CadAppearance'
+import { FaceOverlay } from './FaceOverlay'
+import { prepareDisplayGeometry } from '../util/meshDisplay'
 import { ForgeMeshLoader, faceOfTriangle, facesSubGeometry, ownerOfTriangle } from '../util/forgeMesh'
-
-/**
- * A highlighted face, drawn over the body.
- *
- * `polygonOffset` rather than `depthTest={false}`: turning the depth test off
- * was the first attempt and it draws the selected face *through* the part, so
- * selecting the back face of a box lights up the front of it. Nudging the
- * overlay a fraction toward the camera keeps the depth test — so a hidden face
- * stays hidden — while still winning the z-fight against the surface it sits on.
- *
- * `FrontSide`, for the same reason: the inside of the far wall is not the face
- * you picked.
- */
-function FaceOverlay({ geometry, colour, opacity }: {
-  geometry: THREE.BufferGeometry; colour: string; opacity: number
-}) {
-  return (
-    <mesh geometry={geometry} renderOrder={1}>
-      <meshBasicMaterial
-        color={colour}
-        transparent
-        opacity={opacity}
-        side={THREE.FrontSide}
-        polygonOffset
-        polygonOffsetFactor={-2}
-        polygonOffsetUnits={-2}
-      />
-    </mesh>
-  )
-}
 
 // Map a world-space face normal to one of the six datum faces. Mirrors the
 // backend datum FACE_MAP: +z top / -z bottom, +x right / -x left, +y back / -y front.
@@ -76,43 +49,16 @@ export function MeshLoader({
   fit?: { c: [number, number, number]; s: number }
 }) {
   const loadedGeometry = useLoader(ForgeMeshLoader, url)
-  const meshRef = useRef<THREE.Mesh>(null)
-  const geometry = useMemo(() => {
-    const g = loadedGeometry.clone()
-    if (fit) g.translate(-fit.c[0], -fit.c[1], -fit.c[2])
-    return g
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fit identity churn
-  }, [loadedGeometry, fit?.c[0], fit?.c[1], fit?.c[2]])
+  const { geometry, scale } = useMemo(
+    () => prepareDisplayGeometry(loadedGeometry, fit?.c),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- depend on centre values
+    [loadedGeometry, fit?.c[0], fit?.c[1], fit?.c[2]],
+  )
 
-  // `useLoader`'s suspense cache is keyed by URL and never evicts, so without
-  // this every mesh version of a session stays resident. Less dramatic now the
-  // URL is a hash rather than megabytes of base64 — but the parsed geometry and
-  // its GPU buffers are still real, so free them when the url changes.
-  useEffect(() => {
-    return () => {
-      useLoader.clear(ForgeMeshLoader, url)
-      geometry.dispose()
-    }
-  }, [url, geometry])
-
-  useEffect(() => {
-    if (!geometry || !meshRef.current) return
-    geometry.computeVertexNormals()
-    if (fit) {
-      // Frozen document fit: geometry is pre-translated; just apply the scale.
-      meshRef.current.scale.setScalar(fit.s)
-      return
-    }
-    // Legacy self-fit (candidate/assembly viewers without a document fit).
-    geometry.center()
-    const box = new THREE.Box3().setFromObject(meshRef.current)
-    const size = box.getSize(new THREE.Vector3())
-    const maxDim = Math.max(size.x, size.y, size.z)
-    if (maxDim > 0) {
-      const scale = 1.5 / maxDim
-      meshRef.current.scale.setScalar(scale)
-    }
-  }, [geometry, fit])
+  useEffect(() => () => geometry.dispose(), [geometry])
+  // Framing changes only replace the private clone; evict the loader entry
+  // when this URL is no longer used by this viewer.
+  useEffect(() => () => useLoader.clear(ForgeMeshLoader, url), [url])
 
   // The overlay geometries: what is selected, and what the cursor is over.
   // Rebuilt only when the ids change — a hover that lands on the same face is
@@ -131,9 +77,7 @@ export function MeshLoader({
 
   return (
     <mesh
-      ref={meshRef}
-      castShadow
-      receiveShadow
+      scale={fit?.s ?? scale}
       onPointerMove={
         onHoverTopology
           ? (e) => {
@@ -166,18 +110,9 @@ export function MeshLoader({
       }
     >
       <primitive object={geometry} attach="geometry" />
-      <meshStandardMaterial
-        color="#c2ccd8"
-        metalness={0.25}
-        roughness={0.55}
-        emissive="#e8683c"
-        emissiveIntensity={dim ? 0 : 0.05}
-        transparent={dim}
-        opacity={dim ? 0.16 : 1}
-        flatShading={false}
-      />
+      <CadMaterial dim={dim} />
       {/* Drawn as children so they inherit the mesh's scale and translation:
-          the overlay shares the parent's position buffer, so any transform
+          the overlay uses the parent's local coordinates, so any transform
           applied to one has to apply to the other or they separate. */}
       {hoveredGeometry && <FaceOverlay geometry={hoveredGeometry} colour="#ffb86b" opacity={0.4} />}
       {selectedGeometry && <FaceOverlay geometry={selectedGeometry} colour="#e86a3c" opacity={0.6} />}

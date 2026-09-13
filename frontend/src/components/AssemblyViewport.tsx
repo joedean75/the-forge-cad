@@ -4,6 +4,7 @@ import { CameraControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/d
 import { ForgeMeshLoader } from '../util/forgeMesh'
 import { DoubleSide } from 'three'
 import { Boxes, Link2, Maximize } from 'lucide-react'
+import { CadLighting, CadMaterial } from './CadAppearance'
 import { MoveHandles } from './MoveHandles'
 import type { AssemblyComponent, BBox, ComponentTransform, Vector3 } from '../../../shared/types'
 
@@ -49,37 +50,23 @@ function ComponentMesh({
   onSelect: () => void
 }) {
   const loaded = useLoader(ForgeMeshLoader, url)
-  // Clone so we can compute normals without mutating the loader's cached geometry
-  // (the same part may be instanced by several components). Crucially we do NOT
-  // recenter — components must share one coordinate frame.
-  const geometry = useMemo(() => {
-    const g = loaded.clone()
-    g.computeVertexNormals()
-    return g
-  }, [loaded])
+  // Each component owns a clone and preserves the loader's face-aware normals.
+  // Never recenter: components must share one coordinate frame.
+  const geometry = useMemo(() => loaded.clone(), [loaded])
+  useEffect(() => () => geometry.dispose(), [geometry])
 
   return (
     <mesh
       position={position}
       scale={scale}
       rotation={rotation}
-      castShadow
-      receiveShadow
       onClick={(e) => {
         e.stopPropagation()
         onSelect()
       }}
     >
       <primitive object={geometry} attach="geometry" />
-      <meshStandardMaterial
-        color={selected ? '#ffb86b' : '#c2ccd8'}
-        metalness={0.25}
-        roughness={0.55}
-        emissive="#e8683c"
-        emissiveIntensity={selected ? 0.18 : 0.04}
-        transparent={dim}
-        opacity={dim ? 0.18 : 1}
-      />
+      <CadMaterial selected={selected} dim={dim} />
     </mesh>
   )
 }
@@ -144,11 +131,9 @@ export function AssemblyViewport({
       className="relative flex-1 min-w-0"
       style={{ background: 'radial-gradient(120% 120% at 50% 20%, #1a1f27 0%, var(--color-cad-bg) 55%, #0e1116 100%)' }}
     >
-      <Canvas camera={{ position: [2.6, -3.4, 1.9], up: [0, 0, 1], fov: 45, near: 0.02, far: 100 }} shadows gl={{ logarithmicDepthBuffer: true }} onPointerMissed={() => onSelect(null)}>
+      <Canvas camera={{ position: [2.6, -3.4, 1.9], up: [0, 0, 1], fov: 45, near: 0.02, far: 100 }} gl={{ logarithmicDepthBuffer: true }} onPointerMissed={() => onSelect(null)}>
         <Suspense fallback={null}>
-          <ambientLight intensity={0.6} />
-          <directionalLight position={[5, 10, 7]} intensity={1.2} castShadow />
-          <directionalLight position={[-5, -5, -5]} intensity={0.4} />
+          <CadLighting />
           <Grid
             position={[0, 0, -1]}
             rotation={[Math.PI / 2, 0, 0]}
