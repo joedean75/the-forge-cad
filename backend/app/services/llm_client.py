@@ -36,7 +36,10 @@ LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("KIMI_MODEL", "kimi-k2-turbo-pre
 # tiers, then legacy fallbacks. OpenRouter routes many more; the active model is
 # always injected at the top of the list if it isn't already present.
 # Curated frontier allowlist for OpenRouter, in display order. Every id here is a
-# real OpenRouter slug; `available_models()` intersects this with OpenRouter's live
+# real OpenRouter slug. Two kinds of slug are left out on purpose: `:batch`
+# variants, which are priced for asynchronous batch work rather than a copilot
+# waiting on each step, and `~...-latest` aliases, which move to a different model
+# without notice and so make two runs of one goal incomparable; `available_models()` intersects this with OpenRouter's live
 # catalog so the picker never offers a slug the router has retired.
 _PROVIDER_MODELS: dict[str, list[str]] = {
     "openrouter": [
@@ -45,9 +48,14 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "anthropic/claude-sonnet-5",
         "anthropic/claude-opus-4.8",
         "anthropic/claude-haiku-4.5",
+        "openai/gpt-6-astra",
+        "openai/gpt-6-astra-pro",
         "openai/gpt-5.6-sol",
+        "openai/gpt-5.6-sol-pro",
         "openai/gpt-5.6-terra",
+        "openai/gpt-5.6-terra-pro",
         "openai/gpt-5.6-luna",
+        "openai/gpt-5.6-luna-pro",
         "openai/gpt-5.1",
         "openai/gpt-5-mini",
         "google/gemini-3.1-pro-preview",
