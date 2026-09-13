@@ -53,6 +53,7 @@ function ComponentMesh({
   // Each component owns a clone and preserves the loader's face-aware normals.
   // Never recenter: components must share one coordinate frame.
   const geometry = useMemo(() => loaded.clone(), [loaded])
+  useEffect(() => () => geometry.dispose(), [geometry])
 
   return (
     <mesh

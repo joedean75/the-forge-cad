@@ -188,14 +188,28 @@ export function facesSubGeometry(
   if (!wanted.size) return null
 
   const kept: number[] = []
+  const positions: number[] = []
+  const remap = new Map<number, number>()
+  const source = geometry.getAttribute('position')
   for (let t = 0; t < labels.length; t++) {
     const id = labels[t]
-    if (id && wanted.has(id)) kept.push(index.getX(t * 3), index.getX(t * 3 + 1), index.getX(t * 3 + 2))
+    if (!id || !wanted.has(id)) continue
+    for (let corner = 0; corner < 3; corner++) {
+      const original = index.getX(t * 3 + corner)
+      let local = remap.get(original)
+      if (local === undefined) {
+        local = positions.length / 3
+        remap.set(original, local)
+        positions.push(source.getX(original), source.getY(original), source.getZ(original))
+      }
+      kept.push(local)
+    }
   }
   if (!kept.length) return null
   const out = new THREE.BufferGeometry()
-  // The same position buffer, not a copy: the overlay is the same triangles.
-  out.setAttribute('position', geometry.getAttribute('position'))
+  // Own only the selected vertices. Disposing a highlight must not release
+  // the body's shared GPU position buffer.
+  out.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
   out.setIndex(kept)
   // Highlight overlays use an unlit material and do not need normals.
   return out

@@ -36,3 +36,21 @@ tests cannot establish the absence of every visual artifact.
 Sprint 3 follows with measured code simplification and performance work. The
 shared material/lighting and removal of redundant normal calculations here are
 small prerequisites, not completion of that sprint.
+
+## Follow-up: preview fitting and resource ownership
+
+- Compute preview fitting from local bounds before applying the mesh scale, so
+  changing model size cannot reuse the previous preview's world-space scale.
+- Separate display-clone disposal from loader URL eviction.
+- Explicitly dispose assembly clones and highlight geometry on replacement or
+  unmount; primitive objects require application-owned cleanup.
+- Give face highlights compact, independent position buffers so their disposal
+  cannot release a body buffer.
+- Exclude highlights from raycasting. Their subset triangle indices cannot be
+  used as body triangle IDs.
+- Add five regression cases covering successive model sizes, frozen centres,
+  empty models, highlight buffer ownership and click-through picking/cleanup.
+
+Validation for this follow-up is recorded in PR #5. Browser verification is
+still pending. This also begins Sprint 3's resource-lifecycle and readability
+work; frame-time benchmarking remains outstanding.
