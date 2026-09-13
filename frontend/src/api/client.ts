@@ -423,6 +423,9 @@ export const api = {
     /** Plan with this model for this run only, leaving the process-wide
      *  default (and everybody else's next run) alone. */
     model?: string | null,
+    /** A reference image as a `data:image/...;base64,` URI, shown to the
+     *  planner on every turn. */
+    image?: string | null,
   ): Promise<CopilotResult> => {
     let state = await fetchJson<CopilotResult>(`/${subject}/${id}/copilot`, {
       method: 'POST',
@@ -430,6 +433,7 @@ export const api = {
         goal,
         ...(maxSteps === undefined ? {} : { max_steps: maxSteps }),
         ...(model ? { model } : {}),
+        ...(image ? { image } : {}),
       }),
     })
     const deadline = Date.now() + 20 * 60_000

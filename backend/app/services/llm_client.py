@@ -40,19 +40,24 @@ LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("KIMI_MODEL", "kimi-k2-turbo-pre
 # catalog so the picker never offers a slug the router has retired.
 _PROVIDER_MODELS: dict[str, list[str]] = {
     "openrouter": [
-        "anthropic/claude-opus-4.8",
+        "anthropic/claude-fable-5.1",
+        "anthropic/claude-opus-5",
         "anthropic/claude-sonnet-5",
-        "anthropic/claude-sonnet-4.5",
+        "anthropic/claude-opus-4.8",
         "anthropic/claude-haiku-4.5",
+        "openai/gpt-5.6-sol",
+        "openai/gpt-5.6-terra",
+        "openai/gpt-5.6-luna",
         "openai/gpt-5.1",
-        "openai/gpt-5",
         "openai/gpt-5-mini",
         "google/gemini-3.1-pro-preview",
-        "google/gemini-3.5-flash",
-        "google/gemini-2.5-flash",
-        "x-ai/grok-4.5",
-        "moonshotai/kimi-k2-thinking",
-        "deepseek/deepseek-v3.2",
+        "google/gemini-3.8-flash",
+        "x-ai/grok-4.6",
+        "moonshotai/kimi-k3",
+        "qwen/qwen3.8-max-0902",
+        "mistralai/mistral-large-2512",
+        "deepseek/deepseek-v4-pro-0813",
+        "deepseek/deepseek-v4-flash-0731",
         "meta-llama/llama-4-maverick",
     ],
     "moonshot": [
@@ -104,15 +109,17 @@ def set_base_url(base_url: str) -> None:
     _OPENROUTER_FETCHED_AT = 0.0
 
 
-# Cache OpenRouter's live model catalog (ids only) so `available_models()` can
-# filter the curated allowlist without a network round-trip on every config read.
-_OPENROUTER_CATALOG: Optional[set[str]] = None
+# Cache OpenRouter's live model catalog so `available_models()` can filter the
+# curated allowlist without a network round-trip on every config read. Each id
+# maps to its input modalities, which is what says whether a model can be sent
+# an image.
+_OPENROUTER_CATALOG: Optional[dict[str, frozenset[str]]] = None
 _OPENROUTER_FETCHED_AT: float = 0.0
 _OPENROUTER_TTL = 3600.0  # seconds
 
 
-def _openrouter_catalog() -> Optional[set[str]]:
-    """Best-effort fetch of OpenRouter's public model catalog (ids only).
+def _openrouter_catalog() -> Optional[dict[str, frozenset[str]]]:
+    """Best-effort fetch of OpenRouter's public catalog: id -> input modalities.
 
     Cached for ``_OPENROUTER_TTL`` seconds. Returns ``None`` on any failure so
     callers fall back to the static curated list. The ``/models`` endpoint is
@@ -128,7 +135,10 @@ def _openrouter_catalog() -> Optional[set[str]]:
             resp = client.get(url)
             resp.raise_for_status()
             data = resp.json()
-        ids = {m["id"] for m in data.get("data", []) if isinstance(m, dict) and m.get("id")}
+        ids = {
+            m["id"]: frozenset(((m.get("architecture") or {}).get("input_modalities")) or ())
+            for m in data.get("data", []) if isinstance(m, dict) and m.get("id")
+        }
         if ids:
             _OPENROUTER_CATALOG = ids
             _OPENROUTER_FETCHED_AT = now
@@ -158,6 +168,30 @@ def available_models() -> list[str]:
     return models
 
 
+def accepts_images(model: Optional[str] = None) -> Optional[bool]:
+    """Whether ``model`` (default: the active one) takes image input.
+
+    ``None`` means unknown: only OpenRouter publishes modalities, and a
+    provider that does not say is not a reason to refuse. A model the catalog
+    lists with no modalities at all is also unknown rather than text-only.
+    """
+    model = model or LLM_MODEL
+    if _provider_name(LLM_BASE_URL) != "openrouter":
+        return None
+    live = _openrouter_catalog()
+    if not live or model not in live or not live[model]:
+        return None
+    return "image" in live[model]
+
+
+def vision_models() -> Optional[list[str]]:
+    """The offered models that take an image, or ``None`` when nobody knows."""
+    answers = {m: accepts_images(m) for m in available_models()}
+    if all(a is None for a in answers.values()):
+        return None
+    return [m for m, a in answers.items() if a is not False]
+
+
 def current_config() -> dict[str, Any]:
     """Return non-sensitive runtime LLM configuration."""
     return {
@@ -166,6 +200,7 @@ def current_config() -> dict[str, Any]:
         "base_url": LLM_BASE_URL,
         "model": LLM_MODEL,
         "available_models": available_models(),
+        "vision_models": vision_models(),
     }
 
 

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bot, Send, X, Check, AlertTriangle, Loader2, Wrench } from 'lucide-react'
+import { Bot, Send, X, Check, AlertTriangle, Loader2, Wrench, ImagePlus } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { useAssemblyStore } from '../store/useAssemblyStore'
 import { api } from '../api/client'
 import type { CopilotResult, CopilotStep } from '../../../shared/types'
+import { prepareImage } from '../util/imageAttach'
 
-type Turn = { goal: string; running: boolean; subjectId: string; stopping?: boolean; stopError?: string; result?: CopilotResult }
+type Turn = { goal: string; image?: string; running: boolean; subjectId: string; stopping?: boolean; stopError?: string; result?: CopilotResult }
 
 /** Which thing the panel is driving. One panel rather than two, because the
  *  loop, the transcript and the stop button are identical — what differs is
@@ -103,7 +104,13 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
   const [models, setModels] = useState<string[]>([])
   const [defaultModel, setDefaultModel] = useState('')
   const [model, setModel] = useState(rememberedModel)
+  // `null` means the provider publishes no modalities: unknown, so allowed.
+  const [visionModels, setVisionModels] = useState<string[] | null>(null)
+  const [image, setImage] = useState<string | null>(null)
+  const [imageError, setImageError] = useState<string | null>(null)
+  const [preparing, setPreparing] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -119,6 +126,7 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
         if (!live) return
         setModels(cfg.available_models || [])
         setDefaultModel(cfg.model || '')
+        setVisionModels(cfg.vision_models ?? null)
       })
       // A provider that will not list its models is not a reason to hide the
       // panel — the run still works on the server's default.
@@ -128,18 +136,41 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
 
   if (!open) return null
 
+  const effectiveModel = model || defaultModel
+  const textOnly = (m: string) => visionModels !== null && !visionModels.includes(m)
+  // Refused here rather than sent: the server would answer 422, and switching
+  // the model silently would run the comparison the user did not ask for.
+  const imageBlocked = !!image && !!effectiveModel && textOnly(effectiveModel)
+
+  const attach = async (file: File | undefined) => {
+    if (!file) return
+    setImageError(null)
+    setPreparing(true)
+    try { setImage(await prepareImage(file)) }
+    catch (e) { setImageError(e instanceof Error ? e.message : 'Could not read that image') }
+    finally {
+      setPreparing(false)
+      // Cleared so choosing the same file again still fires `change`.
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
   const submit = async (g: string) => {
     const text = g.trim()
-    if (!text || busy || !subjectId) return
+    if (!text || busy || !subjectId || preparing || imageBlocked) return
+    const sentImage = image
     setGoal('')
+    setImage(null)
+    setImageError(null)
     const idx = turns.length
-    setTurns((t) => [...t, { goal: text, running: true, subjectId }])
+    setTurns((t) => [...t, { goal: text, image: sentImage ?? undefined, running: true, subjectId }])
     // Live progress: the copilot runs as a server-side job; each poll delivers
     // the transcript so far.
     const result = await runCopilot(
       text,
       (state) => setTurns((t) => t.map((x, i) => (i === idx ? { ...x, result: state } : x))),
       model || undefined,
+      sentImage,
     )
     setTurns((t) => t.map((x, i) => (i === idx ? { ...x, running: false, result } : x)))
   }
@@ -191,7 +222,7 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
             {defaultModel ? `Default · ${shortModel(defaultModel)}` : 'Default'}
           </option>
           {models.filter((m) => m !== defaultModel).map((m) => (
-            <option key={m} value={m}>{shortModel(m)}</option>
+            <option key={m} value={m}>{shortModel(m)}{textOnly(m) ? ' · text only' : ''}</option>
           ))}
         </select>
       </div>
@@ -222,6 +253,10 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
             {/* user goal */}
             <div className="flex justify-end">
               <div className="max-w-[85%] text-[12px] bg-cad-accent/12 border border-cad-accent/30 text-cad-text-heading rounded-md rounded-tr-sm px-2.5 py-1.5">
+                {turn.image && (
+                  <img src={turn.image} alt="Reference sent with this goal"
+                       className="block max-h-32 max-w-full rounded-sm border border-cad-border mb-1.5" />
+                )}
                 {turn.goal}
               </div>
             </div>
@@ -261,11 +296,38 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
       </div>
 
       <div className="border-t border-cad-border p-2.5 shrink-0">
+        {(image || preparing) && (
+          <div className="mb-2 flex items-start gap-2">
+            {image ? (
+              <div className="relative">
+                <img src={image} alt="Attached reference" className="h-16 max-w-[140px] object-contain rounded-sm border border-cad-border bg-cad-bg" />
+                <button onClick={() => setImage(null)} aria-label="Remove image"
+                  className="absolute -top-1.5 -right-1.5 h-5 w-5 flex items-center justify-center rounded-full bg-cad-panel border border-cad-border text-cad-text hover:text-cad-text-heading">
+                  <X size={11} />
+                </button>
+              </div>
+            ) : (
+              <div className="h-16 w-16 flex items-center justify-center rounded-sm border border-cad-border"><Loader2 size={14} className="animate-spin text-cad-text/60" /></div>
+            )}
+            {imageBlocked && (
+              <p role="alert" className="text-[11px] text-cad-danger">
+                {shortModel(effectiveModel)} does not accept images. Pick another model or remove the image.
+              </p>
+            )}
+          </div>
+        )}
+        {imageError && <p role="alert" className="mb-2 text-[11px] text-cad-danger">{imageError}</p>}
+        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden"
+               onChange={(e) => attach(e.target.files?.[0])} />
         <div className="flex items-end gap-2 rounded-sm bg-cad-bg border border-cad-border focus-within:border-cad-accent transition-colors px-2.5 py-1.5">
           <textarea
             value={goal}
             onChange={(e) => setGoal(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(goal) } }}
+            onPaste={(e) => {
+              const file = Array.from(e.clipboardData.files).find((f) => f.type.startsWith('image/'))
+              if (file) { e.preventDefault(); attach(file) }
+            }}
             rows={1}
             disabled={!subjectId}
             placeholder={subjectId ? `Ask the copilot to change the ${noun}…`
@@ -273,8 +335,17 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
             className="flex-1 bg-transparent text-xs text-cad-text-heading placeholder:text-cad-text/50 outline-none resize-none max-h-24"
           />
           <button
+            onClick={() => fileRef.current?.click()}
+            disabled={busy || !subjectId || preparing}
+            aria-label="Attach an image"
+            title="Attach a reference image (or paste one)"
+            className="flex items-center justify-center h-7 w-7 rounded-sm text-cad-text hover:text-cad-text-heading hover:bg-cad-raised transition-colors disabled:opacity-40 shrink-0"
+          >
+            <ImagePlus size={14} />
+          </button>
+          <button
             onClick={() => submit(goal)}
-            disabled={!goal.trim() || busy || !subjectId}
+            disabled={!goal.trim() || busy || !subjectId || preparing || imageBlocked}
             className="flex items-center justify-center h-7 w-7 rounded-sm bg-cad-accent text-cad-bg hover:bg-cad-accent-hot transition-colors disabled:opacity-40 shrink-0"
           >
             {busy ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}

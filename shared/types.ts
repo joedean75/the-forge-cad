@@ -128,6 +128,9 @@ export interface LlmConfig {
   base_url: string
   model: string
   available_models: string[]
+  /** The offered models that take an image; `null` when the provider does not
+   *  publish modalities, which means unknown rather than none. */
+  vision_models?: string[] | null
 }
 
 // ---------------------------------------------------------------------------
@@ -917,6 +920,8 @@ export interface CopilotResult {
   document?: DesignDocument | null
   /** Which model planned this run, so two runs of one goal can be told apart. */
   model?: string | null
+  /** Whether a reference image went with the goal. */
+  has_image?: boolean
   /** Set instead of `document` when the run was against an assembly. Named
    *  rather than polymorphic: a client that has to infer which kind it was
    *  handed from the shape of the value will eventually infer wrong. */

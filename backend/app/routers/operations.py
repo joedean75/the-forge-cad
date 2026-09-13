@@ -6,6 +6,8 @@
 This is the substrate the MCP server wraps so any agent can drive Forge.
 """
 
+import base64
+import binascii
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -255,6 +257,10 @@ class CopilotRequest(BaseModel):
     #: other door and it is process-global: comparing two models on one goal
     #: must not change what every other session's next run uses.
     model: Optional[str] = None
+    #: A reference image as a `data:image/...;base64,` URI, shown to the planner
+    #: on every turn. Only a data URI: an http URL would have the provider fetch
+    #: whatever it names, server-side.
+    image: Optional[str] = None
 
 
 class CopilotJobState(BaseModel):
@@ -265,6 +271,9 @@ class CopilotJobState(BaseModel):
     summary: Optional[str] = None
     #: The model this run planned with, so two runs of one goal can be told apart.
     model: Optional[str] = None
+    #: Whether a reference image went with the goal. The image itself is not kept
+    #: on the job: the store holds two hundred of them in process memory.
+    has_image: bool = False
     document: Optional[DesignDocument] = None
     #: Set instead of `document` when the run was against an assembly. Named
     #: rather than polymorphic, for the reason `summarize_assembly` states its
@@ -284,6 +293,7 @@ def _copilot_state(job: Dict[str, Any], document: Optional[DesignDocument],
         ok=job["status"] != "error" and (job["status"] == "running" or job.get("finished", False)),
         job_id=job["id"],
         model=job.get("model"),
+        has_image=bool(job.get("has_image")),
         status=job["status"],
         steps=list(job["steps"]),
         summary=job.get("summary"),
@@ -296,7 +306,7 @@ def _copilot_state(job: Dict[str, Any], document: Optional[DesignDocument],
 
 def _run_copilot_job(job: Dict[str, Any], subject_id: str, goal: str, max_steps: int,
                      acc: accounts.Account, subject: str = "document",
-                     model: Optional[str] = None) -> None:
+                     model: Optional[str] = None, image: Optional[str] = None) -> None:
     try:
         outcome = copilot.run(
             subject_id,
@@ -307,6 +317,7 @@ def _run_copilot_job(job: Dict[str, Any], subject_id: str, goal: str, max_steps:
             cancelled=lambda: job.get("cancel_requested", False),
             subject=subject,
             model=model,
+            image=image,
         )
         job["model"] = outcome.get("model")
         job["summary"] = outcome["summary"]
@@ -361,13 +372,15 @@ def run_copilot(
         raise HTTPException(status_code=422, detail="goal is required")
 
     model = _checked_model(body.model)
+    image = _checked_image(body.image, model)
     job = {"id": str(uuid.uuid4()), "subject_id": doc_id, "subject": "document",
-           "status": "running", "steps": [], "summary": None, "model": model}
+           "status": "running", "steps": [], "summary": None, "model": model,
+           "has_image": bool(image)}
     _COPILOT_JOBS[job["id"]] = job
     prune_jobs(_COPILOT_JOBS)
     steps = body.max_steps or copilot.step_default("document")
     background_tasks.add_task(_run_copilot_job, job, doc_id, body.goal.strip(), steps,
-                              acc, "document", model)
+                              acc, "document", model, image)
     return _copilot_state(job, document=None)
 
 
@@ -402,6 +415,44 @@ def _checked_model(requested: Optional[str]) -> Optional[str]:
             detail=f"unknown model {requested!r}; this provider offers: "
                    f"{', '.join(allowed)}")
     return requested
+
+
+#: Decoded bytes. The JSON body limit is 8 MB and base64 adds a third, so this
+#: leaves room for the rest of the request. The panel downscales to well under it.
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+
+def _checked_image(image: Optional[str], model: Optional[str]) -> Optional[str]:
+    """A well-formed image data URI a vision model can take, or a 422 saying why.
+
+    Refused here rather than forwarded, because the provider's answer to a bad
+    image or a text-only model arrives mid-run as a planner error.
+    """
+    if not image:
+        return None
+    header, sep, payload = image.partition(",")
+    mime = header[5:].split(";", 1)[0] if header.startswith("data:") else ""
+    if not sep or not header.endswith(";base64") or mime not in copilot.IMAGE_MIME_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail="image must be a data URI of type "
+                   + ", ".join(copilot.IMAGE_MIME_TYPES) + " (data:image/png;base64,...)")
+    try:
+        size = len(base64.b64decode(payload, validate=True))
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=422, detail="image is not valid base64")
+    if size == 0 or size > MAX_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"image must be between 1 byte and {MAX_IMAGE_BYTES // (1024 * 1024)} MB")
+    resolved = model or llm_client.LLM_MODEL
+    if llm_client.accepts_images(resolved) is False:
+        vision = llm_client.vision_models() or []
+        raise HTTPException(
+            status_code=422,
+            detail=f"{resolved} does not accept images; pick one that does: "
+                   + (", ".join(vision) or "none offered"))
+    return image
 
 
 def _assembly_copilot_access(assembly_id: str, acc: accounts.Account) -> AssemblyDoc:
@@ -452,13 +503,15 @@ def run_assembly_copilot(
         raise HTTPException(status_code=422, detail="goal is required")
 
     model = _checked_model(body.model)
+    image = _checked_image(body.image, model)
     job = {"id": str(uuid.uuid4()), "subject_id": assembly_id, "subject": "assembly",
-           "status": "running", "steps": [], "summary": None, "model": model}
+           "status": "running", "steps": [], "summary": None, "model": model,
+           "has_image": bool(image)}
     _COPILOT_JOBS[job["id"]] = job
     prune_jobs(_COPILOT_JOBS)
     steps = body.max_steps or copilot.step_default("assembly")
     background_tasks.add_task(_run_copilot_job, job, assembly_id, body.goal.strip(),
-                              steps, acc, "assembly", model)
+                              steps, acc, "assembly", model, image)
     return _copilot_state(job, document=None)
 
 

@@ -31,8 +31,20 @@ MAX_STEPS_CAP = 16
 #: already a dozen steps before anything goes wrong — budgets tuned for editing
 #: one body stop it halfway through and report it as out of budget, which looks
 #: exactly like a loop that gave up.
-ASSEMBLY_MAX_STEPS_DEFAULT = 24
-ASSEMBLY_MAX_STEPS_CAP = 60
+ASSEMBLY_MAX_STEPS_DEFAULT = 48
+ASSEMBLY_MAX_STEPS_CAP = 120
+
+#: Wall-clock limits, per subject for the same reason. Doubling an assembly's
+#: step budget changes nothing if a build of that length hits the ten-minute
+#: limit first, and each `build_part` is a whole nested run of LLM turns. The
+#: assembly figure stays under the client's twenty-minute polling deadline, or
+#: the browser would abandon a run the server is still executing.
+MAX_SECONDS_DEFAULT = 600
+ASSEMBLY_MAX_SECONDS_DEFAULT = 1080
+
+#: The image types a vision model is sent. Anything else is refused at the
+#: route rather than forwarded to a provider that answers with its own error.
+IMAGE_MIME_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
 
 
 def step_cap(subject: str) -> int:
@@ -41,6 +53,10 @@ def step_cap(subject: str) -> int:
 
 def step_default(subject: str) -> int:
     return ASSEMBLY_MAX_STEPS_DEFAULT if subject == "assembly" else MAX_STEPS_DEFAULT
+
+
+def seconds_default(subject: str) -> float:
+    return ASSEMBLY_MAX_SECONDS_DEFAULT if subject == "assembly" else MAX_SECONDS_DEFAULT
 
 # A decision is either {"op", "args", "rationale"} or {"done": true, "summary"}.
 Planner = Callable[[str, List[dict], dict], dict]
@@ -111,7 +127,8 @@ def _summary(subject: str, obj) -> dict:
 
 
 def _plan_next(goal: str, transcript: List[dict], summary: dict,
-               subject: str = "document", model: Optional[str] = None) -> dict:
+               subject: str = "document", model: Optional[str] = None,
+               image: Optional[str] = None) -> dict:
     """Ask the LLM for the next operation. Returns a decision dict.
 
     Two paths, and which one ran is recorded on the decision as ``_via`` the
@@ -146,7 +163,7 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
     messages = [
         {"role": "system", "content": action_space.system_prompt(
             with_tools=with_tools, subject=subject)},
-        {"role": "user", "content": user},
+        {"role": "user", "content": _user_content(user, image)},
     ]
     message = llm_client._post_chat(
         messages, timeout=60.0, max_tokens=1200,
@@ -174,6 +191,21 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
     if raw is None:
         raise ValueError(f"planner returned no JSON: {content[:200]}")
     return {**json.loads(raw), "_via": "prose"}
+
+
+def _user_content(text: str, image: Optional[str]):
+    """The user turn, with the reference image attached when there is one.
+
+    Sent on **every** turn, not only the first. The planner is stateless between
+    steps, since each call is rebuilt from the goal, the summary and the
+    transcript. An image sent once is a reference the model has lost by step two.
+    The client downscales before upload, which is what bounds the repeated cost.
+    """
+    if not image:
+        return text
+    return [{"type": "text", "text": text + "\n\nThe attached image is the "
+             "user's reference for this goal."},
+            {"type": "image_url", "image_url": {"url": image}}]
 
 
 def _verify(subject: str, subject_id: str, note: Callable[[dict], None]) -> List[str]:
@@ -234,9 +266,10 @@ def run(
     meter: Optional[Callable[[], None]] = None,
     on_step: Optional[Callable[[dict], None]] = None,
     cancelled: Optional[Callable[[], bool]] = None,
-    max_seconds: float = 600,
+    max_seconds: Optional[float] = None,
     subject: str = "document",
     model: Optional[str] = None,
+    image: Optional[str] = None,
 ) -> dict:
     """Run the agentic loop until the planner says done or the step budget runs out.
 
@@ -246,6 +279,10 @@ def run(
 
     ``planner(goal, transcript, doc_summary) -> decision`` is injectable for tests.
     ``meter()`` is called before each *mutating* op (raise to stop on quota).
+    ``image`` is a ``data:image/...;base64,`` URI shown to the planner on every
+    turn. It is deliberately not passed into a nested ``build_part`` run: that
+    run's goal is text the planner wrote about one part, and a photo of the
+    whole assembly is not a reference for one plate.
     ``on_step(entry)`` fires as each transcript entry lands, so a caller running
     the loop as a background job can expose live progress.
     Returns ``{steps, document, summary}``.
@@ -253,10 +290,13 @@ def run(
     from app.services import trajectories
 
     planner = planner or (
-        lambda g, t, summary: _plan_next(g, t, summary, subject=subject, model=model))
+        lambda g, t, summary: _plan_next(g, t, summary, subject=subject, model=model,
+                                         image=image))
     max_steps = max(1, min(int(max_steps), step_cap(subject)))
     transcript: List[dict] = []
     final_summary: Optional[str] = None
+    if max_seconds is None:
+        max_seconds = seconds_default(subject)
     deadline = time.monotonic() + max(1, min(max_seconds, 1800))
     stop_reason = "budget"
     failure_counts: Dict[str, int] = {}
@@ -440,6 +480,7 @@ def run(
             # Which model produced this run, so two runs of one goal can be told
             # apart afterwards — the whole point of being able to pick one.
             "model": model or llm_client.LLM_MODEL,
+            "has_image": bool(image),
             "trajectory_id": trajectory_id}
 
 

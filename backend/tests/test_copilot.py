@@ -674,3 +674,116 @@ def test_an_empty_target_means_the_whole_body_not_a_missing_feature():
         "params": {"size": {"x": 0.01, "y": 0.01, "z": 0.01},
                    "center": {"x": 0, "y": 0, "z": 0}}})
     assert bad["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# A reference image with the goal
+# ---------------------------------------------------------------------------
+
+_PNG = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
+        "z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+
+def _capture_messages(monkeypatch, decisions):
+    """Pretend a provider is configured and record every message list sent."""
+    from app.services import llm_client
+
+    sent = []
+    queue = list(decisions)
+
+    def fake_post(messages, *, timeout=60.0, max_tokens=None, tools=None, model=None):
+        sent.append(messages)
+        return {"content": json.dumps(queue.pop(0) if len(queue) > 1 else queue[0])}
+
+    monkeypatch.setattr(llm_client, "is_configured", lambda: True)
+    monkeypatch.setattr(llm_client, "supports_tools", lambda: False)
+    monkeypatch.setattr(llm_client, "_post_chat", fake_post)
+    return sent
+
+
+def test_the_image_reaches_the_planner_on_every_turn(monkeypatch):
+    """The planner is stateless between steps, so an image sent only on the first
+    turn is a reference the model has lost by the second."""
+    sent = _capture_messages(monkeypatch, [
+        {"op": "add_primitive", "rationale": "plate",
+         "args": {"shape": "box", "operation": "union",
+                  "params": {"size": {"x": 0.05, "y": 0.05, "z": 0.01},
+                             "center": {"x": 0, "y": 0, "z": 0}}}},
+        {"done": True, "summary": "built it"},
+    ])
+    out = copilot.run(_new_doc(), "make what is in the picture", image=_PNG, max_steps=4)
+    assert len(sent) >= 2
+    for messages in sent:
+        content = messages[-1]["content"]
+        assert isinstance(content, list), "the user turn carries the image as a content part"
+        parts = {p["type"]: p for p in content}
+        assert parts["image_url"]["image_url"]["url"] == _PNG
+        assert "Goal: make what is in the picture" in parts["text"]["text"]
+    assert out["has_image"] is True
+
+
+def test_without_an_image_the_user_turn_stays_plain_text(monkeypatch):
+    sent = _capture_messages(monkeypatch, [{"done": True, "summary": "done"}])
+    copilot.run(_new_doc(), "leave it")
+    assert isinstance(sent[0][-1]["content"], str)
+
+
+def test_a_malformed_image_is_refused_before_the_run_starts():
+    doc_id = _new_doc()
+    for bad in ("https://example.com/cat.png",           # a URL the provider would fetch
+                "data:text/html;base64,PGgxPmhpPC9oMT4=",  # not an image type
+                "data:image/png;base64,@@@not-base64@@@",
+                "data:image/png,rawbytes"):               # not base64 encoded
+        r = client.post(f"/api/documents/{doc_id}/copilot", json={"goal": "x", "image": bad})
+        assert r.status_code == 422, (bad, r.text)
+
+
+def test_a_text_only_model_is_refused_an_image(monkeypatch):
+    """The provider's own answer arrives mid-run as a planner error nobody can act on."""
+    from app.services import llm_client
+
+    monkeypatch.setattr(llm_client, "LLM_BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setattr(llm_client, "_openrouter_catalog", lambda: {
+        m: frozenset({"text"}) if "deepseek" in m else frozenset({"text", "image"})
+        for m in llm_client._PROVIDER_MODELS["openrouter"]})
+    assert llm_client.accepts_images("deepseek/deepseek-v4-pro-0813") is False
+    assert llm_client.accepts_images("anthropic/claude-sonnet-5") is True
+    vision = llm_client.current_config()["vision_models"]
+    assert "anthropic/claude-sonnet-5" in vision
+    assert not any("deepseek" in m for m in vision)
+
+    asm_id = _assembly()
+    r = client.post(f"/api/assemblies/{asm_id}/copilot",
+                    json={"goal": "x", "image": _PNG, "model": "deepseek/deepseek-v4-pro-0813"})
+    assert r.status_code == 422
+    assert "does not accept images" in r.text
+
+
+def test_a_provider_that_publishes_no_modalities_is_not_refused(monkeypatch):
+    from app.services import llm_client
+
+    monkeypatch.setattr(llm_client, "LLM_BASE_URL", "https://api.moonshot.cn/v1")
+    assert llm_client.accepts_images("kimi-k2-turbo-preview") is None
+    assert llm_client.current_config()["vision_models"] is None
+
+
+def test_the_job_says_an_image_went_with_it_and_does_not_keep_it(monkeypatch):
+    from app.routers import operations
+
+    _capture_model(monkeypatch, {"done": True, "summary": "done"})
+    monkeypatch.setattr(operations.llm_client, "accepts_images", lambda m=None: True)
+    doc_id = _new_doc()
+    r = client.post(f"/api/documents/{doc_id}/copilot", json={"goal": "leave it", "image": _PNG})
+    assert r.status_code == 200, r.text
+    job_id = r.json()["job_id"]
+    body = client.get(f"/api/documents/{doc_id}/copilot/{job_id}").json()
+    assert body["has_image"] is True
+    assert _PNG not in json.dumps(operations._COPILOT_JOBS[job_id], default=str)
+
+
+def test_an_assembly_run_gets_more_time_as_well_as_more_steps():
+    """Doubling the steps alone changes nothing when a long build hits the
+    clock first."""
+    assert copilot.seconds_default("assembly") > copilot.seconds_default("document")
+    # And inside the twenty minutes the client polls for.
+    assert copilot.seconds_default("assembly") < 20 * 60
