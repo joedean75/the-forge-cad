@@ -12,7 +12,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.schemas import AssemblyDoc, DesignDocument
 from app.rate_limit import rate_limit
@@ -249,6 +249,9 @@ def run_operation(
 
 class CopilotRequest(BaseModel):
     goal: str
+    # Browser-supplied transcript for the selected conversation. Kept separate
+    # from this run's goal and step budget, and never treated as system policy.
+    history: str = Field(default="", max_length=60000)
     #: Left unset the route picks the default for its own subject — an assembly
     #: build is many steps larger than an edit to one body, and one shared
     #: default would either starve the build or over-budget the edit.
@@ -311,7 +314,8 @@ def _copilot_state(job: Dict[str, Any], document: Optional[DesignDocument],
 def _run_copilot_job(job: Dict[str, Any], subject_id: str, goal: str, max_steps: int,
                      acc: accounts.Account, subject: str = "document",
                      model: Optional[str] = None,
-                     images: Optional[List[str]] = None) -> None:
+                     images: Optional[List[str]] = None,
+                     history: str = "") -> None:
     try:
         outcome = copilot.run(
             subject_id,
@@ -323,6 +327,7 @@ def _run_copilot_job(job: Dict[str, Any], subject_id: str, goal: str, max_steps:
             subject=subject,
             model=model,
             images=images,
+            history=history,
         )
         job["model"] = outcome.get("model")
         job["summary"] = outcome["summary"]
@@ -385,7 +390,7 @@ def run_copilot(
     prune_jobs(_COPILOT_JOBS)
     steps = body.max_steps or copilot.step_default("document")
     background_tasks.add_task(_run_copilot_job, job, doc_id, body.goal.strip(), steps,
-                              acc, "document", model, images)
+                              acc, "document", model, images, body.history)
     return _copilot_state(job, document=None)
 
 
@@ -534,7 +539,7 @@ def run_assembly_copilot(
     prune_jobs(_COPILOT_JOBS)
     steps = body.max_steps or copilot.step_default("assembly")
     background_tasks.add_task(_run_copilot_job, job, assembly_id, body.goal.strip(),
-                              steps, acc, "assembly", model, images)
+                              steps, acc, "assembly", model, images, body.history)
     return _copilot_state(job, document=None)
 
 

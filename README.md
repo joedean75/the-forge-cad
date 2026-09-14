@@ -83,6 +83,13 @@ job, watch it run, then send it out:
 
 Assemblies compose part documents with placement transforms.
 
+Copilot remembers conversations per account and per part or assembly in this
+browser. Use the **Chat** picker to return to a conversation, or **New chat** to
+start fresh. Every follow-up includes that chat's earlier goals, outcomes and
+operation details, so “continue” can pick up after a step-budget stop. Long
+histories are abbreviated to keep context bounded. Reference image pixels are
+not saved in chat history; reattach images when a follow-up needs them.
+
 ## Documentation
 
 **Start here**

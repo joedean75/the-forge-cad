@@ -1,12 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Bot, Send, X, Check, AlertTriangle, Loader2, Wrench, ImagePlus } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
+import { useAuthStore } from '../store/useAuthStore'
 import { useAssemblyStore } from '../store/useAssemblyStore'
 import { api } from '../api/client'
-import type { CopilotResult, CopilotStep } from '../../../shared/types'
+import type { CopilotStep } from '../../../shared/types'
 import { prepareImage, dataUriBytes, MAX_IMAGES, MAX_TOTAL_IMAGE_BYTES } from '../util/imageAttach'
 
-type Turn = { goal: string; images?: string[]; running: boolean; subjectId: string; stopping?: boolean; stopError?: string; result?: CopilotResult }
+import {
+  conversationScope, conversationHistory, newConversation, readConversations,
+  subscribeConversations, updateConversations, updateTurn, transcriptResult, trackedRuns,
+  type Turn,
+} from '../util/copilotConversations'
 
 /** Which thing the panel is driving. One panel rather than two, because the
  *  loop, the transcript and the stop button are identical — what differs is
@@ -92,15 +97,30 @@ function StepRow({ step }: { step: CopilotStep }) {
 export function CopilotPanel({ open, onClose, subject = 'document' }: {
   open: boolean; onClose: () => void; subject?: Subject
 }) {
+  const accountId = useAuthStore((s) => s.account?.id ?? 'local')
+  const docId = useDocumentStore((s) => s.doc?.id)
+  const asmId = useAssemblyStore((s) => s.assembly?.id)
+  const scope = conversationScope(accountId, subject, (subject === 'assembly' ? asmId : docId) ?? '')
+  return <CopilotConversationPanel key={scope} scope={scope} open={open} onClose={onClose} subject={subject} />
+}
+
+function CopilotConversationPanel({ open, onClose, subject, scope }: {
+  open: boolean; onClose: () => void; subject: Subject; scope: string
+}) {
   const docStore = useDocumentStore()
   const asmStore = useAssemblyStore()
   const onAssembly = subject === 'assembly'
-  const busy = onAssembly ? asmStore.busy : docStore.busy
+  const storeBusy = onAssembly ? asmStore.busy : docStore.busy
   const subjectId = (onAssembly ? asmStore.assembly?.id : docStore.doc?.id) ?? null
   const runCopilot = onAssembly ? asmStore.runCopilot : docStore.runCopilot
   const noun = onAssembly ? 'assembly' : 'part'
   const [goal, setGoal] = useState('')
-  const [turns, setTurns] = useState<Turn[]>([])
+  const conversations = useSyncExternalStore(subscribeConversations, () => readConversations(scope))
+  const conversation = conversations.conversations.find((c) => c.id === conversations.selected)!
+  const turns = conversation.turns
+  const conversationBusy = conversations.conversations.some((c) => c.turns.some((t) => t.running))
+  const submitting = useRef(false)
+  const busy = storeBusy || conversationBusy
   const [models, setModels] = useState<string[]>([])
   const [defaultModel, setDefaultModel] = useState('')
   const [model, setModel] = useState(rememberedModel)
@@ -133,6 +153,35 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
       .catch(() => undefined)
     return () => { live = false }
   }, [open, models.length])
+
+  // A saved job id lets a reload reconnect without starting the goal again.
+  useEffect(() => {
+    for (const c of conversations.conversations) {
+      for (const turn of c.turns) {
+        if (!turn.running || trackedRuns.has(turn.id)) continue
+        const patch = (value: Partial<Turn>) => updateTurn(scope, c.id, turn.id, value)
+        if (!turn.result?.job_id) {
+          patch({ running: false, stopError: 'The page closed before a job ID was received. Check the current model before retrying.' })
+          continue
+        }
+        trackedRuns.add(turn.id)
+        api.waitForCopilot(turn.subjectId, turn.result.job_id,
+          (state) => patch({ result: transcriptResult(state) }),
+          onAssembly ? 'assemblies' : 'documents')
+          .then(async (result) => {
+            patch({ running: false, result: transcriptResult(result) })
+            if (onAssembly && useAssemblyStore.getState().assembly?.id === turn.subjectId) {
+              useAssemblyStore.getState().markStale()
+              await useAssemblyStore.getState().refresh()
+            } else if (!onAssembly && useDocumentStore.getState().doc?.id === turn.subjectId) {
+              await useDocumentStore.getState().refreshDoc()
+            }
+          })
+          .catch((e) => patch({ running: false, stopError: e instanceof Error ? e.message : 'Could not reconnect to the task' }))
+          .finally(() => trackedRuns.delete(turn.id))
+      }
+    }
+  }, [conversations, scope, onAssembly])
 
   if (!open) return null
 
@@ -178,35 +227,66 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
 
   const submit = async (g: string) => {
     const text = g.trim()
-    if (!text || busy || !subjectId || preparing || imageBlocked) return
+    if (!text || busy || submitting.current || !subjectId || preparing || imageBlocked) return
     const sentImages = images
     setGoal('')
     setImages([])
     setImageError(null)
-    const idx = turns.length
-    setTurns((t) => [...t, { goal: text, images: sentImages.length ? sentImages : undefined, running: true, subjectId }])
-    // Live progress: the copilot runs as a server-side job; each poll delivers
-    // the transcript so far.
-    const result = await runCopilot(
-      text,
-      (state) => setTurns((t) => t.map((x, i) => (i === idx ? { ...x, result: state } : x))),
-      model || undefined,
-      sentImages,
-    )
-    setTurns((t) => t.map((x, i) => (i === idx ? { ...x, running: false, result } : x)))
+    submitting.current = true
+    const turnId = crypto.randomUUID()
+    const conversationId = conversation.id
+    trackedRuns.add(turnId)
+    const history = conversationHistory(turns)
+    updateConversations(scope, (state) => ({ ...state, conversations: state.conversations.map((c) =>
+      c.id !== conversationId ? c : {
+        ...c, title: c.turns.length ? c.title : text.slice(0, 70),
+        turns: [...c.turns, { id: turnId, goal: text, images: sentImages.length ? sentImages : undefined,
+          running: true, subjectId }],
+      }),
+    }))
+    const patch = (value: Partial<Turn>) => updateTurn(scope, conversationId, turnId, value)
+    try {
+      const result = await runCopilot(
+        text, (state) => patch({ result: transcriptResult(state) }),
+        model || undefined, sentImages, history,
+      )
+      patch({ running: false, ...(result ? { result: transcriptResult(result) } : {
+        stopError: (onAssembly ? useAssemblyStore.getState().error : useDocumentStore.getState().error) || 'No response received.',
+      }) })
+    } catch (e) {
+      patch({ running: false, stopError: e instanceof Error ? e.message : 'Copilot failed' })
+    } finally {
+      trackedRuns.delete(turnId)
+      submitting.current = false
+    }
   }
 
-  const stop = async (index: number, turn: Turn) => {
+  const stop = async (turn: Turn) => {
     if (!turn.result?.job_id) return
-    setTurns((t) => t.map((x, i) => i === index ? { ...x, stopping: true, stopError: undefined } : x))
+    const patch = (value: Partial<Turn>) => updateTurn(scope, conversation.id, turn.id, value)
+    patch({ stopping: true, stopError: undefined })
     try {
       await api.cancelCopilot(turn.subjectId, turn.result.job_id,
                               onAssembly ? 'assemblies' : 'documents')
+    } catch (e) {
+      patch({ stopping: false, stopError: e instanceof Error ? e.message : 'Could not stop the task' })
     }
-    catch (e) {
-      setTurns((t) => t.map((x, i) => i === index ? { ...x, stopping: false,
-        stopError: e instanceof Error ? e.message : 'Could not stop the task' } : x))
-    }
+  }
+
+  const selectConversation = (id: string) => {
+    setGoal('')
+    setImages([])
+    setImageError(null)
+    updateConversations(scope, (state) => ({ ...state, selected: id }))
+  }
+
+  const startConversation = () => {
+    const next = newConversation()
+    updateConversations(scope, (state) => ({ ...state, selected: next.id,
+      conversations: [...state.conversations, next] }))
+    setGoal('')
+    setImages([])
+    setImageError(null)
   }
 
   return (
@@ -223,6 +303,25 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
           </div>
         </div>
         <button onClick={onClose} className="p-1.5 rounded-sm text-cad-text hover:text-cad-text-heading hover:bg-cad-raised"><X size={16} /></button>
+      </div>
+
+      <div className="border-b border-cad-border px-4 py-2 space-y-1.5 shrink-0">
+        <div className="flex items-center gap-2">
+          <label htmlFor="copilot-conversation" className="eyebrow text-cad-text/55">Chat</label>
+          <select id="copilot-conversation" value={conversation.id}
+            disabled={preparing} onChange={(e) => selectConversation(e.target.value)}
+            className="flex-1 min-w-0 bg-cad-bg border border-cad-border rounded-sm px-1.5 py-1 text-[11px] text-cad-text-heading">
+            {conversations.conversations.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+          </select>
+          <button onClick={startConversation} disabled={!subjectId || busy || preparing}
+            className="text-[11px] text-cad-text border border-cad-border rounded-sm px-2 py-1 disabled:opacity-40">New chat</button>
+        </div>
+        <p className="text-[10px] text-cad-text/55">
+          {turns.length ? `${turns.length} previous prompt(s) included as context. ` : ''}
+          Chats are saved in this browser for this {noun}; long histories are abbreviated.
+          {' '}Reattach reference images when needed.
+        </p>
+        {conversations.storageError && <p role="alert" className="text-[11px] text-cad-danger">{conversations.storageError}</p>}
       </div>
 
       {/* Which model plans the run, for this run only — the process-wide default
@@ -269,8 +368,8 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
           </div>
         )}
 
-        {turns.map((turn, i) => (
-          <div key={i} className="space-y-2">
+        {turns.map((turn) => (
+          <div key={turn.id} className="space-y-2">
             {/* user goal */}
             <div className="flex justify-end">
               <div className="max-w-[85%] text-[12px] bg-cad-accent/12 border border-cad-accent/30 text-cad-text-heading rounded-md rounded-tr-sm px-2.5 py-1.5">
@@ -282,6 +381,7 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
                     ))}
                   </div>
                 )}
+                {!turn.images?.length && !!turn.imageCount && <div className="text-[10px] text-cad-text/55">{turn.imageCount} reference image(s) attached previously</div>}
                 {turn.goal}
               </div>
             </div>
@@ -298,7 +398,7 @@ export function CopilotPanel({ open, onClose, subject = 'document' }: {
               {turn.running ? (
                 <div className="flex items-center gap-2 text-[11px] text-cad-accent-hot">
                   <Loader2 size={12} className="animate-spin" /> {turn.stopping ? 'Stopping after current operation...' : 'Planning & building...'}
-                  {turn.result?.job_id && <button onClick={() => stop(i, turn)} disabled={turn.stopping}
+                  {turn.result?.job_id && <button onClick={() => stop(turn)} disabled={turn.stopping}
                     className="ml-auto px-2 py-1 border border-cad-border rounded-sm disabled:opacity-40">Stop</button>}
                 </div>
               ) : turn.result ? (

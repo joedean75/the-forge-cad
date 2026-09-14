@@ -55,6 +55,14 @@ def _bbox_mm(bbox) -> Optional[Dict[str, float]]:
     }
 
 
+def bounds_mm(bbox) -> Optional[dict]:
+    """Full bounds; size alone loses where an off-centre part actually lies."""
+    if bbox is None:
+        return None
+    return {side: {axis: round(getattr(getattr(bbox, side), axis) * MM, 3)
+                   for axis in ("x", "y", "z")} for side in ("min", "max")}
+
+
 def features(doc) -> List[dict]:
     """Every feature as {id, type, name, params}, parents before children.
 
@@ -63,15 +71,18 @@ def features(doc) -> List[dict]:
     """
     out: List[dict] = []
 
-    def walk(node: dict) -> None:
+    def walk(node: dict, parent_id=None) -> None:
         out.append({
             "id": node.get("id"),
             "type": node.get("type"),
             "name": node.get("name"),
             "params": trim_params(node.get("params", {})),
+            "parent_id": parent_id,
+            "keep": bool(node.get("keep")),
+            "suppressed": bool(node.get("suppressed")),
         })
         for child in (node.get("params", {}) or {}).get("children", []) or []:
-            walk(child)
+            walk(child, node.get("id"))
 
     root = (doc.feature_tree or {}).get("root")
     if root:
@@ -84,12 +95,16 @@ def summarize(doc) -> dict:
     d = doc.derived
     spec = getattr(doc, "spec", None) or {}
     out = {
+        "kind": "document",
+        "id": doc.id,
         "name": doc.name,
         "features": features(doc),
         "bbox_size_mm": _bbox_mm(d.bbox),
+        "bbox_mm": bounds_mm(d.bbox),
         "mass_kg": round(d.mass, 4) if d.mass else 0.0,
         "material_id": doc.material_id,
         "error": d.error,
+        "parameter_units": "Feature geometry uses metres unless a parameter declares another unit; *_mm is millimetres, *_deg is degrees.",
     }
     # A sheet's mass and volume are zero because it has neither, not because
     # nothing is assigned — so it says what it is and reports the number it does
@@ -99,12 +114,16 @@ def summarize(doc) -> dict:
     if str(getattr(d, "body_kind", "solid")) == "sheet":
         out["body_kind"] = "sheet"
         out["area_mm2"] = round(float(getattr(d, "area", 0.0)) * 1e6, 3)
-    # What the part is *for*, when a spec was set. The requirement count and the
-    # score are left out on purpose: scoring means meshing the body, and this
-    # runs on every operation. Call verify_against_spec for the number.
-    if spec.get("requirements"):
-        out["spec"] = {"goal": spec.get("goal"),
-                       "requirements": len(spec["requirements"])}
+    # Reading constraints is cheap; evaluating their score is a separate tool.
+    if spec:
+        out["spec"] = spec
+    for key in ("source_prompt", "manufacturing", "general_tolerance",
+                "active_configuration", "mechanism"):
+        value = getattr(doc, key, None)
+        if value:
+            out[key] = value
+    if getattr(doc, "parameters", None):
+        out["parameters"] = [p.model_dump() for p in doc.parameters]
     return out
 
 
@@ -116,10 +135,19 @@ def summarize_assembly(asm) -> dict:
     sits where and what holds it there*. Positions are in millimetres for the
     same reason every other observation is — see `services/units`.
     """
+    from itertools import product
+    import numpy as np
+    from app.cad_kernel.evaluator.sdf import _euler_matrix
+    from app.services import assembly_service
+
+    frames = assembly_service.connector_frames(asm)
     components = []
+    world_corners = []
     for c in getattr(asm, "components", []) or []:
         t = c.transform
-        components.append({
+        rotation = _euler_matrix(t.rotate_deg.x, t.rotate_deg.y, t.rotate_deg.z)
+        translate = np.array([t.translate.x, t.translate.y, t.translate.z])
+        item = {
             "id": c.id,
             "part_id": c.part_id,
             "name": c.name,
@@ -127,25 +155,49 @@ def summarize_assembly(asm) -> dict:
                             "y": round(t.translate.y * MM, 3),
                             "z": round(t.translate.z * MM, 3)},
             "size_mm": _bbox_mm(c.bbox),
+            "local_bbox_mm": bounds_mm(c.bbox),
+            "rotation_deg": t.rotate_deg.model_dump(),
+            "scale": t.scale,
+            "positioned_by_mates": [m.id for m in asm.mates if m.moved == c.id],
             # A component whose part was deleted is still in the tree and is not
             # geometry; an agent that cannot see that will try to mate to it.
             "missing": bool(c.missing),
-        })
+        }
+        if c.bbox is not None and not c.missing:
+            corners = np.array(list(product(*[(getattr(c.bbox.min, a), getattr(c.bbox.max, a))
+                                              for a in ("x", "y", "z")])))
+            corners = (corners * t.scale) @ rotation.T + translate
+            world_corners.extend(corners)
+            item["world_bbox_mm"] = {
+                "min": dict(zip(("x", "y", "z"), np.round(corners.min(axis=0) * MM, 3).tolist())),
+                "max": dict(zip(("x", "y", "z"), np.round(corners.max(axis=0) * MM, 3).tolist())),
+            }
+        item["connectors"] = [{
+            "id": cid,
+            "local_origin_mm": np.round(origin * MM, 3).tolist(),
+            "local_axes": np.round(axes, 6).tolist(),
+            "world_origin_mm": np.round((rotation @ (origin * t.scale) + translate) * MM, 3).tolist(),
+            "world_axes": np.round(rotation @ axes, 6).tolist(),
+        } for cid, (origin, axes) in (frames.get(c.part_id) or {}).items()]
+        components.append(item)
     return {
         # Which kind of thing this observation describes. An agent driving both
         # subjects gets two differently-shaped states, and one that has to infer
         # which from the presence of a key will eventually infer wrong.
         "kind": "assembly",
+        "id": asm.id,
         "name": asm.name,
         "components": components,
         # `angle_deg` is in here because it is a pose an agent can change and
         # then has to be able to read back — a state an operation moves and the
         # observation does not show is one nothing can be trained against.
-        "mates": [{"id": m.id, "type": m.type, "base": m.base, "moved": m.moved,
-                   "axis": m.axis, "offset_mm": m.offset_mm,
-                   "angle_deg": getattr(m, "angle_deg", 0.0)}
-                  for m in (getattr(asm, "mates", []) or [])],
+        "mates": [m.model_dump() for m in (getattr(asm, "mates", []) or [])],
         "bbox_size_mm": _bbox_mm(getattr(asm, "bbox", None)),
+        "world_bbox_mm": ({
+            "min": dict(zip(("x", "y", "z"), np.round(np.min(world_corners, axis=0) * MM, 3).tolist())),
+            "max": dict(zip(("x", "y", "z"), np.round(np.max(world_corners, axis=0) * MM, 3).tolist())),
+        } if world_corners else None),
+        "coordinate_notes": "Positions/world_bbox_mm are assembly-space mm. local_bbox_mm and connector local origins are part-space mm; axes are column vectors. World bounds enclose transformed part bounding boxes, not exact surfaces. bbox_size_mm is the legacy camera-fit envelope and ignores rotation.",
     }
 
 

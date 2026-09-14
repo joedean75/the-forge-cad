@@ -427,16 +427,28 @@ export const api = {
     /** Reference images as `data:image/...;base64,` URIs, shown to the
      *  planner on every turn in this order. */
     images?: string[] | null,
+    history?: string,
   ): Promise<CopilotResult> => {
-    let state = await fetchJson<CopilotResult>(`/${subject}/${id}/copilot`, {
+    const state = await fetchJson<CopilotResult>(`/${subject}/${id}/copilot`, {
       method: 'POST',
       body: JSON.stringify({
         goal,
         ...(maxSteps === undefined ? {} : { max_steps: maxSteps }),
         ...(model ? { model } : {}),
         ...(images?.length ? { images } : {}),
+        ...(history ? { history } : {}),
       }),
     })
+    onProgress?.(state)
+    return api.waitForCopilot(id, state.job_id, onProgress, subject)
+  },
+  /** Reconnect to an existing run after reopening the page. */
+  waitForCopilot: async (
+    id: string, jobId: string, onProgress?: (state: CopilotResult) => void,
+    subject: CopilotSubject = 'documents',
+  ): Promise<CopilotResult> => {
+    let state = await fetchJson<CopilotResult>(`/${subject}/${id}/copilot/${jobId}`)
+    onProgress?.(state)
     const deadline = Date.now() + 20 * 60_000
     while (state.status === 'running') {
       if (Date.now() > deadline) throw new Error('Copilot timed out')

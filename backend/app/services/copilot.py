@@ -132,7 +132,7 @@ def _summary(subject: str, obj) -> dict:
 
 def _plan_next(goal: str, transcript: List[dict], summary: dict,
                subject: str = "document", model: Optional[str] = None,
-               images: Optional[List[str]] = None) -> dict:
+               images: Optional[List[str]] = None, history: str = "") -> dict:
     """Ask the LLM for the next operation. Returns a decision dict.
 
     Two paths, and which one ran is recorded on the decision as ``_via`` the
@@ -145,7 +145,7 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
     if not llm_client.is_configured():
         return {"done": True, "summary": "No LLM configured — the copilot needs an LLM key.", "_unconfigured": True}
 
-    history = [
+    steps = [
         {
             "op": s.get("op"),
             "args": s.get("args"),
@@ -158,9 +158,14 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
         if s.get("kind") in ("op", "verification")
     ]
     user = (
+        (f"Previous conversation about this {subject}:\n{history}\n\n"
+         "Use this as context for the new request, including unfinished work. "
+         "Past operations already ran; do not repeat them blindly. The current "
+         "state below is authoritative if it differs from the conversation.\n\n"
+         if history else "") +
         f"Goal: {goal}\n\n"
         f"Current document:\n{json.dumps(summary)}\n\n"
-        f"Steps so far:\n{json.dumps(history) if history else '(none yet)'}\n\n"
+        f"Steps so far in this run:\n{json.dumps(steps) if steps else '(none yet)'}\n\n"
         "Take the next single action."
     )
     with_tools = llm_client.supports_tools()
@@ -277,6 +282,7 @@ def run(
     subject: str = "document",
     model: Optional[str] = None,
     images: Optional[List[str]] = None,
+    history: str = "",
 ) -> dict:
     """Run the agentic loop until the planner says done or the step budget runs out.
 
@@ -285,6 +291,9 @@ def run(
     the planner is offered, and what checking your work means at the end.
 
     ``planner(goal, transcript, doc_summary) -> decision`` is injectable for tests.
+    ``history`` is the selected conversation's compact text transcript. Every
+    planner call receives it alongside fresh state; it does not consume this
+    run's step budget or become part of its operation/trajectory transcript.
     ``meter()`` is called before each *mutating* op (raise to stop on quota).
     ``images`` are ``data:image/...;base64,`` URIs shown to the planner on every
     turn, in order. It is deliberately not passed into a nested ``build_part`` run: that
@@ -298,7 +307,7 @@ def run(
 
     planner = planner or (
         lambda g, t, summary: _plan_next(g, t, summary, subject=subject, model=model,
-                                         images=images))
+                                         images=images, history=history))
     max_steps = max(1, min(int(max_steps), step_cap(subject)))
     transcript: List[dict] = []
     final_summary: Optional[str] = None

@@ -1,6 +1,7 @@
 """Tests for Forge Copilot — the agentic operation loop (roadmap feature 01)."""
 
 import json
+import pytest
 
 from fastapi.testclient import TestClient
 
@@ -8,6 +9,54 @@ from main import app
 from app.services import cad_operations, copilot
 
 client = TestClient(app)
+
+
+@pytest.mark.parametrize("subject", ["documents", "assemblies"])
+def test_followup_history_reaches_every_planner_step_with_a_fresh_budget(monkeypatch, subject):
+    """Exercise both HTTP routes through to actual provider messages, after a
+    budget stop. Historical actions must not consume this run's action budget."""
+    subject_id = _new_doc() if subject == "documents" else _assembly()
+    sent = _capture_messages(monkeypatch, [{"op": "unknown_operation", "args": {}}])
+    path = f"/api/{subject}/{subject_id}/copilot"
+    first = client.post(path, json={"goal": "Build a NEMA 17 rig with a 100 mm base", "max_steps": 1})
+    assert first.status_code == 200, first.text
+    previous = client.get(f"{path}/{first.json()['job_id']}").json()
+    assert previous["stop_reason"] == "budget"
+    history = ("User: Build a NEMA 17 rig with a 100 mm base\nCopilot: "
+               + previous["summary"] + "\nOperations: " + json.dumps(previous["steps"]))
+    sent.clear()
+    followup = client.post(path, json={"goal": "Continue", "max_steps": 2, "history": history})
+    assert followup.status_code == 200, followup.text
+    outcome = client.get(f"{path}/{followup.json()['job_id']}").json()
+    assert len(outcome["steps"]) == 2
+    assert len(sent) == 2
+    for messages in sent:
+        assert history in messages[-1]["content"]
+        assert "Goal: Continue" in messages[-1]["content"]
+        assert "do not repeat them blindly" in messages[-1]["content"]
+        assert history not in messages[0]["content"]
+    assert "Steps so far in this run:\n(none yet)" in sent[0][-1]["content"]
+    # A new chat sends no history: it must not inherit a preceding request's.
+    sent.clear()
+    fresh = client.post(path, json={"goal": "An unrelated task", "max_steps": 1})
+    assert fresh.status_code == 200
+    assert "NEMA 17" not in sent[0][-1]["content"]
+
+
+@pytest.mark.parametrize("subject", ["documents", "assemblies"])
+def test_oversized_conversation_is_rejected_before_starting_a_job(subject):
+    subject_id = _new_doc() if subject == "documents" else _assembly()
+    response = client.post(f"/api/{subject}/{subject_id}/copilot",
+                           json={"goal": "continue", "history": "x" * 60001})
+    assert response.status_code == 422
+
+
+def test_conversation_context_and_reference_images_are_sent_together(monkeypatch):
+    sent = _capture_messages(monkeypatch, [{"done": True, "summary": "done"}])
+    copilot.run(_new_doc(), "Use this reference", history="User: 100 mm base", images=[_PNG])
+    content = sent[0][-1]["content"]
+    assert "User: 100 mm base" in content[0]["text"]
+    assert content[1]["image_url"]["url"] == _PNG
 
 
 def _new_doc() -> str:

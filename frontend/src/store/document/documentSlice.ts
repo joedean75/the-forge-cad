@@ -271,15 +271,16 @@ export function createDocumentSlice(set: Set, get: Get): DocumentSlice {
       }
     },
 
-    runCopilot: async (goal, onProgress, model, images) => {
+    runCopilot: async (goal, onProgress, model, images, history) => {
+      const subjectId = get().doc?.id
       await historySyncSettled()
       const doc = get().doc
-      if (!doc || !goal.trim()) return undefined
+      if (!doc || doc.id !== subjectId || !goal.trim()) return undefined
       const ticket = issue(get)
       set({ past: pushHistory(get().past, doc), future: [], busy: true, error: null })
       try {
         const res = await api.runCopilot(doc.id, goal, undefined, onProgress,
-                                        'documents', model, images)
+                                        'documents', model, images, history)
         if (res.document && sameDocument(get, ticket)) {
           set({
             ...adopt(get, res.document),
