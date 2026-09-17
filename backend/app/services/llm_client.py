@@ -22,9 +22,13 @@ import logging
 import os
 import re
 import time
+from contextvars import ContextVar
 from typing import Any, Optional
 
 import httpx
+from app.services.llm_errors import LLMFailure
+
+CALL_CONTEXT = ContextVar("forge_llm_call_context", default=None)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -378,6 +382,8 @@ def edit_feature_tree(instruction: str, current: dict[str, Any]) -> Optional[dic
     ]
     try:
         content = _call_llm(messages, timeout=60.0, max_tokens=3000)
+    except LLMFailure:
+        raise
     except Exception as exc:
         _LOGGER.warning("LLM edit request failed: %s", exc)
         return None
@@ -469,15 +475,64 @@ def _post_chat(messages: list[dict[str, Any]], *, timeout: float = 60.0,
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
 
-    with httpx.Client(timeout=timeout) as client:
-        resp = client.post(url, headers=_headers(), json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-
-    choices = data.get("choices", [])
-    if not choices:
-        raise RuntimeError("LLM returned no choices")
-    return choices[0].get("message", {}) or {}
+    from app.services import trajectories
+    context = CALL_CONTEXT.get() or {}
+    payload["model"] = model or context.get("model") or LLM_MODEL
+    deadline = context.get("deadline", time.monotonic() + timeout * 2)
+    for attempt in range(2):
+        if context.get("cancelled") and context["cancelled"]():
+            raise LLMFailure("CANCELLED", "Stopped before another provider call.", "Continue when ready.")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise LLMFailure("TIMEOUT", "The run's time budget expired.", "Continue from the saved plan.")
+        started = time.monotonic()
+        try:
+            with httpx.Client(timeout=min(timeout, remaining)) as client:
+                resp = client.post(url, headers=_headers(), json=payload)
+            status = resp.status_code
+            if status >= 400:
+                code, remedy = {
+                    401: ("PROVIDER_ACCESS", "Check the provider API key."),
+                    402: ("PROVIDER_BILLING", "Check your provider balance and billing limits, then continue."),
+                    403: ("PROVIDER_ACCESS", "Check provider account and model access, then continue."),
+                    429: ("PROVIDER_THROTTLED", "Wait briefly, then continue."),
+                }.get(status, ("PROVIDER_ERROR", "Check provider availability and model configuration."))
+                raise LLMFailure(code, f"Provider request failed (HTTP {status}).", remedy,
+                                 status=status, retryable=status == 429 or status >= 500)
+            data = resp.json()
+            choices = data.get("choices") or []
+            message = (choices[0].get("message") or {}) if choices else {}
+            finish = choices[0].get("finish_reason") if choices else None
+            metadata = {"model": payload["model"], "finish_reason": finish,
+                        "request_id": str(resp.headers.get("x-request-id") or data.get("id") or "")[:160],
+                        "usage": {k: v for k, v in (data.get("usage") or {}).items()
+                                  if k in ("prompt_tokens", "completion_tokens", "total_tokens") and isinstance(v, (int, float))},
+                        "latency_ms": round((time.monotonic() - started) * 1000), "attempt": attempt + 1}
+            trajectories.event("provider_response", **metadata)
+            if message.get("refusal") or finish == "content_filter":
+                raise LLMFailure("PROVIDER_REFUSAL", "The provider declined this request.", "Review the request before continuing.")
+            if finish == "length":
+                raise LLMFailure("PROVIDER_TRUNCATED", "The provider response was incomplete.", "Simplify the next step and continue.", retryable=True)
+            if not message.get("tool_calls") and not str(message.get("content") or "").strip():
+                raise LLMFailure("PROVIDER_EMPTY", "The provider returned an empty response.", "Continue to retry the next planning step.", retryable=True)
+            message["_provider"] = metadata
+            return message
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            failure = LLMFailure("PROVIDER_TIMEOUT", "The provider connection timed out or failed.",
+                                 "Reconnect and continue from the saved plan.", retryable=True)
+        except (ValueError, TypeError, AttributeError, KeyError, IndexError):
+            failure = LLMFailure("PROVIDER_PROTOCOL", "The provider returned an invalid response.",
+                                 "Retry the next planning step.", retryable=True)
+        except LLMFailure as exc:
+            failure = exc
+        trajectories.event("provider_error", **failure.to_dict(), model=payload["model"], attempt=attempt + 1)
+        if not failure.retryable or attempt == 1:
+            raise failure
+        # Short, cooperative backoff; another attempt still shares the deadline.
+        for _ in range(5):
+            if time.monotonic() >= deadline or (context.get("cancelled") and context["cancelled"]()):
+                break
+            time.sleep(0.1)
 
 
 def supports_tools() -> bool:
@@ -495,7 +550,7 @@ def _call_llm(messages: list[dict[str, str]], timeout: float = 60.0, max_tokens:
     """Send a chat-completion request and return its text content."""
     content = _post_chat(messages, timeout=timeout, max_tokens=max_tokens).get("content", "")
     if not content:
-        raise RuntimeError("LLM returned empty content")
+        raise LLMFailure("PROVIDER_EMPTY", "The provider returned no text.", "Retry with a smaller editing step.")
     return content
 
 

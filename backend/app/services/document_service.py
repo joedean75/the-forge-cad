@@ -768,19 +768,23 @@ def ai_edit_document(doc_id: str, instruction: str, resolution: int = 128) -> De
     if doc is None:
         raise KeyError(doc_id)
 
+    observed_revision = doc.revision
     result = edit_part_tree(doc.feature_tree, instruction)
     if result is None:
         raise ValueError("AI edit did not produce valid geometry")
 
-    tree, new_dims, source = result
-    _LOGGER.info("AI-edited document %s via %s: %s", doc_id, source, instruction[:60])
-    doc.feature_tree = tree.to_dict()
-    if doc.provenance != "mixed":
-        doc.provenance = "mixed"
-    # Refresh model-generated dimensions; keep the user's own.
-    doc.dimensions = [d for d in doc.dimensions if d.source == "user"] + new_dims
-    evaluate_document(doc, resolution=resolution)
-    return doc
+    with writing(doc_id):
+        if doc.revision != observed_revision:
+            raise ValueError("Document changed since you read it; re-read before applying the edit.")
+        tree, new_dims, source = result
+        _LOGGER.info("AI-edited document %s via %s: %s", doc_id, source, instruction[:60])
+        doc.feature_tree = tree.to_dict()
+        if doc.provenance != "mixed":
+            doc.provenance = "mixed"
+        # Refresh model-generated dimensions; keep the user's own.
+        doc.dimensions = [d for d in doc.dimensions if d.source == "user"] + new_dims
+        evaluate_document(doc, resolution=resolution)
+        return doc
 
 
 def set_material(doc_id: str, material_id: str, resolution: int = 128) -> Optional[DesignDocument]:

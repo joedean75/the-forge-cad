@@ -30,6 +30,7 @@ import numpy as np
 import trimesh
 
 from app.cad_kernel.io import step_import
+from app.import_limits import MAX_EXACT_FILE_BYTES, MAX_FILE_BYTES
 from app.models.schemas import DesignDocument
 from app.services import document_service
 
@@ -50,8 +51,6 @@ SUPPORTED_FORMATS = MESH_FORMATS | EXACT_FORMATS
 # Meshes keep the old cap on purpose. A 50 MB STL is already around a million
 # triangles and the import path voxelises it — more triangles buy nothing that
 # survives the grid, and the file has to be resident in memory to be parsed.
-MAX_FILE_BYTES = 50 * 1024 * 1024
-MAX_EXACT_FILE_BYTES = 128 * 1024 * 1024
 
 
 def max_bytes_for(ext: str) -> int:

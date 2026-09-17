@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from app.services.copilot_context import RequestContext, WorkPlan
 
 from app.models.schemas import AssemblyDoc, DesignDocument
 from app.rate_limit import rate_limit
@@ -249,6 +250,7 @@ def run_operation(
 
 class CopilotRequest(BaseModel):
     goal: str
+    context: RequestContext = Field(default_factory=RequestContext)
     # Browser-supplied transcript for the selected conversation. Kept separate
     # from this run's goal and step budget, and never treated as system policy.
     history: str = Field(default="", max_length=60000)
@@ -287,6 +289,7 @@ class CopilotJobState(BaseModel):
     assembly: Optional[AssemblyDoc] = None
     finished: bool = False
     stop_reason: Optional[str] = None
+    task_state: Optional[WorkPlan] = None
 
 
 # In-memory copilot jobs (single-instance, like the optimize job store).
@@ -308,6 +311,7 @@ def _copilot_state(job: Dict[str, Any], document: Optional[DesignDocument],
         assembly=assembly,
         finished=job.get("finished", False),
         stop_reason=job.get("stop_reason"),
+        task_state=job.get("task_state"),
     )
 
 
@@ -315,7 +319,7 @@ def _run_copilot_job(job: Dict[str, Any], subject_id: str, goal: str, max_steps:
                      acc: accounts.Account, subject: str = "document",
                      model: Optional[str] = None,
                      images: Optional[List[str]] = None,
-                     history: str = "") -> None:
+                     history: str = "", context: Optional[dict] = None) -> None:
     try:
         outcome = copilot.run(
             subject_id,
@@ -328,11 +332,14 @@ def _run_copilot_job(job: Dict[str, Any], subject_id: str, goal: str, max_steps:
             model=model,
             images=images,
             history=history,
+            context=context,
+            on_plan=lambda plan: job.update(task_state=plan),
         )
         job["model"] = outcome.get("model")
         job["summary"] = outcome["summary"]
         job["finished"] = outcome["finished"]
         job["stop_reason"] = outcome["stop_reason"]
+        job["task_state"] = outcome.get("task_state")
         job["status"] = "done"
     except Exception as exc:  # noqa: BLE001 — job must always resolve
         job["summary"] = f"Copilot failed: {exc}"
@@ -390,7 +397,7 @@ def run_copilot(
     prune_jobs(_COPILOT_JOBS)
     steps = body.max_steps or copilot.step_default("document")
     background_tasks.add_task(_run_copilot_job, job, doc_id, body.goal.strip(), steps,
-                              acc, "document", model, images, body.history)
+                              acc, "document", model, images, body.history, body.context.model_dump())
     return _copilot_state(job, document=None)
 
 
@@ -461,6 +468,8 @@ def _checked_images(body: "CopilotRequest", model: Optional[str]) -> List[str]:
     without any error at all.
     """
     images = ([body.image] if body.image else []) + [i for i in (body.images or []) if i]
+    if body.context.viewport and body.context.viewport.image_index >= len(images):
+        raise HTTPException(status_code=422, detail="viewport.image_index must name an attached image")
     if not images:
         return []
     if len(images) > copilot.MAX_IMAGES:
@@ -539,7 +548,7 @@ def run_assembly_copilot(
     prune_jobs(_COPILOT_JOBS)
     steps = body.max_steps or copilot.step_default("assembly")
     background_tasks.add_task(_run_copilot_job, job, assembly_id, body.goal.strip(),
-                              steps, acc, "assembly", model, images, body.history)
+                              steps, acc, "assembly", model, images, body.history, body.context.model_dump())
     return _copilot_state(job, document=None)
 
 

@@ -339,6 +339,61 @@ def test_an_assembly_upload_gets_the_large_file_limit():
     assert body_limit.limit_for("/api/assemblies/import") == body_limit.UPLOAD_MAX_BYTES
 
 
+def test_the_reported_222_mib_upload_clears_the_transport_guard():
+    # Reproduce the rejected Content-Length without allocating a 222 MiB fixture.
+    # Geometry import itself still runs on a real, small assembly.
+    r = client.post("/api/assemblies/import",
+                    headers={"Content-Length": "233040399"},
+                    files={"file": ("bracket.step", _bracket_step(), "application/step")})
+    assert r.status_code == 200, r.text
+    assert r.json()["instances"] == 3
+
+
+def test_a_222_mib_file_reaches_the_exact_assembly_reader(monkeypatch):
+    class LargeFile:
+        def __len__(self):
+            return 233040399
+
+    payload = LargeFile()
+
+    def reader(data, **kwargs):
+        assert data is payload
+        raise step_import.ExactImportError("reached exact reader")
+
+    monkeypatch.setattr(step_import, "read_assembly", reader)
+    with pytest.raises(import_service.ImportError_, match="reached exact reader"):
+        import_service.import_assembly("large.step", payload)
+
+
+def test_a_file_above_the_new_cap_never_reaches_the_reader(monkeypatch):
+    class LargeFile:
+        def __len__(self):
+            return import_service.MAX_EXACT_FILE_BYTES + 1
+
+    def reader(*args, **kwargs):
+        pytest.fail("oversized file reached the geometry reader")
+
+    monkeypatch.setattr(step_import, "read_assembly", reader)
+    with pytest.raises(import_service.ImportError_, match="File too large"):
+        import_service.import_assembly("large.step", LargeFile())
+
+
+def test_oversized_assembly_uploads_are_still_rejected():
+    r = client.post("/api/assemblies/import", content=b"",
+                    headers={"Content-Length": str(body_limit.UPLOAD_MAX_BYTES + 1)})
+    assert r.status_code == 413
+
+
+def test_chunked_assembly_uploads_are_still_bounded(monkeypatch):
+    monkeypatch.setattr(body_limit, "UPLOAD_MAX_BYTES", 1024)
+    prefix = (b'--upload\r\nContent-Disposition: form-data; name="file"; '
+              b'filename="large.step"\r\nContent-Type: application/step\r\n\r\n')
+    r = client.post("/api/assemblies/import",
+                    content=iter([prefix, b"x" * 600, b"x" * 600, b"\r\n--upload--\r\n"]),
+                    headers={"Content-Type": "multipart/form-data; boundary=upload"})
+    assert r.status_code == 413
+
+
 def test_a_format_with_no_assembly_structure_is_refused_with_where_to_go():
     r = client.post("/api/assemblies/import",
                     files={"file": ("part.stl", b"solid x\nendsolid x\n", "model/stl")})

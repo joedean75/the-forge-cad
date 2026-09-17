@@ -16,10 +16,13 @@ from __future__ import annotations
 import json
 import logging
 import time
+import functools
+from copy import deepcopy
 from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Optional
 
-from app.services import cad_operations, document_service, llm_client
+from app.services import cad_operations, copilot_context, document_service, llm_client
+from app.services.llm_errors import LLMFailure
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -92,6 +95,14 @@ def nested_model() -> Optional[str]:
     return _ACTIVE_MODEL.get()
 
 
+_ACTIVE_CONTEXT: ContextVar[Optional[dict]] = ContextVar("forge_copilot_context", default=None)
+
+
+def nested_context() -> Optional[dict]:
+    """The authorised assembly brief and references for a nested part run."""
+    return _ACTIVE_CONTEXT.get()
+
+
 def _doc_summary(doc) -> dict:
     """Compact, LLM-friendly snapshot of the current body.
 
@@ -132,7 +143,8 @@ def _summary(subject: str, obj) -> dict:
 
 def _plan_next(goal: str, transcript: List[dict], summary: dict,
                subject: str = "document", model: Optional[str] = None,
-               images: Optional[List[str]] = None, history: str = "") -> dict:
+               images: Optional[List[str]] = None, history: str = "",
+               enabled_tools: Optional[set[str]] = None) -> dict:
     """Ask the LLM for the next operation. Returns a decision dict.
 
     Two paths, and which one ran is recorded on the decision as ``_via`` the
@@ -155,7 +167,7 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
             "result": s.get("result"),
         }
         for s in transcript
-        if s.get("kind") in ("op", "verification")
+        if s.get("kind") in ("op", "verification", "plan", "discovery")
     ]
     user = (
         (f"Previous conversation about this {subject}:\n{history}\n\n"
@@ -169,17 +181,34 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
         "Take the next single action."
     )
     with_tools = llm_client.supports_tools()
+    system = action_space.system_prompt(with_tools=with_tools, subject=subject, names=enabled_tools)
+    definitions = action_space.tools(subject)
+    if enabled_tools is not None:
+        definitions = [t for t in definitions if t["function"]["name"] in enabled_tools]
+        definitions += copilot_context.control_tools()
+        system += copilot_context.CONTROL_RULES
+        if not with_tools:
+            # Prose providers need nesting and descriptions too, not just a
+            # flat parameter-name list. Send the same selected JSON schemas.
+            system = (action_space.system_prompt(with_tools=False, subject=subject, names=set())
+                      + copilot_context.CONTROL_RULES
+                      + "\nAvailable operation schemas (respond with op/args JSON):\n"
+                      + json.dumps(definitions))
+        user += "\n\nAdditional operation directory (load schemas with discover_operations):\n" + json.dumps(
+            copilot_context.tool_directory(subject, enabled_tools))
     messages = [
-        {"role": "system", "content": action_space.system_prompt(
-            with_tools=with_tools, subject=subject)},
+        {"role": "system", "content": system},
         {"role": "user", "content": _user_content(user, images)},
     ]
     message = llm_client._post_chat(
-        messages, timeout=60.0, max_tokens=1200,
-        tools=action_space.tools(subject) if with_tools else None,
+        messages, timeout=60.0, max_tokens=2400,
+        tools=definitions if with_tools else None,
         model=model)
 
     calls = message.get("tool_calls") or []
+    if len(calls) > 1:
+        raise LLMFailure("PROVIDER_PROTOCOL", "The planner returned multiple actions.",
+                         "Retry with one action at a time.", retryable=True)
     if calls:
         function = (calls[0] or {}).get("function") or {}
         raw_args = function.get("arguments") or "{}"
@@ -187,14 +216,21 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
             parsed = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
         except json.JSONDecodeError as exc:
             raise ValueError(f"tool call arguments were not JSON: {raw_args[:200]}") from exc
+        if not isinstance(parsed, dict):
+            raise LLMFailure("PROVIDER_PROTOCOL", "Tool arguments must be an object.", "Retry one action.", retryable=True)
+        if function.get("name") == "finish_task":
+            if parsed.get("outcome") not in ("completed", "answered", "needs_input", "paused") or not str(parsed.get("summary") or "").strip():
+                raise LLMFailure("PROVIDER_PROTOCOL", "The completion result was incomplete.", "Report the outcome and summary.", retryable=True)
+            return {"done": True, "summary": parsed["summary"], "result_kind": parsed["outcome"]}
         return {"op": function.get("name"), "args": parsed,
                 "rationale": (message.get("content") or "").strip()[:200], "_via": "tools"}
 
     content = message.get("content") or ""
     if with_tools:
-        # Tools were offered and none was called: on this protocol that is how a
-        # model says it is finished, and the text is the summary.
-        return {"done": True, "summary": content.strip()[:500] or "done", "_via": "tools"}
+        if not content.strip():
+            raise LLMFailure("PROVIDER_EMPTY", "The planner returned an empty response.", "Retry the next step.", retryable=True)
+        # Text can answer a question; only an explicit completion claims a build.
+        return {"done": True, "summary": content.strip()[:2000], "result_kind": "answered", "_via": "tools"}
 
     raw = llm_client._extract_json(content)
     if raw is None:
@@ -270,6 +306,28 @@ def _verify(subject: str, subject_id: str, note: Callable[[dict], None]) -> List
     return failures
 
 
+def _run_scope(fn):
+    @functools.wraps(fn)
+    def wrapped(*args, **kwargs):
+        from app.services import trajectories
+        parent = trajectories.current()
+        inherited = llm_client.CALL_CONTEXT.get() or {}
+        seconds = kwargs.get("max_seconds") or seconds_default(kwargs.get("subject", "document"))
+        token = llm_client.CALL_CONTEXT.set({
+            "deadline": min(time.monotonic() + seconds, inherited.get("deadline", float("inf"))),
+            "cancelled": kwargs.get("cancelled") or inherited.get("cancelled"),
+            "model": kwargs.get("model") or inherited.get("model"),
+        })
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            if trajectories.current() != parent and trajectories.current():
+                trajectories.finish(outcome="interrupted", summary="Run interrupted; inspect current state before continuing.")
+            llm_client.CALL_CONTEXT.reset(token)
+    return wrapped
+
+
+@_run_scope
 def run(
     subject_id: str,
     goal: str,
@@ -283,6 +341,11 @@ def run(
     model: Optional[str] = None,
     images: Optional[List[str]] = None,
     history: str = "",
+    context: Optional[dict] = None,
+    parent_brief: Optional[dict] = None,
+    on_plan: Optional[Callable[[dict], None]] = None,
+    on_action: Optional[Callable[[dict], None]] = None,
+    run_metadata: Optional[dict] = None,
 ) -> dict:
     """Run the agentic loop until the planner says done or the step budget runs out.
 
@@ -296,18 +359,18 @@ def run(
     run's step budget or become part of its operation/trajectory transcript.
     ``meter()`` is called before each *mutating* op (raise to stop on quota).
     ``images`` are ``data:image/...;base64,`` URIs shown to the planner on every
-    turn, in order. It is deliberately not passed into a nested ``build_part`` run: that
-    run's goal is text the planner wrote about one part, and a photo of the
-    whole assembly is not a reference for one plate.
+    turn, in order. Nested part runs may inherit selected reference images;
+    their parent brief explicitly identifies them as assembly references.
     ``on_step(entry)`` fires as each transcript entry lands, so a caller running
     the loop as a background job can expose live progress.
     Returns ``{steps, document, summary}``.
     """
     from app.services import trajectories
 
+    custom_planner = planner is not None
     planner = planner or (
         lambda g, t, summary: _plan_next(g, t, summary, subject=subject, model=model,
-                                         images=images, history=history))
+                                         images=images, history=history, enabled_tools=enabled_tools))
     max_steps = max(1, min(int(max_steps), step_cap(subject)))
     transcript: List[dict] = []
     final_summary: Optional[str] = None
@@ -318,17 +381,43 @@ def run(
     failure_counts: Dict[str, int] = {}
     verification_attempts = 0
     mutated = False
+    result_kind = "paused"
+    error_detail = None
+    reads = {}
+    families = {}
+    protocol_failures = 0
     geometry_failures: List[str] = []
 
     # A copilot run is the archetypal training example: a natural-language goal
     # and the operation sequence that satisfied it. It was previously discarded
     # when the process ended. `execute` records each step into this trajectory.
     doc0 = _fetch(subject, subject_id)
+    request_context = copilot_context.RequestContext.model_validate(context or {})
+    initial_summary = _summary(subject, doc0) if doc0 else {}
+    selection = (copilot_context.resolve_selection(subject, doc0, request_context.selection, initial_summary)
+                 if doc0 else {})
+    task_state = copilot_context.initial_plan(goal, request_context.task_state, initial_summary)
+    managed_plan = request_context.task_state is not None
+    enabled_tools = copilot_context.initial_tools(subject, goal + " " + task_state["objective"],
+                                                  {**initial_summary, "selection": selection})
+
+    def publish_plan():
+        if on_plan:
+            try:
+                on_plan(deepcopy(task_state))
+            except Exception:  # progress reporting must never kill the run
+                pass
+
+    publish_plan()
     trajectory_id = trajectories.start(
         subject_id, goal=goal, kind="copilot", actor="copilot",
-        owner_id=getattr(doc0, "owner_id", None))
+        owner_id=getattr(doc0, "owner_id", None),
+        metadata={"model": model or llm_client.LLM_MODEL, "subject": subject,
+                  "context_version": 2, **(run_metadata or {})})
 
     def note(entry: dict) -> None:
+        if entry.get("kind") != "op":
+            trajectories.event("planner", **entry)
         transcript.append(entry)
         if on_step is not None:
             try:
@@ -337,7 +426,7 @@ def run(
                 pass
 
     finished = False
-    for _ in range(max_steps):
+    for turn_index in range(max_steps):
         if cancelled and cancelled():
             stop_reason = "cancelled"
             break
@@ -349,11 +438,34 @@ def run(
             stop_reason = f"missing_{subject}"
             break
         try:
-            decision = planner(goal, transcript, _summary(subject, doc))
+            observed_revision = getattr(doc, "revision", None)
+            current_summary = _summary(subject, doc)
+            current_summary["request_context"] = {
+                "selection": selection,
+                "viewport": request_context.viewport.model_dump() if request_context.viewport else None,
+                "task_state": deepcopy(task_state),
+                "budget": {"planner_turns_total": max_steps,
+                           "planner_turns_remaining": max_steps - turn_index,
+                           "seconds_remaining": max(0, round(deadline - time.monotonic(), 1)),
+                           "reserve_verification_turns": 2},
+                "recent_outcomes": [{"op": s.get("op"), "ok": s.get("ok"), "error": s.get("error")}
+                                    for s in transcript if s.get("kind") == "op"][-8:],
+                "verification_feedback": [s.get("result") for s in transcript
+                                      if s.get("kind") == "verification" and not s.get("ok")][-3:],
+            }
+            if parent_brief:
+                current_summary["parent_assembly_brief"] = parent_brief
+            decision = planner(goal, transcript, current_summary)
         except Exception as exc:  # LLM / parse failure — surface and stop
             _LOGGER.warning("copilot planner failed: %s", exc)
             note({"kind": "error", "error": f"planner error: {exc}"})
+            error_detail = exc.to_dict() if isinstance(exc, LLMFailure) else {
+                "code": "PLANNER_ERROR", "message": "The planner returned an invalid decision.", "remedy": "Continue with a smaller next step."}
+            if isinstance(exc, LLMFailure) and exc.retryable and protocol_failures < 1:
+                protocol_failures += 1
+                continue
             stop_reason = "planner_error"
+            result_kind = "failed"
             break
 
         # Cancellation is cooperative: a running kernel call finishes, but a
@@ -372,10 +484,15 @@ def run(
             stop_reason = "unconfigured"
             break
         if decision.get("done"):
+            result_kind = decision.get("result_kind") or ("completed" if mutated else "answered")
+            if result_kind in ("paused", "needs_input"):
+                final_summary = decision.get("summary")
+                stop_reason = result_kind
+                break
             final_summary = (decision or {}).get("summary") if isinstance(decision, dict) else None
             unmet = (_unmet_requirements(subject_id) if subject == "document"
                      else _unmated_components(subject_id))
-            if mutated:
+            if mutated or result_kind == "completed":
                 geometry_failures = _verify(subject, subject_id, note)
                 unmet += geometry_failures
             if unmet:
@@ -394,6 +511,11 @@ def run(
                     break
                 continue
             finished = True
+            # A status/report request can finish while the saved design plan
+            # still has work. Only the planner may clear an explicit plan.
+            if not managed_plan:
+                task_state["remaining"] = []
+            publish_plan()
             stop_reason = "done"
             break
 
@@ -401,7 +523,35 @@ def run(
         args = decision.get("args") or {}
         rationale = decision.get("rationale")
 
+        if op in ("update_work_plan", "discover_operations"):
+            try:
+                if op == "update_work_plan":
+                    if not isinstance(args, dict):
+                        raise ValueError("work plan fields must be an object")
+                    task_state = copilot_context.WorkPlan.model_validate({**task_state, **args}).model_dump()
+                    managed_plan = True
+                    publish_plan()
+                    result = {"summary": "Updated work plan", "task_state": deepcopy(task_state)}
+                else:
+                    found = copilot_context.discover(subject, args)
+                    enabled_tools.update(found)
+                    result = {"summary": "Loaded operations: " + ", ".join(found), "operations": found}
+                note({"kind": "plan" if op == "update_work_plan" else "discovery",
+                      "op": op, "ok": True, "result": result})
+            except (ValueError, TypeError) as exc:
+                note({"kind": "error", "op": op, "error": str(exc)})
+            continue
+
         signature = json.dumps([op, args], sort_keys=True, default=str)
+        # Successful queries do not reset failure families or prove progress.
+        if families.get("catalog", 0) >= 2 and op == "insert_standard_part":
+            note({"kind": "error", "error": "Search the catalog before trying another key.", "op": op})
+            stop_reason = "no_progress"
+            break
+        if reads.get(signature, 0) >= 3:
+            note({"kind": "error", "error": "Repeated reads without a geometry change; saved the plan for continuation."})
+            stop_reason = "no_progress"
+            break
         if failure_counts.get(signature, 0) >= 3:
             stop_reason = "repeated_failure"
             note({"kind": "error", "error": "Stopped after three identical failed actions; revise the operation or arguments."})
@@ -425,6 +575,11 @@ def run(
             failure_counts[signature] = failure_counts.get(signature, 0) + 1
             continue
 
+        if not custom_planner and op not in enabled_tools:
+            note({"kind": "discovery", "op": op, "ok": False,
+                  "result": {"summary": "Load this operation with discover_operations before executing it."}})
+            continue
+
         if cad_operations.OPERATIONS[op].kind == "mutate" and meter is not None:
             try:
                 meter()
@@ -437,11 +592,25 @@ def run(
         # copilot inside this one step, and that sub-run charges the same meter.
         meter_token = _ACTIVE_METER.set(meter)
         model_token = _ACTIVE_MODEL.set(model)
+        context_token = _ACTIVE_CONTEXT.set({
+            "goal": goal, "history": history, "task_state": deepcopy(task_state),
+            "selection": selection, "summary": current_summary,
+            "images": images or [], "deadline": deadline, "cancelled": cancelled,
+            "on_action": on_action, "run_metadata": run_metadata,
+        })
         try:
-            env = cad_operations.execute(op, subject_id, args, rationale=rationale or "")
+            if on_action:
+                on_action({"phase": "intent", "op": op, "args": args, "subject_id": subject_id,
+                           "revision": getattr(doc, "revision", None)})
+            env = cad_operations.execute(op, subject_id, args, rationale=rationale or "",
+                                         expected_revision=observed_revision)
+            if on_action:
+                on_action({"phase": "result", "op": op, "ok": env["ok"],
+                           "revision": env.get("revision"), "result": _trim_result(env.get("result") or {})})
         finally:
             _ACTIVE_METER.reset(meter_token)
             _ACTIVE_MODEL.reset(model_token)
+            _ACTIVE_CONTEXT.reset(context_token)
         entry = {"kind": "op", "op": op, "args": args, "ok": env["ok"],
                  "rationale": rationale, "result": _trim_result(env.get("result") or {})}
         if env.get("error"):
@@ -451,9 +620,27 @@ def run(
             entry["error_detail"] = _trim_result(env["error"])
         if env["ok"]:
             mutated = mutated or cad_operations.OPERATIONS[op].kind == "mutate"
-            failure_counts.clear()
+            if cad_operations.OPERATIONS[op].kind == "query":
+                reads[signature] = reads.get(signature, 0) + 1
+            if op == "search_assembly_parts":
+                families.pop("catalog", None)
+            if cad_operations.OPERATIONS[op].kind == "mutate":
+                reads.clear()
+                failure_counts.clear()
+                task_state["completed"] = (task_state["completed"] + [
+                    f"{op}: {rationale or (env.get('result') or {}).get('message') or 'operation succeeded'}"[:1000]
+                ])[-30:]
+                publish_plan()
         else:
             failure_counts[signature] = failure_counts.get(signature, 0) + 1
+            detail = env.get("error") or {}
+            if "no catalog part" in detail.get("message", ""):
+                families["catalog"] = families.get("catalog", 0) + 1
+            if detail.get("code", "").startswith("PROVIDER_") or "changed since you read" in detail.get("message", "") or detail.get("code") in ("REVISION_CONFLICT", "STALE_REVISION"):
+                error_detail = detail
+                stop_reason = "provider_error" if detail["code"].startswith("PROVIDER_") else "conflict"
+                note(entry)
+                break
         if env.get("warnings"):
             entry["warnings"] = env["warnings"]
         if env.get("delta"):
@@ -472,6 +659,8 @@ def run(
                     else _unmated_components(subject_id)) + geometry_failures)
     if outstanding:
         finished = False
+        task_state["remaining"] = list(dict.fromkeys(task_state["remaining"] + [s[:1000] for s in outstanding]))[:30]
+        publish_plan()
         if stop_reason == "done":
             stop_reason = "verification_failed"
     if outstanding:
@@ -479,6 +668,10 @@ def run(
                          f"still unmet: {'; '.join(outstanding[:3])}")
     if not finished:
         final_summary = f"Stopped ({stop_reason}). Goal not confirmed complete. {final_summary}"
+    if error_detail:
+        final_summary += " " + error_detail["message"] + " " + error_detail.get("remedy", "")
+    if not finished and result_kind not in ("needs_input", "failed"):
+        result_kind = "paused"
     trajectories.finish(trajectory_id, outcome=stop_reason,
                         summary=final_summary)
     return {"steps": transcript,
@@ -498,7 +691,8 @@ def run(
             "model": model or llm_client.LLM_MODEL,
             "has_image": bool(images),
             "image_count": len(images or []),
-            "trajectory_id": trajectory_id}
+            "task_state": task_state,
+            "trajectory_id": trajectory_id, "result_kind": result_kind, "error_detail": error_detail}
 
 
 def _unmated_components(asm_id: str) -> List[str]:

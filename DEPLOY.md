@@ -208,7 +208,12 @@ nothing and the caller decides — the mesh path re-derives, the export path
   it. **Link-local, multicast and reserved addresses are refused whatever the
   flag says**, so cloud metadata (169.254.169.254) is never reachable.
 - **Request body size**: capped before the body is buffered
-  (`app/body_limit.py`) — 8 MB for JSON, 56 MB on the three upload routes.
+  (`app/body_limit.py`) — 8 MiB for JSON, 264 MiB on upload routes.
+  Shared limits in `app/import_limits.py` allow STEP/IGES files up to 256 MiB
+  (including STEP assemblies), meshes up to 50 MiB, and 8 MiB for multipart
+  framing. Match any reverse proxy's upload limit to at least 264 MiB.
+  Uploaded bytes become resident in memory; OpenCascade parsing and meshing
+  require additional memory, so size workers for concurrent large imports.
   Enforced on `Content-Length` *and* on the streamed byte count, so a chunked
   upload cannot walk past it.
 - **Rate limits**: the auth routes, the operation endpoints

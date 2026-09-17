@@ -90,6 +90,14 @@ operation details, so “continue” can pick up after a step-budget stop. Long
 histories are abbreviated to keep context bounded. Reference image pixels are
 not saved in chat history; reattach images when a follow-up needs them.
 
+Copilot includes your current component, feature, face or edge selection, plus
+the model's dimensions, orientations, mate connectors, design requirements and
+manufacturing settings. **Attach current view** adds a viewport image and camera
+orientation. A saved **Work plan** carries requirements, completed work, next
+steps and decisions across budget stops. Nested part builds receive relevant
+assembly interfaces and reference images. Part runs start with a focused set of
+tools and can discover additional operations as needed.
+
 ## Documentation
 
 **Start here**

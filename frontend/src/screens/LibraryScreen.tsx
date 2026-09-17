@@ -270,7 +270,6 @@ export function LibraryScreen() {
           </button>
         ))}
         <div className="flex-1" />
-        {importError && <span className="text-[10px] text-cad-danger mr-3 max-w-xs truncate" title={importError}>{importError}</span>}
         {importNote && tab === 'assemblies' && (
           <span className="text-[10px] text-cad-accent-hot mr-3 max-w-md truncate" title={importNote}>{importNote}</span>
         )}
@@ -348,6 +347,11 @@ export function LibraryScreen() {
           New {tab === 'parts' ? 'part' : 'assembly'}
         </button>
       </div>
+      {importError && (
+        <div role="alert" className="px-4 py-3 text-xs text-cad-danger border-b border-cad-border break-words">
+          {importError}
+        </div>
+      )}
 
       {/* sort + filter */}
       <div className="border-b border-cad-border bg-cad-panel/20 px-5 py-2 flex items-center gap-2 shrink-0 flex-wrap">

@@ -35,6 +35,8 @@ from typing import Iterable, Tuple
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.import_limits import UPLOAD_MAX_BYTES
+
 _LOGGER = logging.getLogger(__name__)
 
 MB = 1024 * 1024
@@ -43,18 +45,10 @@ MB = 1024 * 1024
 #: ``PUT /api/documents/{id}`` and far below what it takes to hurt a worker.
 DEFAULT_MAX_BYTES = 8 * MB
 
-#: File uploads. `import_service.max_bytes_for` is still the authority on
-#: whether a *file* is acceptable — 50 MB for a mesh, 128 MB for STEP or IGES,
-#: which OCC keeps as analytic surfaces rather than voxelising. This only stops
-#: the transfer from being unbounded, so it is the larger of those plus slack
-#: for the multipart framing around a maximum-size file.
-#:
-#: The cost of the raise is real and worth stating: every upload route does
-#: `data = await file.read()`, so a 128 MB body is 128 MB resident before
-#: anything looks at it, and OCC's parse of a STEP that size is several hundred
-#: more. That is affordable on the deployment this ships to and would not be on
-#: a smaller one — see DEPLOY.md.
-UPLOAD_MAX_BYTES = 136 * MB
+# File and transport caps share app.import_limits so a supported STEP cannot
+# be rejected by an independently maintained request limit. Uploads still
+# become resident bytes and OCC needs additional memory to parse them; see
+# DEPLOY.md for deployment sizing.
 
 #: (path substring, cap). Substring rather than prefix because the document
 #: upload routes sit under `/api/documents/{id}/...` and `/api/documents/meta/...`.

@@ -9,6 +9,7 @@ import { useDocumentStore } from '../store/useDocumentStore'
 import { MeshLoader } from './MeshLoader'
 import { CadLighting } from './CadAppearance'
 import { MoveHandles, movableCenter } from './MoveHandles'
+import { ViewportCapture } from './ViewportCapture'
 import { collectSnapPoints, collectProxies, findNode, geometryTree, pickFeatureAt, type FeatureProxy } from '../util/featureTree'
 import type { BBox, Dimension, Vector3, FeatureNode } from '../../../shared/types'
 
@@ -444,6 +445,7 @@ export function DocumentViewport() {
       <Canvas camera={{ position: [2.6, -3.4, 1.9], fov: 45, near: 0.02, far: 100, up: [0, 0, 1] }}
         gl={{ logarithmicDepthBuffer: true }}
         onPointerMissed={() => { if (!measuring && !sketchPick) select(null) }}>
+        <ViewportCapture subject="document" id={doc?.id} />
         <Suspense fallback={null}>
           <CadLighting />
 

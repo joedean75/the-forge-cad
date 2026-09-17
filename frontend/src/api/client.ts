@@ -36,7 +36,7 @@ import type {
   AssemblyImportResult,
   AssemblySummary,
   ComponentTransform,
-  CopilotResult,
+  CopilotResult, CopilotContext,
   QuoteBundle,
   ManufacturingOrder,
   CatalogMaterial,
@@ -428,6 +428,7 @@ export const api = {
      *  planner on every turn in this order. */
     images?: string[] | null,
     history?: string,
+    context?: CopilotContext,
   ): Promise<CopilotResult> => {
     const state = await fetchJson<CopilotResult>(`/${subject}/${id}/copilot`, {
       method: 'POST',
@@ -437,6 +438,7 @@ export const api = {
         ...(model ? { model } : {}),
         ...(images?.length ? { images } : {}),
         ...(history ? { history } : {}),
+        ...(context ? { context } : {}),
       }),
     })
     onProgress?.(state)

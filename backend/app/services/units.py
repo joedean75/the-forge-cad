@@ -89,6 +89,8 @@ COMPONENTS = frozenset({"x", "y", "z"})
 #: Parameters that are genuinely dimensionless, listed so that "has no unit" is
 #: a decision rather than an omission.
 UNITLESS = frozenset({
+    "component_ids", "image_indices",
+    "skip",
     "active", "axis", "build_axis", "configurations", "direction", "edge",
     "edges", "elements", "faces", "feature", "feature_id", "fit", "flanges",
     "gdt", "goal", "instruction", "k_factor", "keep", "kind", "label",

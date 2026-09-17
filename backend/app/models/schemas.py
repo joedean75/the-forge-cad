@@ -582,6 +582,7 @@ class AssemblyMate(BaseModel):
 
 
 class AssemblyDoc(BaseModel):
+    revision: int = 0
     id: str
     name: str
     owner_id: Optional[str] = None

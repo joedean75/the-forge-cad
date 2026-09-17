@@ -39,6 +39,7 @@ _LOGGER = logging.getLogger(__name__)
 # ContextVars are also task-local, so concurrent requests never interleave.
 _SESSION: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "forge_trajectory_session", default=None)
+_TOKENS = contextvars.ContextVar("forge_trajectory_tokens", default=())
 
 # Bound a single trajectory. A runaway agent loop should not write an unbounded
 # row; 2000 steps is far beyond any real session.
@@ -56,6 +57,7 @@ def start(
     kind: str = "session",
     actor: str = "agent",
     owner_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
 ) -> str:
     """Begin recording. Returns the trajectory id; pass it to :func:`finish`."""
     trajectory_id = str(uuid.uuid4())
@@ -72,9 +74,16 @@ def start(
         "finished_at": None,
         "outcome": None,
         "steps": [],
+        "events": [],
+        "parent_id": _SESSION.get(),
+        **(metadata or {}),
     }
-    _write(record)
-    _SESSION.set(trajectory_id)
+    try:
+        _write(record)
+    except Exception:
+        _LOGGER.warning("failed to start trajectory", exc_info=True)
+    token = _SESSION.set(trajectory_id)
+    _TOKENS.set((*_TOKENS.get(), (trajectory_id, token)))
     return trajectory_id
 
 
@@ -84,14 +93,37 @@ def finish(trajectory_id: Optional[str] = None, *, outcome: str = "done",
     trajectory_id = trajectory_id or _SESSION.get()
     if not trajectory_id:
         return None
-    record = _read(trajectory_id)
-    if record is not None:
-        record["finished_at"] = _now()
-        record["outcome"] = outcome
-        record["summary"] = summary
-        _write(record)
-    _SESSION.set(None)
+    record = None
+    try:
+        record = _read(trajectory_id)
+        if record is not None:
+            record["finished_at"] = _now()
+            record["outcome"] = outcome
+            record["summary"] = summary
+            _write(record)
+    except Exception:
+        _LOGGER.warning("failed to finish trajectory", exc_info=True)
+    finally:
+        tokens = _TOKENS.get()
+        if tokens and tokens[-1][0] == trajectory_id:
+            _SESSION.reset(tokens[-1][1])
+            _TOKENS.set(tokens[:-1])
     return record
+
+
+def event(event_kind: str, **detail) -> None:
+    """Bounded diagnostic metadata; callers never pass credentials/image bytes."""
+    if not current():
+        return
+    try:
+        record = _read(current())
+        if record is not None:
+            events = record.setdefault("events", [])
+            if len(events) < MAX_STEPS:
+                events.append({"i": len(events), "ts": _now(), "event": event_kind, **detail})
+                _write(record)
+    except Exception:
+        _LOGGER.warning("dropped trajectory event %s", event_kind, exc_info=True)
 
 
 @contextlib.contextmanager

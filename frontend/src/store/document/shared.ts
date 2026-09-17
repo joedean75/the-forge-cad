@@ -16,7 +16,7 @@
 import type {
   AnalysisReport, CamResult, DerivedCache, DesignDocument, DfmProcess, DfmReport,
   EdgeRef, EditorMode, FaceRef, FeatureTreeDict, OptimizeJob, ReferenceReport,
-  SpecReport, SpecRequirement, Vector3, CopilotResult, DocumentParameter,
+  SpecReport, SpecRequirement, Vector3, CopilotResult, CopilotContext, DocumentParameter,
   LoadCase, ModeStatus, Objective, OptimizationSetup,
 } from '../../../../shared/types'
 import { ApiError } from '../../api/client'
@@ -162,7 +162,7 @@ export interface DocumentSlice {
   removeDimension: (dimId: string) => Promise<void>
   /** Forge Copilot: run an agentic multi-step plan toward a goal. Returns the transcript. */
   runCopilot: (goal: string, onProgress?: (state: CopilotResult) => void,
-               model?: string | null, images?: string[] | null, history?: string) => Promise<CopilotResult | undefined>
+               model?: string | null, images?: string[] | null, history?: string, context?: CopilotContext) => Promise<CopilotResult | undefined>
 }
 
 /** What is picked, what is being sketched, and what the spec says about it. */

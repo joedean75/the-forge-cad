@@ -119,7 +119,7 @@ def _one_param(name: str, descriptor: Dict[str, Any]) -> str:
 
 
 def catalog_text(kinds: Optional[Sequence[str]] = None,
-                 subject: Optional[str] = None) -> str:
+                 subject: Optional[str] = None, names: Optional[set[str]] = None) -> str:
     """The catalog as prose, carrying the facts the schema carries.
 
     It used to be ``name (kind): description · params: a, b, c`` — a list of
@@ -132,6 +132,8 @@ def catalog_text(kinds: Optional[Sequence[str]] = None,
 
     lines: List[str] = []
     for op in cad_operations.catalog():
+        if names is not None and op["name"] not in names:
+            continue
         if kinds and op["kind"] not in kinds:
             continue
         if subject is not None and op.get("subject", "document") != subject:
@@ -146,7 +148,8 @@ def catalog_text(kinds: Optional[Sequence[str]] = None,
     return "\n".join(lines)
 
 
-def system_prompt(*, with_tools: bool, subject: Optional[str] = None) -> str:
+def system_prompt(*, with_tools: bool, subject: Optional[str] = None,
+                  names: Optional[set[str]] = None) -> str:
     """The planner's system message.
 
     ``with_tools`` says whether the provider is being handed `tools()`. When it
@@ -160,4 +163,4 @@ def system_prompt(*, with_tools: bool, subject: Optional[str] = None) -> str:
             "When the goal is fully satisfied, reply with plain text summarising "
             "what you built instead of calling a tool.")
     return (rules + _DONE_PROTOCOL + "\n\nAvailable operations:\n"
-            + catalog_text(subject=subject))
+            + catalog_text(subject=subject, names=names))

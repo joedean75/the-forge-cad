@@ -52,6 +52,7 @@ def test_the_catalog_declares_which_kind_of_id_each_operation_takes():
     assert catalog["add_primitive"]["subject"] == "document"
     assert {op["name"] for op in cad_operations.catalog() if op["subject"] == "assembly"} == {
         "list_components", "insert_part", "insert_standard_part", "build_part",
+        "search_assembly_parts",
         "remove_component", "place_component", "list_mates", "add_mate",
         "remove_mate", "drive_mate", "check_interference",
         "bill_of_materials", "dof",

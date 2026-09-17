@@ -6,6 +6,7 @@ import { DoubleSide } from 'three'
 import { Boxes, Link2, Maximize } from 'lucide-react'
 import { CadLighting, CadMaterial } from './CadAppearance'
 import { MoveHandles } from './MoveHandles'
+import { ViewportCapture } from './ViewportCapture'
 import type { AssemblyComponent, BBox, ComponentTransform, Vector3 } from '../../../shared/types'
 
 type Vec3 = [number, number, number]
@@ -137,6 +138,7 @@ export function AssemblyViewport({
       style={{ background: 'radial-gradient(120% 120% at 50% 20%, #1a1f27 0%, var(--color-cad-bg) 55%, #0e1116 100%)' }}
     >
       <Canvas camera={{ position: [2.6, -3.4, 1.9], up: [0, 0, 1], fov: 45, near: 0.02, far: 100 }} gl={{ logarithmicDepthBuffer: true }} onPointerMissed={() => onSelect(null)}>
+        <ViewportCapture subject="assembly" id={assemblyId} />
         <Suspense fallback={null}>
           <CadLighting />
           <Grid

@@ -3793,7 +3793,7 @@ def execute(
     # 3, both pass the check, both apply, and both report revision 4 — handing a
     # caller that chains `expected_revision` a number its own write never
     # produced. Queries take no lock; they only read.
-    if op.kind == "mutate":
+    if op.kind == "mutate" and op_name not in ("build_part", "ai_edit"):
         with document_service.writing(doc_id):
             return _apply(op, op_name, doc_id, args, started,
                           include_state=include_state,

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { Bot, Send, X, Check, AlertTriangle, Loader2, Wrench, ImagePlus } from 'lucide-react'
+import { Bot, Send, X, Check, AlertTriangle, Loader2, Wrench, ImagePlus, Camera, ArrowDown } from 'lucide-react'
 import { useDocumentStore } from '../store/useDocumentStore'
 import { useAuthStore } from '../store/useAuthStore'
 import { useAssemblyStore } from '../store/useAssemblyStore'
 import { api } from '../api/client'
-import type { CopilotStep } from '../../../shared/types'
+import type { CopilotContext, CopilotStep } from '../../../shared/types'
+import { isNearBottom } from '../util/nearBottom'
 import { prepareImage, dataUriBytes, MAX_IMAGES, MAX_TOTAL_IMAGE_BYTES } from '../util/imageAttach'
+import { captureViewport, type ViewCapture } from '../util/viewportCapture'
 
 import {
   conversationScope, conversationHistory, newConversation, readConversations,
@@ -127,14 +129,34 @@ function CopilotConversationPanel({ open, onClose, subject, scope }: {
   // `null` means the provider publishes no modalities: unknown, so allowed.
   const [visionModels, setVisionModels] = useState<string[] | null>(null)
   const [images, setImages] = useState<string[]>([])
+  const [viewCapture, setViewCapture] = useState<ViewCapture | null>(null)
   const [imageError, setImageError] = useState<string | null>(null)
   const [preparing, setPreparing] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  // Follow the newest step only while the reader is already at the end. A
+  // running job rewrites the transcript about once a second, and scrolling to
+  // the bottom on every change made the history impossible to read: the panel
+  // pulled you back mid-sentence. `behind` is what that costs — new steps
+  // landed out of sight — so it is offered as a control rather than left silent.
+  const stick = useRef(true)
+  const [behind, setBehind] = useState(false)
+
+  const toLatest = (behavior: ScrollBehavior = 'smooth') => {
+    stick.current = true
+    setBehind(false)
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior })
+  }
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+    if (stick.current) toLatest()
+    else setBehind(true)
   }, [turns])
+
+  // A different conversation is a different transcript, so it opens at its end
+  // however the last one was left. Jumped, not animated: there is nothing to
+  // follow, and a smooth scroll through someone else's history reads as a glitch.
+  useEffect(() => { toLatest('auto') }, [conversations.selected])
 
   // Only once the panel is open: the list costs a request, and a closed panel
   // is the common case on both screens.
@@ -191,6 +213,21 @@ function CopilotConversationPanel({ open, onClose, subject, scope }: {
   // the model silently would run the comparison the user did not ask for.
   const imageBlocked = images.length > 0 && !!effectiveModel && textOnly(effectiveModel)
 
+  const attachView = () => {
+    if (!subjectId || busy || preparing || images.length >= MAX_IMAGES) return
+    try {
+      const captured = captureViewport(subject, subjectId)
+      if (images.reduce((n, uri) => n + dataUriBytes(uri), 0) + dataUriBytes(captured.uri) > MAX_TOTAL_IMAGE_BYTES) {
+        throw new Error('Remove a reference image to make room for the current view.')
+      }
+      setImages((current) => [...current, captured.uri])
+      setViewCapture(captured)
+      setImageError(null)
+    } catch (e) {
+      setImageError(e instanceof Error ? e.message : 'Could not capture the current view')
+    }
+  }
+
   const attach = async (files: File[]) => {
     // Cleared so choosing the same files again still fires `change`. The File
     // objects were already copied out of the input before this ran.
@@ -229,8 +266,20 @@ function CopilotConversationPanel({ open, onClose, subject, scope }: {
     const text = g.trim()
     if (!text || busy || submitting.current || !subjectId || preparing || imageBlocked) return
     const sentImages = images
+    const context: CopilotContext = {
+      selection: onAssembly ? { component_id: asmStore.selectedComponentId } : {
+        feature_id: docStore.selectedFeatureId,
+        face_ids: docStore.topo.kind === 'face' ? [...docStore.topo.selected] : [],
+        edge_ids: docStore.topo.kind === 'edge' ? [...docStore.topo.selected] : [],
+      },
+      task_state: [...turns].reverse().find((t) => t.result?.task_state)?.result?.task_state,
+      ...(viewCapture && sentImages.includes(viewCapture.uri) ? {
+        viewport: { ...viewCapture.viewport, image_index: sentImages.indexOf(viewCapture.uri) },
+      } : {}),
+    }
     setGoal('')
     setImages([])
+    setViewCapture(null)
     setImageError(null)
     submitting.current = true
     const turnId = crypto.randomUUID()
@@ -241,14 +290,14 @@ function CopilotConversationPanel({ open, onClose, subject, scope }: {
       c.id !== conversationId ? c : {
         ...c, title: c.turns.length ? c.title : text.slice(0, 70),
         turns: [...c.turns, { id: turnId, goal: text, images: sentImages.length ? sentImages : undefined,
-          running: true, subjectId }],
+          running: true, subjectId, context: { selection: context.selection, viewport: context.viewport } }],
       }),
     }))
     const patch = (value: Partial<Turn>) => updateTurn(scope, conversationId, turnId, value)
     try {
       const result = await runCopilot(
         text, (state) => patch({ result: transcriptResult(state) }),
-        model || undefined, sentImages, history,
+        model || undefined, sentImages, history, context,
       )
       patch({ running: false, ...(result ? { result: transcriptResult(result) } : {
         stopError: (onAssembly ? useAssemblyStore.getState().error : useDocumentStore.getState().error) || 'No response received.',
@@ -347,7 +396,15 @@ function CopilotConversationPanel({ open, onClose, subject, scope }: {
         </select>
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+      <div
+        ref={scrollRef}
+        onScroll={(e) => {
+          const atEnd = isNearBottom(e.currentTarget)
+          stick.current = atEnd
+          if (atEnd) setBehind(false)
+        }}
+        className="flex-1 overflow-y-auto px-4 py-3 space-y-4"
+      >
         {turns.length === 0 && (
           <div className="text-center pt-6">
             <Bot size={28} className="text-cad-border mx-auto" />
@@ -415,12 +472,37 @@ function CopilotConversationPanel({ open, onClose, subject, scope }: {
                 <div className="text-[11px] text-cad-danger">No response.</div>
               )}
               {turn.stopError && <p role="alert" className="text-[11px] text-cad-danger">{turn.stopError}</p>}
+              {turn.result?.task_state && (
+                <details className="text-[11px] text-cad-text/75 pt-1">
+                  <summary className="cursor-pointer">Work plan · {turn.result.task_state.remaining.length} remaining</summary>
+                  <p className="mt-1 text-cad-text-heading">{turn.result.task_state.objective}</p>
+                  {(['requirements', 'completed', 'remaining', 'decisions'] as const).map((section) =>
+                    turn.result!.task_state![section].length > 0 && <div key={section} className="mt-2">
+                      <div className="capitalize text-cad-text-heading">{section}</div>
+                      <ul className="list-disc pl-4">{turn.result!.task_state![section].map((item, index) => <li key={index}>{item}</li>)}</ul>
+                    </div>)}
+                </details>
+              )}
             </div>
           </div>
         ))}
       </div>
 
+      {behind && (
+        <div className="relative">
+          <button
+            onClick={() => toLatest()}
+            className="absolute bottom-2 right-3 z-10 flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-cad-border bg-cad-panel/95 text-[11px] text-cad-text-heading shadow-lg hover:border-cad-accent/60"
+          >
+            <ArrowDown size={11} /> Jump to latest
+          </button>
+        </div>
+      )}
       <div className="border-t border-cad-border p-2.5 shrink-0">
+        {(onAssembly ? asmStore.selectedComponentId : docStore.selectedFeatureId || docStore.topo.selected.length > 0) &&
+          <p className="mb-1.5 text-[10px] text-cad-text/60">Current selection will be included as context.
+            {!onAssembly && docStore.topo.selected.length > 0 ? ` ${docStore.topo.selected.length} ${docStore.topo.kind}(s).` : ''}
+          </p>}
         {(images.length > 0 || preparing) && (
           <div className="mb-2 space-y-1.5">
             <div className="flex flex-wrap items-start gap-2">
@@ -472,6 +554,15 @@ function CopilotConversationPanel({ open, onClose, subject, scope }: {
                                    : `Open ${onAssembly ? 'an assembly' : 'a part'} first`}
             className="flex-1 bg-transparent text-xs text-cad-text-heading placeholder:text-cad-text/50 outline-none resize-none max-h-24"
           />
+          <button
+            onClick={attachView}
+            disabled={busy || !subjectId || preparing || images.length >= MAX_IMAGES}
+            aria-label="Attach current view"
+            title="Attach the current 3D view and camera orientation"
+            className="flex items-center justify-center h-7 w-7 rounded-sm text-cad-text hover:text-cad-text-heading disabled:opacity-40 shrink-0"
+          >
+            <Camera size={14} />
+          </button>
           <button
             onClick={() => fileRef.current?.click()}
             disabled={busy || !subjectId || preparing || images.length >= MAX_IMAGES}

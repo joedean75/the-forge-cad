@@ -180,9 +180,12 @@ def _insert_part(asm_id, args):
            "Use it for bespoke geometry (a bracket, a housing, a chassis plate); "
            "for anything purchased, insert_standard_part is cheaper and more "
            "accurate than modelling a screw. The `goal` is a self-contained "
-           "part description with real millimetre dimensions, because the part "
-           "run cannot see this assembly: say \"a 120 x 80 x 6 mm plate with M4 "
+           "part description with real millimetre dimensions: say \"a 120 x 80 x 6 mm plate with M4 "
            "clearance holes 10 mm in from each corner\", not \"the base plate\". "
+           "The part run receives a focused assembly brief. Name relevant "
+           "component_ids for mating interfaces, explicit requirements, and "
+           "image_indices for relevant parent reference images (zero-based; "
+           "omit to inherit all, [] to inherit none). "
            "The new component still has to be mated: building it places it at "
            "the origin, which is where everything else built this way already "
            "is. Costs one step here and a whole part run inside it.",
@@ -192,7 +195,13 @@ def _insert_part(asm_id, args):
                      "description": "what to call the part document; defaults to "
                                     "the first few words of the goal"},
             "steps": {"type": "number", "default": 8,
-                      "description": "step budget for the part's own copilot run"}},
+                      "description": "step budget for the part's own copilot run"},
+            "component_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 8,
+                              "description": "existing assembly components this part must fit or mate to"},
+            "requirements": {"type": "array", "items": {"type": "string", "maxLength": 1000}, "maxItems": 30,
+                             "description": "part-specific dimensions, hole patterns, clearances, material and manufacturing constraints"},
+            "image_indices": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 5}, "maxItems": 6,
+                              "description": "zero-based indices of relevant parent reference images; [] for none, omit for all"}},
            subject="assembly")
 def _build_part(asm_id, args):
     from app.services import copilot, document_service, feature_ops
@@ -203,6 +212,14 @@ def _build_part(asm_id, args):
         raise BadArgument("a part needs a description to be built from", arg="goal")
     name = str(args.get("name") or " ".join(goal.split()[:6]))[:80]
     steps = max(1, min(int(args.get("steps", 8)), copilot.MAX_STEPS_CAP))
+    from app.services import copilot_context
+    import time
+
+    parent = copilot.nested_context() or {}
+    brief, reference_images = copilot_context.part_brief(asm, args, parent)
+    remaining = parent.get("deadline", time.monotonic() + copilot.MAX_SECONDS_DEFAULT) - time.monotonic()
+    if remaining <= 0 or (parent.get("cancelled") and parent["cancelled"]()):
+        raise PreconditionFailed("The parent run stopped before this part could be built")
 
     # Built under the *assembly's* owner, because `add_component` refuses a part
     # its owner cannot open — the same rule `standard_parts.document_for`
@@ -213,7 +230,10 @@ def _build_part(asm_id, args):
                           # The part is designed by the model the build is being
                           # run with. A build planned by one and detailed by
                           # another compares nothing.
-                          model=copilot.nested_model())
+                          model=copilot.nested_model(), parent_brief=brief,
+                          images=reference_images, max_seconds=min(remaining, copilot.MAX_SECONDS_DEFAULT),
+                          cancelled=parent.get("cancelled"), on_action=parent.get("on_action"),
+                          run_metadata=parent.get("run_metadata"))
 
     built = document_service.get_document(doc.id)
     if built is None or not feature_ops.has_solid(built.feature_tree):
@@ -225,7 +245,13 @@ def _build_part(asm_id, args):
             f"the part run finished without building a body, so nothing was "
             f"placed: {outcome.get('summary')}")
 
-    updated = assembly_service.add_component(asm_id, doc.id)
+    with document_service.writing(asm_id):
+        latest = _assembly(asm_id)
+        if latest.revision != asm.revision:
+            raise PreconditionFailed(f"Assembly changed since you read it; partial part {doc.id} is saved. Reconcile before inserting.")
+        if parent.get("cancelled") and parent["cancelled"]():
+            raise PreconditionFailed(f"Stopped; partial part {doc.id} is saved for continuation.")
+        updated = assembly_service.add_component(asm_id, doc.id)
     if updated is None:
         raise NoSuchDocument(f"no assembly {asm_id!r}")
     placed = updated.components[-1]
@@ -238,7 +264,35 @@ def _build_part(asm_id, args):
             "part_steps": len([x for x in outcome["steps"] if x.get("kind") == "op"]),
             "part_finished": outcome["finished"],
             "part_summary": outcome["summary"],
+            "part_task_state": outcome.get("task_state"), "part_trajectory_id": outcome.get("trajectory_id"),
             "next": "mate this component — building it leaves it at the origin"}
+
+
+@operation("search_assembly_parts", "query",
+           "Browse available catalog parts before inserting. Returns exact keys, dimensions, parameters and fidelity. Never guess keys.",
+           {"search": {"type": "string",
+                       "description": "free text matched against a row's key, "
+                                      "name and designation, e.g. \"m4 screw\" "
+                                      "or \"608 bearing\""},
+            "category": {"type": "string",
+                         "description": "narrow to one family, e.g. screw, nut, "
+                                        "washer, bearing, motor or extrusion"},
+            "source": {"type": "string",
+                       "description": "where the row comes from: the generated "
+                                      "standards, the Adafruit catalog, or this "
+                                      "account's own imported supplier parts"},
+            "limit": {"type": "integer", "default": 20,
+                      "description": "how many rows to return, 1 to 40"},
+            "skip": {"type": "integer", "default": 0,
+                     "description": "how many rows to step over first, to read "
+                                    "the next page of a long list"}},
+           subject="assembly")
+def _search_assembly_parts(asm_id, args):
+    from app.services import caller, standard_parts
+    asm = _assembly(asm_id)
+    return standard_parts.listing(caller.acting_account_id() or asm.owner_id,
+        search=args.get("search"), category=args.get("category"), source=args.get("source"),
+        limit=max(1, min(40, int(args.get("limit", 20)))), offset=max(0, int(args.get("skip", 0))))
 
 
 @operation("insert_standard_part", "mutate",
@@ -248,7 +302,7 @@ def _build_part(asm_id, args):
            "4-in-1 ESC, RC servo, hex standoff, propeller, carbon plate or tube "
            "or LiPo pack from the settled conventions of RC, drone and robotics "
            "work. Adafruit catalog keys automatically fetch original manufacturer "
-           "CAD and import it as a reusable part. Browse list_standard_parts. Inserting "
+           "CAD and import it as a reusable part. Browse search_assembly_parts. Inserting "
            "the same key twice reuses one part document, so the BOM says qty 2 "
            "rather than listing it twice. Where a dimension varies by "
            "manufacturer it is a parameter rather than a table row — pass those "
@@ -303,7 +357,7 @@ def _insert_standard_part(asm_id, args):
         if row is None:
             raise BadArgument(
                 f"no imported part {key!r} on this account; list them with "
-                f"list_standard_parts", arg="key")
+                f"search_assembly_parts", arg="key")
         designation = row["designation"]
         fidelity = "supplier"
     else:

@@ -88,7 +88,7 @@ def initial_plan(goal: str, previous: Optional[WorkPlan], summary: dict) -> dict
 _CORE = {
     "add_primitive", "add_extrude", "add_modifier", "set_feature_params",
     "get_feature", "list_features", "bounding_box", "check_geometry",
-    "get_spec", "set_spec", "verify_against_spec", "set_parameter", "list_parameters",
+    "get_spec", "set_spec", "verify_against_spec", "set_parameters", "get_parameters",
 }
 
 
@@ -132,12 +132,18 @@ def tool_directory(subject: str, enabled: set[str]) -> list[dict]:
 
 CONTROL_RULES = """
 Planning context:
+- Finish with finish_task: completed only for a verified build, answered for a
+  report, needs_input for a clarification, paused for unfinished work. Plain
+  text is an answer and does not certify that a design is complete.
 - For a multi-step build, use update_work_plan to record a compact checklist of
   requirements, completed work, remaining work and explicit assumptions/decisions.
   Reconcile a saved plan with the latest request and current geometry. Do not
   repeat completed work just because it appears in the original objective.
 - Update the plan at meaningful milestones or when requirements change, not
   after every query. Plan entries are notes, not proof; verify geometry/specs.
+- When the design is complete, update remaining to [] and record what was
+  verified. Answering a status question does not complete unfinished design
+  work: keep that work in the plan even if the latest question is answered.
 - Read the remaining planner-turn and wall-clock budget. Reserve about two
   turns for verification and handoff. If work remains, leave an accurate plan.
 - Only a relevant subset of CAD schemas may be loaded. The operation directory
@@ -151,8 +157,13 @@ Planning context:
 def control_tools() -> list[dict]:
     return [
         {"type": "function", "function": {
+            "name": "finish_task", "description": "Report the outcome; only verified geometry is completed.",
+            "parameters": {"type": "object", "properties": {
+                "outcome": {"type": "string", "enum": ["completed", "answered", "needs_input", "paused"]},
+                "summary": {"type": "string"}}, "required": ["outcome", "summary"], "additionalProperties": False}}},
+        {"type": "function", "function": {
             "name": "update_work_plan",
-            "description": "Record or replace the current concise work checklist. Preserve original requirements and decisions when continuing; completed means observed work, not intended work.",
+            "description": "Update the concise work checklist; omitted fields retain their previous values. Preserve original requirements and decisions when continuing; completed means observed work, not intended work.",
             "parameters": WorkPlan.model_json_schema(),
         }},
         {"type": "function", "function": {
@@ -181,3 +192,63 @@ def discover(subject: str, args: dict) -> list[str]:
     if not found:
         raise ValueError("No matching operations; use exact names from the directory")
     return found
+
+
+def part_brief(asm, args: dict, parent: dict) -> tuple[dict, list[str]]:
+    """Only parts in the authorised assembly can supply interface context."""
+    from app.services import document_service, observation
+    from app.services.op_errors import BadArgument
+
+    ids = args.get("component_ids")
+    if ids is None:
+        selected = ((parent.get("selection") or {}).get("requested") or {}).get("component_id")
+        ids = [selected] if selected else [c.id for c in asm.components[:8]]
+    if not isinstance(ids, list) or len(ids) > 8 or not all(isinstance(i, str) for i in ids):
+        raise BadArgument("component_ids must name up to eight components", arg="component_ids")
+    members = {c.id: c for c in asm.components}
+    if any(i not in members for i in ids):
+        raise BadArgument("An interface component is not in this assembly", arg="component_ids")
+    requirements = args.get("requirements") or []
+    if not isinstance(requirements, list) or len(requirements) > 30 or not all(isinstance(r, str) and len(r) <= 1000 for r in requirements):
+        raise BadArgument("requirements must be up to 30 short strings", arg="requirements")
+    images = parent.get("images") or []
+    indices = args.get("image_indices", list(range(len(images))))
+    if not isinstance(indices, list) or len(indices) > 6 or not all(type(i) is int and 0 <= i < len(images) for i in indices):
+        raise BadArgument("image_indices must refer to attached parent images", arg="image_indices")
+
+    summary = parent.get("summary") or observation.summarize_assembly(asm)
+    viewport = (summary.get("request_context") or {}).get("viewport")
+    if viewport and viewport["image_index"] in indices:
+        viewport = {**viewport, "image_index": indices.index(viewport["image_index"])}
+    else:
+        viewport = None
+    interfaces = []
+    for component in summary["components"]:
+        if component["id"] not in ids:
+            continue
+        part = document_service.get_document(component["part_id"])
+        item = dict(component)
+        if part:
+            state = observation.summarize(part)
+            item["part_design"] = {key: state[key] for key in (
+                "material_id", "spec", "manufacturing", "parameters", "general_tolerance",
+            ) if key in state}
+            item["part_design"]["features"] = state["features"][:40]
+            item["part_design"]["omitted_features"] = max(0, len(state["features"]) - 40)
+        interfaces.append(item)
+    history = parent.get("history") or ""
+    if len(history) > 12000:
+        history = history[:6000] + "\n[Middle history omitted; use the work plan.]\n" + history[-6000:]
+    return {
+        "assembly_id": asm.id, "assembly_name": asm.name,
+        "assembly_goal": (parent.get("goal") or "")[:12000],
+        "conversation_context": history,
+        "assembly_work_plan": parent.get("task_state"),
+        "part_requirements": requirements,
+        "interfaces": interfaces,
+        "omitted_components": len(asm.components) - len(interfaces),
+        "mates": [m.model_dump() for m in asm.mates if m.base in ids or m.moved in ids],
+        "reference_image_indices": indices,
+        "viewport": viewport,
+        "instructions": "Build only the requested part. Interface dimensions, materials, hole patterns and clearances constrain its fit; do not copy neighbouring parts wholesale. Local coordinates are part-space, world coordinates are assembly-space. Build near the part origin; the parent will place and mate it. Attached images are references from the parent assembly, not necessarily pictures of this part. Preserve explicit user requirements; label assumptions.",
+    }, [images[i] for i in indices]

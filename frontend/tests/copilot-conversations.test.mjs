@@ -35,6 +35,21 @@ it('sends the original brief, actions, returned IDs and budget outcome with a co
   assert.equal(conversationHistory([]), '')
 })
 
+it('preserves what an earlier "this" referred to and keeps its work plan across reloads', () => {
+  const storage = new Map()
+  const m = load(storage)
+  const scope = m.conversationScope('alice', 'assembly', 'a')
+  const plan = { objective: 'Mount the motor', requirements: ['M4 holes'],
+    completed: ['Plate built'], remaining: ['Fit motor'], decisions: ['0.25 mm clearance'] }
+  m.updateConversations(scope, (s) => ({ ...s, conversations: [{ ...s.conversations[0], turns: [
+    turn('Move this', { context: { selection: { component_id: 'motor-1' } },
+      result: { ...result(), task_state: plan } }),
+  ] }] }))
+  const restored = load(storage).readConversations(scope).conversations[0].turns
+  assert.deepEqual(restored[0].result.task_state, plan)
+  assert.match(m.conversationHistory(restored), /motor-1/)
+})
+
 it('bounds long history while retaining the first brief and the latest correction and actions', () => {
   const { conversationHistory, MAX_HISTORY_CHARS } = load()
   const turns = Array.from({ length: 140 }, (_, i) => turn(`Goal ${i}: ${'x'.repeat(2000)}`, {

@@ -13,6 +13,7 @@ they stay correct when a part is edited or deleted.
 from __future__ import annotations
 
 import uuid
+import functools
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -25,6 +26,14 @@ from app.models.schemas import (
     Vector3,
 )
 from app.services import document_service, persistence
+
+
+def _writing(fn):
+    @functools.wraps(fn)
+    def wrapped(asm_id, *args, **kwargs):
+        with document_service.writing(asm_id):
+            return fn(asm_id, *args, **kwargs)
+    return wrapped
 
 
 def _now() -> str:
@@ -121,6 +130,7 @@ def _resolve(asm: AssemblyDoc) -> AssemblyDoc:
 
 
 def _persist(asm: AssemblyDoc) -> None:
+    asm.revision += 1
     persistence.save_assembly_doc(asm.id, asm.model_dump())
 
 
@@ -195,6 +205,7 @@ def list_assemblies(owner_id: Optional[str] = None) -> List[AssemblySummary]:
     return out
 
 
+@_writing
 def rename_assembly(asm_id: str, name: str) -> Optional[AssemblyDoc]:
     asm = _load(asm_id)
     if asm is None:
@@ -205,10 +216,12 @@ def rename_assembly(asm_id: str, name: str) -> Optional[AssemblyDoc]:
     return _resolve(asm)
 
 
+@_writing
 def delete_assembly(asm_id: str) -> bool:
     return persistence.delete_assembly_doc(asm_id)
 
 
+@_writing
 def add_component(asm_id: str, part_id: str) -> Optional[AssemblyDoc]:
     asm = _load(asm_id)
     if asm is None:
@@ -237,6 +250,7 @@ def add_component(asm_id: str, part_id: str) -> Optional[AssemblyDoc]:
     return _resolve(asm)
 
 
+@_writing
 def update_component(asm_id: str, comp_id: str, transform: ComponentTransform) -> Optional[AssemblyDoc]:
     asm = _load(asm_id)
     if asm is None:
@@ -254,6 +268,7 @@ def update_component(asm_id: str, comp_id: str, transform: ComponentTransform) -
     return _resolve(asm)
 
 
+@_writing
 def add_mate(asm_id: str, mate) -> Optional[AssemblyDoc]:
     """Add a mate constraint and re-solve placements."""
     from app.models.schemas import AssemblyMate
@@ -274,6 +289,7 @@ def add_mate(asm_id: str, mate) -> Optional[AssemblyDoc]:
     return _resolve(asm)
 
 
+@_writing
 def update_mate(asm_id: str, mate_id: str,
                 changes: dict) -> Optional[AssemblyDoc]:
     """Change a mate's driven values in place and re-solve every placement.
@@ -298,6 +314,7 @@ def update_mate(asm_id: str, mate_id: str,
     return _resolve(asm)
 
 
+@_writing
 def remove_mate(asm_id: str, mate_id: str) -> Optional[AssemblyDoc]:
     asm = _load(asm_id)
     if asm is None:
@@ -311,6 +328,7 @@ def remove_mate(asm_id: str, mate_id: str) -> Optional[AssemblyDoc]:
     return _resolve(asm)
 
 
+@_writing
 def remove_component(asm_id: str, comp_id: str) -> Optional[AssemblyDoc]:
     asm = _load(asm_id)
     if asm is None:

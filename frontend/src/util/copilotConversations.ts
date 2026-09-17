@@ -1,9 +1,10 @@
-import type { CopilotResult, CopilotStep } from '../../../shared/types'
+import type { CopilotContext, CopilotResult, CopilotStep } from '../../../shared/types'
 
 export type Turn = {
   id: string; goal: string; images?: string[]; imageCount?: number
   running: boolean; subjectId: string; stopping?: boolean; stopError?: string
   result?: CopilotResult
+  context?: Omit<CopilotContext, 'task_state'>
 }
 export type Conversation = { id: string; title: string; turns: Turn[] }
 export type Conversations = {
@@ -104,12 +105,13 @@ export function conversationHistory(turns: Turn[]): string {
   const headers = turns.map((turn, i) =>
     `Turn ${i + 1}\nUser: ${clip(turn.goal, 12000)}\nCopilot: ${clip(turn.result?.summary || 'No final response received.', 2500)}`
     + `\nStop reason: ${turn.result?.stop_reason || turn.result?.status || 'unknown'}`
+    + (turn.context?.selection ? `\nSelection for that request: ${clip(JSON.stringify(turn.context.selection), 1500)}` : '')
     + (turn.stopError ? `\nConnection/stop error: ${clip(turn.stopError, 500)}` : '')
     + ((turn.images?.length || turn.imageCount) ? '\nReference images were attached; their pixels are not included in this text history.' : ''))
-  const included = new Set([0])
-  let used = headers[0].length
-  for (let i = turns.length - 1; i > 0; i--) {
-    if (used + headers[i].length > 30000) break
+  const included = new Set([0, turns.length - 1])
+  let used = [...included].reduce((n, i) => n + headers[i].length, 0)
+  for (let i = turns.length - 2; i > 0; i--) {
+    if (used + headers[i].length > 40000) break
     included.add(i)
     used += headers[i].length
   }

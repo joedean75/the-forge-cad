@@ -484,6 +484,10 @@ def _retry_or_fail(job_id: str, exc: BaseException) -> Optional[Job]:
     job = get(job_id)
     if job is None:
         return None
+    if job.kind == "copilot":
+        return _finish(job.id, FAILED, error={"code": "INTERRUPTED",
+            "message": "Copilot stopped unexpectedly; completed work is saved.",
+            "remedy": "Reconnect and inspect current state before continuing. No action was automatically replayed."})
     detail = {"code": type(exc).__name__, "message": str(exc),
               "remedy": "Re-run the job; if it fails the same way the inputs are the problem."}
     if job.attempts < MAX_ATTEMPTS:
@@ -522,6 +526,13 @@ def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
             beat = _parse(job.heartbeat_at) or _parse(job.started_at)
             if beat is None or (now - beat).total_seconds() <= LEASE_SECONDS:
                 continue
+            if job.kind == "copilot":
+                _finish(job.id, CANCELLED if job.status == CANCEL_REQUESTED else FAILED,
+                        error={"code": "INTERRUPTED", "message": "The Copilot worker stopped reporting.",
+                               "remedy": "Inspect the saved work and continue; an in-flight action may have committed."},
+                        message="Interrupted; no mutations replayed")
+                failed += 1
+                continue
             if job.attempts < MAX_ATTEMPTS:
                 _mutate(job.id, lambda j: (
                     setattr(j, "status", QUEUED), setattr(j, "worker", None),
@@ -537,7 +548,8 @@ def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
                 failed += 1
         elif job.terminal:
             finished = _parse(job.finished_at)
-            if finished and now - finished > RETENTION:
+            retention = timedelta(days=30) if job.kind == "copilot" else RETENTION
+            if finished and now - finished > retention:
                 persistence.delete_job(job.id)
                 pruned += 1
     return {"recovered": recovered, "failed": failed, "pruned": pruned}

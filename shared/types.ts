@@ -898,8 +898,32 @@ export interface ReleasePackageJob {
 }
 
 // --- Forge Copilot: agentic operation loop ---
+export interface CopilotWorkPlan {
+  objective: string
+  requirements: string[]
+  completed: string[]
+  remaining: string[]
+  decisions: string[]
+}
+
+export interface CopilotContext {
+  selection?: {
+    component_id?: string | null
+    feature_id?: string | null
+    face_ids?: string[]
+    edge_ids?: string[]
+  }
+  task_state?: CopilotWorkPlan | null
+  viewport?: {
+    image_index: number
+    camera_direction: [number, number, number]
+    camera_up: [number, number, number]
+    projection: 'perspective' | 'orthographic'
+  }
+}
+
 export interface CopilotStep {
-  kind: 'op' | 'error' | 'done'
+  kind: 'op' | 'error' | 'done' | 'verification' | 'plan' | 'discovery'
   op?: string
   args?: Record<string, unknown>
   rationale?: string | null
@@ -917,6 +941,7 @@ export interface CopilotResult {
   status: 'running' | 'done' | 'error'
   summary: string | null
   steps: CopilotStep[]
+  task_state?: CopilotWorkPlan | null
   document?: DesignDocument | null
   /** Which model planned this run, so two runs of one goal can be told apart. */
   model?: string | null
