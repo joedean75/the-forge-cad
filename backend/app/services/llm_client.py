@@ -447,6 +447,38 @@ def _headers() -> dict[str, str]:
     return headers
 
 
+#: Words that mark a 403 as a spending cap rather than a permission problem.
+_BUDGET_WORDS = ("budget", "credit", "quota", "limit exceeded", "insufficient")
+
+
+def _provider_message(resp) -> str:
+    """What the provider said went wrong, or "" when it said nothing usable.
+
+    Without this a spend cap reads as a bare "Client error '403 Forbidden'",
+    which names neither the cause nor the account it belongs to. Never raises:
+    an error body is exactly where a provider is least likely to send the JSON
+    it promised, and the failure being reported matters more than this line.
+    """
+    try:
+        body = resp.json()
+    except Exception:
+        body = None
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            text = error.get("message") or error.get("code") or ""
+        elif isinstance(error, str):
+            text = error
+        else:
+            text = body.get("message") or ""
+        if str(text).strip():
+            return str(text).strip()[:300]
+    try:
+        return (resp.text or "").strip()[:300]
+    except Exception:
+        return ""
+
+
 def _post_chat(messages: list[dict[str, Any]], *, timeout: float = 60.0,
                max_tokens: Optional[int] = None,
                tools: Optional[list[dict[str, Any]]] = None,
@@ -491,14 +523,25 @@ def _post_chat(messages: list[dict[str, Any]], *, timeout: float = 60.0,
                 resp = client.post(url, headers=_headers(), json=payload)
             status = resp.status_code
             if status >= 400:
+                detail = _provider_message(resp)
                 code, remedy = {
                     401: ("PROVIDER_ACCESS", "Check the provider API key."),
                     402: ("PROVIDER_BILLING", "Check your provider balance and billing limits, then continue."),
                     403: ("PROVIDER_ACCESS", "Check provider account and model access, then continue."),
                     429: ("PROVIDER_THROTTLED", "Wait briefly, then continue."),
                 }.get(status, ("PROVIDER_ERROR", "Check provider availability and model configuration."))
-                raise LLMFailure(code, f"Provider request failed (HTTP {status}).", remedy,
-                                 status=status, retryable=status == 429 or status >= 500)
+                # A spend cap arrives as 403 rather than 402, and "check model
+                # access" then sends the reader to the wrong settings page. The
+                # provider's own words are what say which it is.
+                if status == 403 and any(word in detail.lower() for word in _BUDGET_WORDS):
+                    code = "PROVIDER_BILLING"
+                    remedy = ("Raise the provider's spending limit or wait for it to "
+                              "reset, then continue.")
+                raise LLMFailure(code,
+                                 f"Provider request failed (HTTP {status}): {detail}"
+                                 if detail else f"Provider request failed (HTTP {status}).",
+                                 remedy, status=status,
+                                 retryable=status == 429 or status >= 500)
             data = resp.json()
             choices = data.get("choices") or []
             message = (choices[0].get("message") or {}) if choices else {}
@@ -517,14 +560,20 @@ def _post_chat(messages: list[dict[str, Any]], *, timeout: float = 60.0,
                 raise LLMFailure("PROVIDER_EMPTY", "The provider returned an empty response.", "Continue to retry the next planning step.", retryable=True)
             message["_provider"] = metadata
             return message
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
+        # **First, because `LLMFailure` is a `ValueError`.** It subclasses
+        # `OperationError`, which subclasses `ValueError`, so the broad clause
+        # below caught every typed failure raised inside this try — a 403 spend
+        # cap, a refusal, an empty answer — and rewrote it as "invalid
+        # response", dropping the code, the status and the remedy. Clauses are
+        # tried in order, so this one has to come first.
+        except LLMFailure as exc:
+            failure = exc
+        except (httpx.TimeoutException, httpx.TransportError):
             failure = LLMFailure("PROVIDER_TIMEOUT", "The provider connection timed out or failed.",
                                  "Reconnect and continue from the saved plan.", retryable=True)
         except (ValueError, TypeError, AttributeError, KeyError, IndexError):
             failure = LLMFailure("PROVIDER_PROTOCOL", "The provider returned an invalid response.",
                                  "Retry the next planning step.", retryable=True)
-        except LLMFailure as exc:
-            failure = exc
         trajectories.event("provider_error", **failure.to_dict(), model=payload["model"], attempt=attempt + 1)
         if not failure.retryable or attempt == 1:
             raise failure
