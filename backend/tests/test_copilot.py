@@ -56,7 +56,10 @@ def test_conversation_context_and_reference_images_are_sent_together(monkeypatch
     copilot.run(_new_doc(), "Use this reference", history="User: 100 mm base", images=[_PNG])
     content = sent[0][-1]["content"]
     assert "User: 100 mm base" in content[0]["text"]
-    assert content[1]["image_url"]["url"] == _PNG
+    # Each image is introduced by its own label, so a render arriving later in
+    # the run cannot be mistaken for the user's reference.
+    assert "Image 1" in content[1]["text"]
+    assert content[2]["image_url"]["url"] == _PNG
 
 
 def _new_doc() -> str:
@@ -765,9 +768,15 @@ def test_the_image_reaches_the_planner_on_every_turn(monkeypatch):
     for messages in sent:
         content = messages[-1]["content"]
         assert isinstance(content, list), "the user turn carries the image as a content part"
-        parts = {p["type"]: p for p in content}
-        assert parts["image_url"]["image_url"]["url"] == _PNG
-        assert "Goal: make what is in the picture" in parts["text"]["text"]
+        assert "Goal: make what is in the picture" in content[0]["text"]
+        # By position, not by type: the goal, then a label, then the image.
+        # Keying a dict on `type` takes whichever text part happens to be last,
+        # which stops meaning the goal the moment a render is attached too.
+        assert "Image 1: the user's reference" in content[1]["text"]
+        # The user's reference stays first. A review render may follow it on the
+        # last turn; what must never happen is the reference being displaced.
+        urls = [p["image_url"]["url"] for p in content if p["type"] == "image_url"]
+        assert urls[0] == _PNG
     assert out["has_image"] is True
 
 
@@ -847,7 +856,9 @@ def test_several_images_all_reach_the_planner_in_order(monkeypatch):
     content = sent[0][-1]["content"]
     urls = [p["image_url"]["url"] for p in content if p["type"] == "image_url"]
     assert urls == [_PNG, _JPEG, _PNG]
-    assert "3 attached images" in content[0]["text"]
+    labels = [p["text"] for p in content if p["type"] == "text"]
+    assert [label.split(":")[0] for label in labels[1:4]] == ["Image 1", "Image 2", "Image 3"]
+    assert "in the order they gave them" in labels[1]
     assert out["image_count"] == 3
 
 
@@ -892,3 +903,112 @@ def test_a_bad_image_in_a_list_is_named_by_position():
                     json={"goal": "x", "images": [_PNG, "https://example.com/b.png"]})
     assert r.status_code == 422
     assert "image 2" in r.text
+
+
+_PLATE = {"op": "add_primitive", "rationale": "plate",
+          "args": {"shape": "box", "operation": "union",
+                   "params": {"size": {"x": 0.05, "y": 0.05, "z": 0.01},
+                              "center": {"x": 0, "y": 0, "z": 0}}}}
+
+
+def test_the_copilot_looks_at_what_it_built_before_reporting_success(monkeypatch):
+    """The gap every deterministic check leaves open.
+
+    `check_geometry` says the body is a valid, watertight solid and says nothing
+    about whether it is the shape that was asked for — a live run reported a
+    120 x 80 plate over a body measuring 50 x 30 and passed every check it ran.
+    So the planner is shown a render of its own work and gets one more turn.
+    """
+    sent = _capture_messages(monkeypatch, [_PLATE, {"done": True, "summary": "built it"}])
+    out = copilot.run(_new_doc(), "a 50 mm plate", max_steps=4)
+
+    # The edit, the first done, and the done taken after looking at the render.
+    assert len(sent) == 3
+    content = sent[-1][-1]["content"]
+    urls = [p["image_url"]["url"] for p in content if p["type"] == "image_url"]
+    assert len(urls) == 1 and urls[0].startswith("data:image/png;base64,")
+    labels = [p["text"] for p in content if p["type"] == "text"]
+    assert any("render of what you have built" in label for label in labels)
+    assert any("Do not report success for a body that does not look like" in label
+               for label in labels)
+
+    reviews = [s for s in out["steps"] if s.get("op") == "visual_review"]
+    # Rendered once, not once per turn: the second `done` arrives against the
+    # same geometry, and re-rendering an unchanged body is a loop.
+    assert len(reviews) == 1
+    assert reviews[0]["result"]["views"][0]["url"].startswith("/api/documents/")
+    assert out["finished"] is True and out["stop_reason"] == "done"
+
+
+def test_the_review_turn_is_not_charged_to_the_build(monkeypatch):
+    """A run asking for two steps still takes two; the look costs the run nothing."""
+    sent = _capture_messages(monkeypatch, [{"op": "unknown_operation", "args": {}}])
+    out = copilot.run(_new_doc(), "keep going", max_steps=2)
+    assert len([s for s in out["steps"] if s.get("kind") == "op"]) == 2
+    assert out["stop_reason"] == "budget"
+    assert len(sent) == 2
+
+
+def test_a_run_that_changed_nothing_renders_nothing(monkeypatch):
+    """Answering a question is not building a body, and has nothing to look at."""
+    sent = _capture_messages(monkeypatch, [
+        {"done": True, "summary": "it is a plate", "result_kind": "answered"}])
+    out = copilot.run(_new_doc(), "what is this?", max_steps=3)
+    assert len(sent) == 1
+    assert isinstance(sent[0][-1]["content"], str)
+    assert not [s for s in out["steps"] if s.get("op") == "visual_review"]
+
+
+def test_a_text_only_model_is_never_sent_a_render(monkeypatch):
+    """Otherwise the provider refuses mid-run, as a planner error nobody can act on.
+
+    The route checks vision support for images the *user* attached; a render the
+    copilot makes for itself never passed that gate.
+    """
+    from app.services import llm_client
+
+    monkeypatch.setattr(llm_client, "accepts_images", lambda model=None: False)
+    sent = _capture_messages(monkeypatch, [_PLATE, {"done": True, "summary": "built it"}])
+    out = copilot.run(_new_doc(), "a 50 mm plate", max_steps=4)
+
+    assert len(sent) == 2
+    assert all(isinstance(m[-1]["content"], str) for m in sent)
+    skipped = [s for s in out["steps"] if s.get("op") == "visual_review"]
+    assert skipped and "does not accept images" in skipped[0]["result"]["summary"]
+    assert out["finished"] is True
+
+
+def test_a_repair_after_a_review_is_shown_the_new_body_not_the_old_render(monkeypatch):
+    """The render has to expire with the body it was a render of.
+
+    A review that survives the repair it prompted is worse than no review: the
+    planner is shown a picture with no hole in it, captioned as the current
+    state, immediately after cutting the hole — so it cuts it again.
+    """
+    hole = {"op": "add_hole", "rationale": "the missing hole",
+            "args": {"radius": 0.004, "depth": 0.01}}
+    sent = _capture_messages(monkeypatch, [
+        _PLATE,
+        {"done": True, "summary": "built it"},
+        hole,
+        {"done": True, "summary": "now with the hole"},
+        {"done": True, "summary": "now with the hole"},
+    ])
+    out = copilot.run(_new_doc(), "a 50 mm plate with a hole", max_steps=6)
+
+    def images(turn):
+        content = sent[turn][-1]["content"]
+        return [] if isinstance(content, str) else [
+            p["image_url"]["url"] for p in content if p["type"] == "image_url"]
+
+    assert len(sent) == 5
+    assert images(0) == [] and images(1) == []
+    assert len(images(2)) == 1, "the first review shows the plate"
+    assert images(3) == [], "the render must not outlive the body it showed"
+    assert len(images(4)) == 1, "the repaired body is looked at in its turn"
+    assert images(4) != images(2), "and it is a new picture, not the old one"
+
+    reviews = [s for s in out["steps"] if s.get("op") == "visual_review"]
+    assert len(reviews) == 2
+    assert reviews[0]["result"]["views"][0]["url"] != reviews[1]["result"]["views"][0]["url"]
+    assert out["finished"] is True and out["stop_reason"] == "done"

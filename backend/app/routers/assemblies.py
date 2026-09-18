@@ -40,6 +40,31 @@ def owned_assembly(assembly_id: str, acc: accounts.Account = Depends(current_acc
     return a
 
 
+@router.get("/{assembly_id}/artifact/{digest}")
+def get_assembly_artifact(digest: str, a: AssemblyDoc = Depends(owned_assembly)):
+    """A file an assembly operation produced, addressed by the hash of its bytes.
+
+    The document endpoint's contract exactly — immutable, `private` because the
+    route is access-checked, and a 404 rather than different bytes under a
+    digest a client was told to keep. It exists because `render_view` renders an
+    *assembly*, and every artifact URL until now named a document; storing an
+    assembly's views under a document id would have put them behind an access
+    check on the wrong object.
+    """
+    from fastapi.responses import Response
+
+    from app.services import artifacts
+
+    artifact = artifacts.fetch(a.id, digest)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="No artifact with that hash")
+    return Response(
+        content=artifact.payload,
+        media_type=artifact.media_type,
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
+
+
 @router.post("", response_model=AssemblyDoc)
 def create_assembly(body: CreateAssemblyRequest, acc: accounts.Account = Depends(current_account)):
     return asm.create_assembly(name=body.name, owner_id=acc.id)

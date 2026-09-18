@@ -922,6 +922,19 @@ export interface CopilotContext {
   }
 }
 
+/** One rendered view of the body, as `render_view` / `render_assembly` return
+ *  it and as a `visual_review` step carries it. A URL, never bytes: the image
+ *  is an immutable content-hashed artifact, fetched like the library card's
+ *  thumbnail — and the endpoint is access-checked, so it cannot be a plain
+ *  `<img src>`. */
+export interface CopilotView {
+  camera: string
+  url: string
+  bytes?: number
+  direction?: [number, number, number]
+  up?: [number, number, number]
+}
+
 export interface CopilotStep {
   kind: 'op' | 'error' | 'done' | 'verification' | 'plan' | 'discovery'
   op?: string
@@ -929,6 +942,8 @@ export interface CopilotStep {
   rationale?: string | null
   ok?: boolean
   error?: string | null
+  /** A `visual_review` step carries `views: CopilotView[]` here — what the
+   *  copilot looked at before it reported success. */
   result?: Record<string, unknown>
 }
 

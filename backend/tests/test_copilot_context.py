@@ -205,7 +205,11 @@ def test_nested_part_receives_focused_interfaces_requirements_and_selected_image
     assert brief['part_requirements'] == ['Align the M4 holes']
     assert brief['interfaces'][0]['part_design']['manufacturing']['clearance_mm'] == .25
     assert brief['reference_image_indices'] == [1]
-    assert len(calls[0]['messages'][-1]['content']) == 2
+    content = calls[0]['messages'][-1]['content']
+    # The goal, the image's own label, then the image. Every image is introduced
+    # by name so that a review render attached later in the run cannot be
+    # mistaken for one of the user's references.
+    assert [part['type'] for part in content] == ['text', 'text', 'image_url']
     assert copilot.nested_context() is None
 
 

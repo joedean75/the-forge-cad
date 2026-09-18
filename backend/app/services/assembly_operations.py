@@ -233,6 +233,11 @@ def _build_part(asm_id, args):
                           model=copilot.nested_model(), parent_brief=brief,
                           images=reference_images, max_seconds=min(remaining, copilot.MAX_SECONDS_DEFAULT),
                           cancelled=parent.get("cancelled"), on_action=parent.get("on_action"),
+                          # No visual review inside a nested part run: the
+                          # assembly's own review shows this part where it ends
+                          # up, which is the thing worth looking at, and a
+                          # render per sub-run multiplies a whole build's cost.
+                          review=False,
                           run_metadata=parent.get("run_metadata"))
 
     built = document_service.get_document(doc.id)
@@ -753,3 +758,33 @@ def _bill_of_materials(asm_id, args):
 
     _assembly(asm_id)
     return bom.bill_of_materials(asm_id)
+
+
+@operation("render_assembly", "query",
+           "Look at the assembly as it stands. Renders shaded views of every "
+           "component **in its placed position** and returns a URL per view, "
+           "keyed by the image's content hash — never inline bytes. The "
+           "interference check says no two parts occupy the same space; it "
+           "cannot say whether the arm is on backwards. Defaults to three "
+           "views, because a part in the wrong place is invisible from one "
+           "angle.",
+           {"cameras": {"type": "array", "items": {"type": "string"},
+                        "description": "which directions to look from: iso, "
+                                       "iso_opposite, top, bottom, front, right. "
+                                       "At most 3 are rendered. Defaults to "
+                                       "iso, top and front."},
+            "pixels": {"type": "integer", "default": 512,
+                       "description": "pixels on a side, 128 to 1024"}},
+           subject="assembly")
+def _render_assembly_view(asm_id, args):
+    from app.services import snapshot
+
+    _assembly(asm_id)
+    views = snapshot.packet("assembly", asm_id, args.get("cameras"),
+                            int(args.get("pixels") or snapshot.REVIEW_PIXELS))
+    if not views:
+        raise PreconditionFailed(
+            "No component in this assembly has a body to render: insert a part "
+            "with insert_part or build_part first.")
+    return {"views": snapshot.store_views("assembly", asm_id, views),
+            "summary": f"Rendered {len(views)} view(s) of the placed assembly."}

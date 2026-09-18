@@ -3470,6 +3470,43 @@ def _export(doc_id, args):
     return artifacts.export(doc_id, require(args, "format"), spec=args.get("spec"))
 
 
+#: Rendering parameters, shared by the part and assembly halves so one
+#: vocabulary describes both. **`pixels`, never `size`**: `units` folds "in
+#: metres" into any parameter called `size`, and a picture is not a length —
+#: the same trap `clearance_hole` avoids by taking `screw`.
+_VIEW_PARAMS = {
+    "cameras": {"type": "array", "items": {"type": "string"},
+                "description": "which directions to look from: iso, iso_opposite, "
+                               "top, bottom, front, right. At most 3 are rendered. "
+                               "Defaults to iso for a part."},
+    "pixels": {"type": "integer", "default": 512,
+               "description": "pixels on a side, 128 to 1024"},
+}
+
+
+@operation("render_view", "query",
+           "Look at what you have built. Renders shaded views of the current "
+           "body and returns a URL per view, keyed by the image's content hash "
+           "— never inline bytes. Use it before reporting success: the geometry "
+           "checks say the body is valid and well formed, and say nothing about "
+           "whether it is the shape that was asked for. A part with no solid "
+           "yet has nothing to render and says so.",
+           _VIEW_PARAMS)
+def _render_view(doc_id, args):
+    from app.services import snapshot
+    from app.services.op_errors import PreconditionFailed
+
+    _get(doc_id)
+    views = snapshot.packet("document", doc_id, args.get("cameras"),
+                            int(args.get("pixels") or snapshot.REVIEW_PIXELS))
+    if not views:
+        raise PreconditionFailed(
+            "This document has no solid to render: add a feature that builds a "
+            "body first, then render.")
+    return {"views": snapshot.store_views("document", doc_id, views),
+            "summary": f"Rendered {len(views)} view(s) of the part."}
+
+
 @operation("release_package", "query",
            "Build the handover package for a released revision: the exact STEP "
            "solid, the drawing as PDF and DXF, the mesh, a one-line BOM, the "

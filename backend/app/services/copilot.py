@@ -144,7 +144,8 @@ def _summary(subject: str, obj) -> dict:
 def _plan_next(goal: str, transcript: List[dict], summary: dict,
                subject: str = "document", model: Optional[str] = None,
                images: Optional[List[str]] = None, history: str = "",
-               enabled_tools: Optional[set[str]] = None) -> dict:
+               enabled_tools: Optional[set[str]] = None,
+               renders: Optional[List[dict]] = None) -> dict:
     """Ask the LLM for the next operation. Returns a decision dict.
 
     Two paths, and which one ran is recorded on the decision as ``_via`` the
@@ -198,7 +199,7 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
             copilot_context.tool_directory(subject, enabled_tools))
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": _user_content(user, images)},
+        {"role": "user", "content": _user_content(user, images, renders)},
     ]
     message = llm_client._post_chat(
         messages, timeout=60.0, max_tokens=2400,
@@ -238,7 +239,8 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
     return {**json.loads(raw), "_via": "prose"}
 
 
-def _user_content(text: str, images: Optional[List[str]]):
+def _user_content(text: str, images: Optional[List[str]],
+                  renders: Optional[List[dict]] = None):
     """The user turn, with the reference images attached when there are any.
 
     Sent on **every** turn, not only the first. The planner is stateless between
@@ -246,14 +248,58 @@ def _user_content(text: str, images: Optional[List[str]]):
     transcript. An image sent once is a reference the model has lost by step two.
     The client downscales before upload, which is what bounds the repeated cost.
     """
-    if not images:
+    images, renders = list(images or []), list(renders or [])
+    if not images and not renders:
         return text
-    note = ("The attached image is the user's reference for this goal."
-            if len(images) == 1 else
-            f"The {len(images)} attached images are the user's references for this "
-            "goal, in the order the user gave them.")
-    return ([{"type": "text", "text": f"{text}\n\n{note}"}]
-            + [{"type": "image_url", "image_url": {"url": uri}} for uri in images])
+    # **Every image is labelled, and the labels are interleaved.** Once a render
+    # of what was built travels beside the user's reference photo, an unlabelled
+    # list makes the two indistinguishable — and telling them apart is the whole
+    # point of the comparison the review exists to make.
+    parts: list = [{"type": "text", "text": text}]
+    for index, uri in enumerate(images, start=1):
+        parts.append({"type": "text",
+                      "text": f"Image {index}: the user's reference for this goal"
+                              + (f" ({index} of {len(images)}, in the order they gave them)."
+                                 if len(images) > 1 else ".")})
+        parts.append({"type": "image_url", "image_url": {"url": uri}})
+    for offset, render in enumerate(renders, start=len(images) + 1):
+        parts.append({"type": "text",
+                      "text": f"Image {offset}: a render of what you have built as it "
+                              f"stands, {render.get('camera', 'iso')} view."})
+        parts.append({"type": "image_url", "image_url": {"url": render["uri"]}})
+    if renders:
+        parts.append({"type": "text", "text": _REVIEW_RULE})
+    return parts
+
+
+#: What to do with a render. Attached with the pictures rather than kept in the
+#: standing rules, because it is only ever actionable when a render is present
+#: and a rule that fires with nothing to look at trains a planner to ignore it.
+_REVIEW_RULE = (
+    "These renders show the body you have actually built. Compare them with the "
+    "goal and with any reference image above. If they match, finish. If they do "
+    "not, say which specific difference you see — a missing hole, a feature on "
+    "the wrong face, a part facing the wrong way — and fix that before "
+    "finishing. Do not report success for a body that does not look like what "
+    "was asked for.")
+
+
+def _visual_fingerprint(subject: str, subject_id: str) -> Optional[str]:
+    """What a review was a review *of*, so one is not repeated unchanged.
+
+    A part's mesh hash moves when its geometry moves and stays put when a rename
+    or a material change does; an assembly's revision counts persisted writes,
+    which is what placing and mating a component are. Re-rendering is therefore
+    keyed to the body having changed rather than to a counter — the same rule
+    that stops a passing review from being spent as a repair attempt.
+    """
+    thing = _fetch(subject, subject_id)
+    if thing is None:
+        return None
+    if subject == "assembly":
+        return f"rev:{getattr(thing, 'revision', None)}"
+    derived = getattr(thing, "derived", None)
+    return getattr(derived, "mesh_hash", None)
 
 
 def _verify(subject: str, subject_id: str, note: Callable[[dict], None]) -> List[str]:
@@ -345,6 +391,7 @@ def run(
     parent_brief: Optional[dict] = None,
     on_plan: Optional[Callable[[dict], None]] = None,
     on_action: Optional[Callable[[dict], None]] = None,
+    review: bool = True,
     run_metadata: Optional[dict] = None,
 ) -> dict:
     """Run the agentic loop until the planner says done or the step budget runs out.
@@ -361,6 +408,11 @@ def run(
     ``images`` are ``data:image/...;base64,`` URIs shown to the planner on every
     turn, in order. Nested part runs may inherit selected reference images;
     their parent brief explicitly identifies them as assembly references.
+    ``review`` renders the finished body and shows it to the planner for one
+    more turn before the run reports success — the check every deterministic
+    verifier is blind to, since a valid, well-formed, correctly-measured body
+    can still be the wrong shape. Off for nested part runs, where the assembly's
+    own review covers the placed result.
     ``on_step(entry)`` fires as each transcript entry lands, so a caller running
     the loop as a background job can expose live progress.
     Returns ``{steps, document, summary}``.
@@ -368,9 +420,14 @@ def run(
     from app.services import trajectories
 
     custom_planner = planner is not None
+    # **Mutable, and read at call time.** The default planner is built once, so
+    # a render appended to a list captured by value would never be seen; the
+    # closure reads this list on every turn instead.
+    evidence: List[dict] = []
     planner = planner or (
         lambda g, t, summary: _plan_next(g, t, summary, subject=subject, model=model,
-                                         images=images, history=history, enabled_tools=enabled_tools))
+                                         images=images, history=history, enabled_tools=enabled_tools,
+                                         renders=evidence))
     max_steps = max(1, min(int(max_steps), step_cap(subject)))
     transcript: List[dict] = []
     final_summary: Optional[str] = None
@@ -380,6 +437,13 @@ def run(
     stop_reason = "budget"
     failure_counts: Dict[str, int] = {}
     verification_attempts = 0
+    reviewed_fingerprint: Optional[str] = None
+    review_skipped = False
+    # The review turn is *not* charged to the build. A document run defaults to
+    # eight steps and live runs already stop on `budget`; taking one of those to
+    # look at the result would buy the check by shortening the work.
+    review_allowance = 1 if (review and not custom_planner) else 0
+    review_turns_taken = 0
     mutated = False
     result_kind = "paused"
     error_detail = None
@@ -426,7 +490,14 @@ def run(
                 pass
 
     finished = False
-    for turn_index in range(max_steps):
+    for turn_index in range(max_steps + review_allowance):
+        # **The spare slot is only usable once a review has been issued.** The
+        # extended range must not quietly hand an ordinary run an extra action
+        # turn: a run asking for two steps has to take two, whatever the review
+        # policy is.
+        if turn_index >= max_steps + review_turns_taken:
+            stop_reason = "budget"
+            break
         if cancelled and cancelled():
             stop_reason = "cancelled"
             break
@@ -445,7 +516,7 @@ def run(
                 "viewport": request_context.viewport.model_dump() if request_context.viewport else None,
                 "task_state": deepcopy(task_state),
                 "budget": {"planner_turns_total": max_steps,
-                           "planner_turns_remaining": max_steps - turn_index,
+                           "planner_turns_remaining": max(0, max_steps - turn_index),
                            "seconds_remaining": max(0, round(deadline - time.monotonic(), 1)),
                            "reserve_verification_turns": 2},
                 "recent_outcomes": [{"op": s.get("op"), "ok": s.get("ok"), "error": s.get("error")}
@@ -510,6 +581,41 @@ def run(
                     stop_reason = "verification_failed"
                     break
                 continue
+            # **Look at it before saying it is done.** Every check above says the
+            # body is valid, well formed and measures correctly; none of them
+            # asks whether it is the shape that was requested. A live run
+            # reported "a 120 x 80 x 6 plate with four holes" over a body
+            # measuring 50 x 30 x 6 and passed every one of them.
+            if review_allowance and (mutated or result_kind == "completed"):
+                fingerprint = _visual_fingerprint(subject, subject_id)
+                if fingerprint and fingerprint != reviewed_fingerprint:
+                    # A self-render sent to a text-only model is a provider 400
+                    # in the middle of a run. The route only checks vision
+                    # support for images the *user* attached.
+                    if llm_client.accepts_images(model or llm_client.LLM_MODEL) is False:
+                        if not review_skipped:
+                            review_skipped = True
+                            note({"kind": "verification", "op": "visual_review", "args": {}, "ok": True,
+                                  "result": {"summary": "visual review skipped: the chosen "
+                                                        "model does not accept images"}})
+                    else:
+                        from app.services import snapshot
+
+                        views = snapshot.packet(subject, subject_id)
+                        if views:
+                            # Not a verification_attempt: that counter is the
+                            # repair cap, and a review that has not failed is
+                            # not a failed repair.
+                            reviewed_fingerprint = fingerprint
+                            review_turns_taken += 1
+                            evidence[:] = [{"camera": v["camera"], "uri": snapshot.data_uri(v["png"])}
+                                           for v in views]
+                            note({"kind": "verification", "op": "visual_review", "args": {}, "ok": True,
+                                  "rationale": "look at the result before reporting success",
+                                  "result": {"summary": "Rendered " + ", ".join(
+                                      v["camera"] for v in views) + " — comparing with the goal",
+                                      "views": snapshot.store_views(subject, subject_id, views)}})
+                            continue
             finished = True
             # A status/report request can finish while the saved design plan
             # still has work. Only the planner may clear an explicit plan.
@@ -627,6 +733,13 @@ def run(
             if cad_operations.OPERATIONS[op].kind == "mutate":
                 reads.clear()
                 failure_counts.clear()
+                # **A render stops being true the moment the body changes.** Left
+                # attached, the next turn shows the planner the *old* picture
+                # still captioned "what you have built as it stands" — the exact
+                # confusion the labels exist to prevent, and an invitation to cut
+                # the same hole twice. Dropping it here also re-arms the review:
+                # the fingerprint has moved, so the next `done` renders again.
+                evidence.clear()
                 task_state["completed"] = (task_state["completed"] + [
                     f"{op}: {rationale or (env.get('result') or {}).get('message') or 'operation succeeded'}"[:1000]
                 ])[-30:]

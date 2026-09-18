@@ -52,17 +52,45 @@ _MATERIAL = np.array([196, 205, 216], dtype=float)
 _EYE = np.array([1.0, -1.5, 0.85], dtype=float)
 _UP = np.array([0.0, 0.0, 1.0], dtype=float)
 
+#: Named directions to look *from*, in kernel coordinates. The library card uses
+#: `iso` and always has; the rest exist for review packets, where one view cannot
+#: show a hole on the far side or a boss on top.
+CAMERAS: dict = {
+    "iso": (1.0, -1.5, 0.85),
+    "iso_opposite": (-1.0, 1.5, 0.85),
+    "top": (0.0, 0.0, 1.0),
+    "bottom": (0.0, 0.0, -1.0),
+    "front": (0.0, -1.0, 0.0),
+    "right": (1.0, 0.0, 0.0),
+}
 
-def _basis() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    forward = _EYE / np.linalg.norm(_EYE)
-    right = np.cross(_UP, forward)
+
+def _basis(eye=None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Right/up/forward for a camera looking from ``eye`` at the origin.
+
+    **The world up has to be swapped when the camera is on the Z axis.** A `top`
+    view looks straight down, `cross(up, forward)` is then the zero vector, and
+    dividing by its length fills every pixel with NaN — a blank picture that
+    reports no error, which is the one failure mode a review render must not
+    have.
+    """
+    eye = _EYE if eye is None else np.asarray(eye, dtype=float)
+    norm = float(np.linalg.norm(eye))
+    forward = eye / (norm or 1.0)
+    world_up = _UP if abs(float(forward @ _UP)) < 0.99 else np.array([0.0, 1.0, 0.0])
+    right = np.cross(world_up, forward)
     right /= np.linalg.norm(right)
     up = np.cross(forward, right)
     return right, up, forward
 
 
-def render(vertices: np.ndarray, faces: np.ndarray, size: int = SIZE) -> Optional[bytes]:
-    """A shaded PNG of a mesh, or ``None`` if there is nothing to draw."""
+def render(vertices: np.ndarray, faces: np.ndarray, size: int = SIZE,
+           eye=None) -> Optional[bytes]:
+    """A shaded PNG of a mesh, or ``None`` if there is nothing to draw.
+
+    ``eye`` is the direction to look from, defaulting to the three-quarter view
+    the library card uses. A name from `CAMERAS` is resolved to its direction.
+    """
     from PIL import Image, ImageDraw
 
     vertices = np.asarray(vertices, dtype=float)
@@ -70,7 +98,9 @@ def render(vertices: np.ndarray, faces: np.ndarray, size: int = SIZE) -> Optiona
     if vertices.size == 0 or faces.size == 0:
         return None
 
-    right, up, forward = _basis()
+    if isinstance(eye, str):
+        eye = CAMERAS.get(eye) or _EYE
+    right, up, forward = _basis(eye)
     centre = (vertices.min(axis=0) + vertices.max(axis=0)) / 2.0
     local = vertices - centre
 

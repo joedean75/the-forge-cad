@@ -104,6 +104,10 @@ UNITLESS = frozenset({
     "sketch_b", "spec", "start", "state", "suppressed", "target", "tolerances",
     "count", "annotations", "dimensions", "projection", "sheet", "show_hidden",
     "views", "plane_origin",
+    # a review render: which named directions to look from, and how big the
+    # picture is. `pixels` is deliberately not called `size`, which this map
+    # reads as metres — the same trap `clearance_hole`'s `screw` avoids.
+    "cameras", "pixels",
     # background jobs: an opaque id, and the per-mode settings block that
     # `workflow_status` uses to answer freshness (whose contents are themselves
     # classified wherever they are declared).

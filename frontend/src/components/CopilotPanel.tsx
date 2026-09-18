@@ -3,8 +3,8 @@ import { Bot, Send, X, Check, AlertTriangle, Loader2, Wrench, ImagePlus, Camera,
 import { useDocumentStore } from '../store/useDocumentStore'
 import { useAuthStore } from '../store/useAuthStore'
 import { useAssemblyStore } from '../store/useAssemblyStore'
-import { api } from '../api/client'
-import type { CopilotContext, CopilotStep } from '../../../shared/types'
+import { api, authHeaders } from '../api/client'
+import type { CopilotContext, CopilotStep, CopilotView } from '../../../shared/types'
 import { isNearBottom } from '../util/nearBottom'
 import { prepareImage, dataUriBytes, MAX_IMAGES, MAX_TOTAL_IMAGE_BYTES } from '../util/imageAttach'
 import { captureViewport, type ViewCapture } from '../util/viewportCapture'
@@ -74,12 +74,57 @@ const FOOTNOTE: Record<Subject, string> = {
   assembly: 'Enter to send · Shift+Enter for a newline · each step runs through the operation API',
 }
 
+/** What the copilot looked at before it reported success.
+ *
+ * **Not an `<img src>`**, for the reason `Thumbnail` is not one either: the
+ * artifact endpoint is access-checked and the session is a bearer token, which
+ * an `<img>` cannot carry — and a token in the query string would land in every
+ * referrer and proxy log. So it is an authed fetch to a blob URL. A view that
+ * fails to load is simply not shown: the review already happened server-side,
+ * and the picture here is a record of it rather than the check itself.
+ */
+function ReviewViews({ views }: { views: CopilotView[] }) {
+  const [urls, setUrls] = useState<string[]>([])
+  const key = views.map((v) => v.url).join(',')
+  useEffect(() => {
+    let cancelled = false
+    const made: string[] = []
+    Promise.all(views.map((v) => fetch(v.url, { headers: authHeaders() })
+      .then((r) => (r.ok ? r.blob() : null))
+      .catch(() => null)))
+      .then((blobs) => {
+        if (cancelled) return
+        for (const blob of blobs) if (blob) made.push(URL.createObjectURL(blob))
+        setUrls([...made])
+      })
+    return () => {
+      cancelled = true
+      for (const url of made) URL.revokeObjectURL(url)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key])
+  if (!urls.length) return null
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {urls.map((url, i) => (
+        <img key={url} src={url} alt={`${views[i]?.camera ?? 'iso'} view of the result`}
+             title={views[i]?.camera}
+             className="h-20 w-20 rounded-sm border border-cad-border object-cover bg-cad-bg/60" />
+      ))}
+    </div>
+  )
+}
+
 function StepRow({ step }: { step: CopilotStep }) {
   if (step.kind !== 'op') {
+    const views = (step.result?.views as CopilotView[] | undefined) ?? []
     return (
       <div className="flex items-start gap-1.5 text-[11px] text-cad-text/70 pl-1">
         {step.kind === 'error' ? <AlertTriangle size={11} className="text-cad-danger mt-0.5 shrink-0" /> : null}
-        <span>{step.error ?? (step.result?.summary as string | undefined) ?? 'done'}</span>
+        <div className="min-w-0">
+          <span>{step.error ?? (step.result?.summary as string | undefined) ?? 'done'}</span>
+          {views.length > 0 && <ReviewViews views={views} />}
+        </div>
       </div>
     )
   }
