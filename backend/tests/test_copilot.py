@@ -1091,3 +1091,40 @@ def test_a_brief_with_no_body_verifies_nothing_it_did_not_build(monkeypatch):
     assert "visual_review" not in ops, "and nothing to look at"
     assert "spec_check" not in ops, "the brief it just wrote is not a missing brief"
     assert any("could not be checked" in row for row in out["unmet"])
+
+
+def test_the_failure_playbook_reaches_both_subjects(monkeypatch):
+    """A rule the assembly half never sees is a rule for half the runs."""
+    sent = _capture_messages(monkeypatch, [{"done": True, "summary": "done"}])
+    copilot.run(_new_doc(), "what is this?", max_steps=1)
+    assert "the code says which axis to change" in sent[0][0]["content"]
+
+    sent.clear()
+    copilot.run(_assembly(), "what is this?", subject="assembly", max_steps=1)
+    assert "the code says which axis to change" in sent[0][0]["content"]
+
+
+def test_the_playbook_keys_on_the_code_the_transcript_actually_carries(monkeypatch):
+    """The playbook is indexed by code, so the code has to be what the planner sees.
+
+    A failure reaches the transcript as `"CODE: message"`. If that prefix ever
+    stopped being the typed code, every line of the playbook would be keyed on
+    something the planner is never shown — and nothing else would break, which
+    is why this is asserted rather than assumed.
+    """
+    from app.services import copilot_context
+
+    sent = _capture_messages(monkeypatch, [
+        {"op": "set_feature_params", "args": {"feature_id": "nope", "params": {}}},
+        {"done": True, "summary": "gave up", "result_kind": "answered"},
+    ])
+    out = copilot.run(_new_doc(), "edit a feature that is not there", max_steps=3)
+
+    failed = [s for s in out["steps"] if s.get("kind") == "op" and not s.get("ok")]
+    assert failed, "the call should have failed"
+    code = failed[0]["error"].split(":", 1)[0]
+    assert code == "NO_SUCH_FEATURE"
+    assert code in copilot_context.PLAYBOOK, "the playbook does not name the code it will see"
+    # The remedy rides alongside, so the planner gets both the code and the
+    # sentence about it without the playbook restating every remedy.
+    assert failed[0]["error_detail"]["remedy"]

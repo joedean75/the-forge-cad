@@ -154,6 +154,41 @@ Planning context:
 """
 
 
+#: What to do about a failure, keyed to the code it carries.
+#:
+#: Every failure already arrives with a typed code, a message and a remedy, and
+#: the standing rules already cover three of the codes. What neither can tell a
+#: planner is the part that only becomes visible across *several* turns: which
+#: axis of the call to change, and that the loop is counting. A planner that
+#: knows the third identical retry ends the run tries something else on the
+#: second — and `PRECONDITION` is the case where changing the arguments looks
+#: like progress and is the wrong axis entirely, so the repeat guard never even
+#: trips.
+PLAYBOOK = """
+Reading a failure: the code says which axis to change, not just what went wrong.
+- MISSING_ARG / BAD_ARG — the arguments. Fix the named one and call again.
+- PRECONDITION — the order. A different *earlier* step is needed; the same call
+  with different arguments fails the same way, and because the arguments
+  changed, nothing will stop you repeating it.
+- NO_SUCH_FEATURE — the id. Call list_features and take one from it; ids shift
+  when a feature is deleted.
+- EVAL_FAILED — the edit applied and the body will not evaluate. Undo it
+  (delete_feature, or set_feature_params back to what worked) before building
+  anything on top of it; a second edit over a broken body compounds the first.
+- UNKNOWN_OP — the name. Load the real one with discover_operations rather than
+  spelling one from memory.
+- NO_SUCH_DOCUMENT for an id you know exists — the door. A part operation was
+  sent to an assembly or the reverse, and the message names the other route.
+- INTERNAL — not your arguments. Build it a different way; the same call fails
+  the same way.
+
+Three budgets end the run, so change something before you reach them: three
+identical failed calls stop it, three identical reads with no edit between them
+stop it, and another insert_standard_part after two catalog failures stops it —
+search_assembly_parts first.
+"""
+
+
 #: Write down what the part is supposed to be, before building it.
 #:
 #: `verify_against_spec` is the reward function and `_unmet_requirements` is the
@@ -189,7 +224,7 @@ def control_rules(subject: str = "document") -> str:
     scratch, for prose ones — and a rule added to only one of them is a rule
     production sends to half its runs.
     """
-    return CONTROL_RULES + (BRIEF_RULE if subject == "document" else "")
+    return CONTROL_RULES + PLAYBOOK + (BRIEF_RULE if subject == "document" else "")
 
 
 def control_tools() -> list[dict]:
