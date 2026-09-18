@@ -262,10 +262,14 @@ def run_assembly_operation(assembly_id: str, op: str, args: Optional[dict] = Non
     run_operation posts to a part document, this posts to an assembly. Passing an
     assembly id to the part route is refused with a pointer rather than a 404.
 
-    Examples: op="insert_standard_part" args={"key":"iso4762_m4","length_mm":16};
-    op="add_mate" args={"type":"concentric","base":"c1","moved":"c2"};
+    Examples: op="insert_standard_part" args={"key":"iso4762-m4-16","quantity":4};
+    op="add_mate" args={"type":"coincident","base":"<component id>","moved":"<component id>","axis":"z"};
     op="check_interference"; op="render_assembly"; op="export_urdf".
-    Lengths are in metres. See list_operations for every name and its schema.
+
+    `base` and `moved` are *component* ids from list_components, not connector
+    ids — a connector mate names those separately in base_connector/moved_connector.
+    Lengths are in metres, and the schema refuses arguments it does not declare,
+    so read the operation in list_operations before inventing a field.
     """
     with _client() as c:
         r = c.post(f"/assemblies/{assembly_id}/op", json={"op": op, "args": args or {}})

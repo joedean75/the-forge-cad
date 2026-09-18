@@ -456,6 +456,10 @@ def run(
     # and the operation sequence that satisfied it. It was previously discarded
     # when the process ended. `execute` records each step into this trajectory.
     doc0 = _fetch(subject, subject_id)
+    # What the body looked like before this run touched anything, so "did the
+    # geometry change" is a measurement rather than an inference from which
+    # operations ran.
+    start_fingerprint = _visual_fingerprint(subject, subject_id)
     request_context = copilot_context.RequestContext.model_validate(context or {})
     initial_summary = _summary(subject, doc0) if doc0 else {}
     selection = (copilot_context.resolve_selection(subject, doc0, request_context.selection, initial_summary)
@@ -561,9 +565,23 @@ def run(
                 stop_reason = result_kind
                 break
             final_summary = (decision or {}).get("summary") if isinstance(decision, dict) else None
+            # **"Something mutated" is not "the body changed".** `set_spec` is a
+            # mutate too, so a run that only recorded a brief would otherwise be
+            # checked for geometry it never built, rendered from a body that is
+            # not there, and told it finished without a spec it had just
+            # written. The fingerprint answers the question that was being
+            # inferred from the operation kind.
+            geometry_changed = bool(
+                mutated and _visual_fingerprint(subject, subject_id) != start_fingerprint)
+            checking = geometry_changed or result_kind == "completed"
+            # The spec is read on *every* claim of done, changed body or not: it
+            # describes the part, not this run's edits, so a continuation that
+            # declares a half-finished part complete is caught by the same gate
+            # as the run that built it. Only the three checks below are about
+            # the body having moved.
             unmet = (_unmet_requirements(subject_id) if subject == "document"
                      else _unmated_components(subject_id))
-            if mutated or result_kind == "completed":
+            if checking:
                 geometry_failures = _verify(subject, subject_id, note)
                 unmet += geometry_failures
             if unmet:
@@ -586,7 +604,7 @@ def run(
             # asks whether it is the shape that was requested. A live run
             # reported "a 120 x 80 x 6 plate with four holes" over a body
             # measuring 50 x 30 x 6 and passed every one of them.
-            if review_allowance and (mutated or result_kind == "completed"):
+            if review_allowance and checking:
                 fingerprint = _visual_fingerprint(subject, subject_id)
                 if fingerprint and fingerprint != reviewed_fingerprint:
                     # A self-render sent to a text-only model is a provider 400
@@ -622,7 +640,7 @@ def run(
             # only that the body is a valid solid. This is a note rather than a
             # refusal: plenty of real requests (a fillet, a rename) have nothing
             # measurable in them, and failing those would be a loop.
-            if subject == "document" and result_kind == "completed" and mutated:
+            if subject == "document" and result_kind == "completed" and geometry_changed:
                 built = _fetch(subject, subject_id)
                 if not ((getattr(built, "spec", None) or {}).get("requirements")):
                     note({"kind": "verification", "op": "spec_check", "args": {}, "ok": True,

@@ -1071,3 +1071,23 @@ def test_writing_the_brief_is_not_building_the_part(monkeypatch):
     assert out["finished"] is False
     assert out["stop_reason"] == "verification_failed"
     assert any("could not be checked" in row for row in out["unmet"])
+
+
+def test_a_brief_with_no_body_verifies_nothing_it_did_not_build(monkeypatch):
+    """`set_spec` is a mutate, and a mutate is not a change to the body.
+
+    Three checks mean "the body moved" and were reading "some operation ran":
+    validating a solid that was never built, rendering it, and complaining that
+    a run finished without the brief it had just written. The spec itself is
+    still read — that contract is about the part, not about this run's edits —
+    and it reports honestly that there is no geometry to score.
+    """
+    sent = _capture_messages(monkeypatch, [
+        _BRIEF, {"done": True, "summary": "noted the requirements", "result_kind": "answered"}])
+    out = copilot.run(_new_doc(), "what should this plate be?", max_steps=4)
+
+    ops = [s.get("op") for s in out["steps"]]
+    assert "check_geometry" not in ops, "nothing was built, so there is no solid to check"
+    assert "visual_review" not in ops, "and nothing to look at"
+    assert "spec_check" not in ops, "the brief it just wrote is not a missing brief"
+    assert any("could not be checked" in row for row in out["unmet"])
