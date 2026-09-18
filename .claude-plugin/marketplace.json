@@ -1,0 +1,11 @@
+{
+  "name": "forge",
+  "owner": { "name": "The Forge" },
+  "plugins": [
+    {
+      "name": "forge-cad",
+      "source": "./",
+      "description": "CAD skills and the MCP server for The Forge."
+    }
+  ]
+}

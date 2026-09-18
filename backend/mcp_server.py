@@ -4,6 +4,12 @@ It wraps the running Forge backend's operation API over HTTP, exposing CAD as a
 small set of tools: create/list/get parts and run any catalog operation
 (add_primitive, set_feature_params, fillet, hole, measure, ai_edit, …).
 
+`run_operation` and `run_assembly_operation` are the general doors — the catalog
+addresses parts and assemblies separately and every operation declares which it
+takes, so the whole catalog is reachable through those two plus list_operations.
+The named tools here are the handful worth their own signature (a poll loop, a
+file path, a multi-step job), not a second definition of the action space.
+
 Run (with the Forge backend already up on :8000):
     cd backend && .venv/bin/python mcp_server.py
 
@@ -228,6 +234,48 @@ def create_assembly(prompt: str) -> str:
         "components": [{"name": comp["name"], "part_id": comp["part_id"],
                         "translate_m": comp["transform"]["translate"]} for comp in a["components"]],
     }, indent=2)
+
+
+@mcp.tool()
+def create_empty_assembly(name: str = "") -> str:
+    """Create an empty assembly to insert parts into.
+
+    Creating one is deliberately not a catalog operation — it is a POST on a
+    collection, so it would be the only operation whose id argument means
+    nothing. Use create_assembly instead to generate a whole assembly from one
+    description.
+    """
+    with _client() as c:
+        r = c.post("/assemblies", json={"name": name} if name else {})
+    if r.status_code >= 400:
+        return f"Error {r.status_code}: {r.text}"
+    a = r.json()
+    return json.dumps({"assembly_id": a["id"], "name": a["name"],
+                       "components": len(a["components"])})
+
+
+@mcp.tool()
+def run_assembly_operation(assembly_id: str, op: str, args: Optional[dict] = None) -> str:
+    """Run one operation on an *assembly* (the other half of the catalog).
+
+    The catalog addresses two kinds of thing and each operation declares which:
+    run_operation posts to a part document, this posts to an assembly. Passing an
+    assembly id to the part route is refused with a pointer rather than a 404.
+
+    Examples: op="insert_standard_part" args={"key":"iso4762_m4","length_mm":16};
+    op="add_mate" args={"type":"concentric","base":"c1","moved":"c2"};
+    op="check_interference"; op="render_assembly"; op="export_urdf".
+    Lengths are in metres. See list_operations for every name and its schema.
+    """
+    with _client() as c:
+        r = c.post(f"/assemblies/{assembly_id}/op", json={"op": op, "args": args or {}})
+    if r.status_code >= 400:
+        return f"Error {r.status_code}: {r.text}"
+    data = r.json()
+    out: dict[str, Any] = {"ok": data["ok"], "op": data["op"], "result": data["result"]}
+    if data.get("error"):
+        out["error"] = data["error"]
+    return json.dumps(out, indent=2)
 
 
 @mcp.tool()

@@ -192,9 +192,20 @@ curl -s $BASE/api/documents/$DOC/step -H 'X-Api-Key: fk_…' -o part.step
 
 ## MCP server (Claude Code / Desktop / any MCP client)
 
-The stdio server in `backend/mcp_server.py` wraps the HTTP API as MCP tools:
-`list_operations`, `create_part`, `list_parts`, `get_part`, `run_operation`,
-`copilot`, `import_part`, `quote_part`, `order_part`, `export_part_step`.
+The stdio server in `backend/mcp_server.py` wraps the HTTP API as MCP tools.
+
+**Two of them are the general doors.** The catalog addresses parts and assemblies
+separately and every operation declares which id it takes, so `run_operation`
+(a part) and `run_assembly_operation` (an assembly) reach the *whole* catalog —
+`list_operations` is how you find the name and its schema. The rest are the
+handful worth their own signature: a poll loop, a local file path, a multi-step
+job. They are not a second definition of the action space.
+
+- Parts: `create_part`, `list_parts`, `get_part`, `run_operation`, `copilot`,
+  `import_part`, `slice_part`, `print_part`, `export_part_step`
+- Assemblies: `create_empty_assembly`, `create_assembly` (from one description),
+  `run_assembly_operation`, `bill_of_materials`, `check_interference`
+- Commerce: `quote_part`, `order_part`
 
 ```jsonc
 // .mcp.json / Claude Desktop config
@@ -215,6 +226,38 @@ The stdio server in `backend/mcp_server.py` wraps the HTTP API as MCP tools:
 ## Conventions
 
 - **Units:** all op args are metres (`0.1` = 100 mm); the UI displays mm.
-- **Meshes:** `derived.mesh_url` is a binary-STL data URI — decode it directly.
+- **Meshes:** `derived.mesh_url` is a hash-keyed URL
+  (`/api/documents/{id}/mesh/{mesh_hash}`), fetched with your key — not an
+  inline payload. It carries Forge's indexed binary mesh (`FMSH`), which is less
+  than half the bytes of the equivalent STL. It is immutable and cached forever,
+  so a hash the document no longer has returns 404 rather than different
+  triangles: re-read the document and use the new URL. `export` writes STL when
+  you want the interchange format.
 - **Errors:** 404 = not yours/doesn't exist (never leaks existence), 403 = role
   too low, 422 = bad arguments (message says what to fix), 429 = plan quota.
+
+## Claude Code plugin
+
+`.claude-plugin/plugin.json` plus `skills/` ships this repository as a plugin, so
+an agent working in a checkout gets the rules that are not in the schema:
+
+- **forge-cad** — building a part: metres in and millimetres out, what a new
+  document starts as, why invented arguments are refused rather than defaulted.
+- **forge-assembly** — the second door for operations, why the interference check
+  reads `interferences` and never `clear`, and what "done" requires.
+- **forge-inspect** — which verifier answers which question, and where each one
+  refuses to guess.
+- **forge-export** — exports are URLs rather than payloads, and why the URDF
+  refusals are deliberate.
+
+They deliberately do not restate the catalog: `list_operations` already serves
+that, and a second copy of it would drift from the schema the moment an operation
+changed. What they carry is the reasoning a caller cannot recover from a
+parameter list.
+
+Add the marketplace from a checkout, then install:
+
+```bash
+claude plugin marketplace add /path/to/forge
+claude plugin install forge-cad@forge
+```

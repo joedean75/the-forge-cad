@@ -37,7 +37,7 @@ solve** (numpy/scipy, GPU density ops via PyTorch when CUDA is present).
 | **3D printing** | A built-in SDF-native FDM slicer — walls, solid top/bottom skins, infill, skirt, retraction, cooling — producing Klipper/Marlin G-code, with a layer preview and one-click upload to a Moonraker printer. See [docs/PRINTING.md](docs/PRINTING.md). |
 | **Machine control** | Moonraker/Klipper status, temperatures, jog, job progress. |
 | **Collaboration** | Owner-scoped documents, role-based sharing (viewer/editor), live presence + real-time updates over WebSocket, version snapshots/restore/branch. |
-| **Agent platform** | Self-describing operation catalog, API keys, an MCP server, and a discovery manifest at `GET /api/platform`. An agent can go prompt → part → quote → **print** end to end. See [docs/AGENT-PLATFORM.md](docs/AGENT-PLATFORM.md). |
+| **Agent platform** | Self-describing operation catalog, API keys, an MCP server, a Claude Code plugin (`.claude-plugin/` + `skills/`), and a discovery manifest at `GET /api/platform`. An agent can go prompt → part → quote → **print** end to end. See [docs/AGENT-PLATFORM.md](docs/AGENT-PLATFORM.md). |
 | **Accounts & billing** | JWT auth, plans/entitlements/metering; optional Stripe checkout + webhook for live billing. |
 
 ## Quick start
@@ -111,7 +111,11 @@ tools and can discover additional operations as needed.
 **By task**
 
 - [docs/AGENT-PLATFORM.md](docs/AGENT-PLATFORM.md) — driving Forge from an agent:
-  the operation API, face/edge selection, verification, MCP, rollouts.
+  the operation API, face/edge selection, verification, MCP, the Claude Code
+  plugin, rollouts.
+- [skills/](skills/) — the four agent skills that ship with the plugin, carrying
+  the rules a schema cannot state: the units contract, which verifier answers
+  which question, and the traps each surface has.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the two processes and the layering.
 - [docs/PRINTING.md](docs/PRINTING.md) — the slicer and print pipeline.
 - [docs/PURCHASED-PARTS-SOURCING.md](docs/PURCHASED-PARTS-SOURCING.md) — where

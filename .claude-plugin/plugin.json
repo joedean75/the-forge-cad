@@ -1,0 +1,7 @@
+{
+  "name": "forge-cad",
+  "version": "0.1.0",
+  "description": "Drive The Forge's CAD kernel from an agent: build parts through the operation catalog, compose assemblies, verify geometry against a spec, and export STEP, drawings and URDF.",
+  "author": { "name": "The Forge" },
+  "keywords": ["cad", "mcp", "geometry", "step", "urdf", "robotics"]
+}
