@@ -1012,3 +1012,62 @@ def test_a_repair_after_a_review_is_shown_the_new_body_not_the_old_render(monkey
     assert len(reviews) == 2
     assert reviews[0]["result"]["views"][0]["url"] != reviews[1]["result"]["views"][0]["url"]
     assert out["finished"] is True and out["stop_reason"] == "done"
+
+
+_BRIEF = {"op": "set_spec", "rationale": "what the part has to be",
+          "args": {"goal": "a 50 mm plate",
+                   "requirements": [{"kind": "bounding_box", "axis": "x",
+                                     "value": 50, "tolerance": 1}]}}
+
+
+def test_the_brief_rule_is_sent_for_a_part_and_not_for_an_assembly(monkeypatch):
+    """The prompt is assembled twice — once for tool providers, once from
+    scratch for prose ones — so a rule reaching only one reaches half the runs.
+    This drives the prose path, which is the one `_capture_messages` exercises.
+    """
+    sent = _capture_messages(monkeypatch, [{"done": True, "summary": "done"}])
+    copilot.run(_new_doc(), "what is this?", max_steps=1)
+    assert "Write the brief before you build" in sent[0][0]["content"]
+
+    sent.clear()
+    copilot.run(_assembly(), "what is this?", subject="assembly", max_steps=1)
+    # An assembly is judged by its mates and its interference, and `set_spec`
+    # does not take an assembly id — the rule would be unfollowable there.
+    assert "Write the brief before you build" not in sent[0][0]["content"]
+
+
+def test_a_build_that_nobody_scored_says_so(monkeypatch):
+    """The spec gate is inert when no spec was ever written.
+
+    `_unmet_requirements` returns nothing for a document with no requirements,
+    so a run that never wrote one passes by having nothing to fail. That is not
+    a refusal — a fillet request has nothing measurable — but it must be visible.
+    """
+    sent = _capture_messages(monkeypatch, [_PLATE, {"done": True, "summary": "built it"}])
+    out = copilot.run(_new_doc(), "a 50 mm plate", max_steps=4)
+    notes = [s for s in out["steps"] if s.get("op") == "spec_check"]
+    assert notes and "without a design brief" in notes[0]["result"]["summary"]
+    assert out["finished"] is True and out["stop_reason"] == "done"
+
+
+def test_a_brief_recorded_first_turns_the_spec_gate_back_on(monkeypatch):
+    sent = _capture_messages(monkeypatch, [_BRIEF, _PLATE, {"done": True, "summary": "built it"}])
+    out = copilot.run(_new_doc(), "a 50 mm plate", max_steps=6)
+    assert [s.get("op") for s in out["steps"] if s.get("kind") == "op"][0] == "set_spec"
+    # Scored rather than merely checked, so the note is absent and the run is
+    # finished on a measurement rather than on the body being well formed.
+    assert not [s for s in out["steps"] if s.get("op") == "spec_check"]
+    assert out["unmet"] == [] and out["finished"] is True
+
+
+def test_writing_the_brief_is_not_building_the_part(monkeypatch):
+    """A run that records requirements and stops has not met them.
+
+    `verify_against_spec` refuses a document with no evaluated geometry, so this
+    arrives as a real failure rather than as a spec that passed vacuously.
+    """
+    sent = _capture_messages(monkeypatch, [_BRIEF, {"done": True, "summary": "all done"}])
+    out = copilot.run(_new_doc(), "a 50 mm plate", max_steps=4)
+    assert out["finished"] is False
+    assert out["stop_reason"] == "verification_failed"
+    assert any("could not be checked" in row for row in out["unmet"])

@@ -187,12 +187,12 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
     if enabled_tools is not None:
         definitions = [t for t in definitions if t["function"]["name"] in enabled_tools]
         definitions += copilot_context.control_tools()
-        system += copilot_context.CONTROL_RULES
+        system += copilot_context.control_rules(subject)
         if not with_tools:
             # Prose providers need nesting and descriptions too, not just a
             # flat parameter-name list. Send the same selected JSON schemas.
             system = (action_space.system_prompt(with_tools=False, subject=subject, names=set())
-                      + copilot_context.CONTROL_RULES
+                      + copilot_context.control_rules(subject)
                       + "\nAvailable operation schemas (respond with op/args JSON):\n"
                       + json.dumps(definitions))
         user += "\n\nAdditional operation directory (load schemas with discover_operations):\n" + json.dumps(
@@ -616,6 +616,18 @@ def run(
                                       v["camera"] for v in views) + " — comparing with the goal",
                                       "views": snapshot.store_views(subject, subject_id, views)}})
                             continue
+            # **A build with no brief says so.** `_unmet_requirements` is empty
+            # when nothing was ever declared, so a run that never wrote a spec
+            # passes the spec gate by having nothing to fail — "done" then means
+            # only that the body is a valid solid. This is a note rather than a
+            # refusal: plenty of real requests (a fillet, a rename) have nothing
+            # measurable in them, and failing those would be a loop.
+            if subject == "document" and result_kind == "completed" and mutated:
+                built = _fetch(subject, subject_id)
+                if not ((getattr(built, "spec", None) or {}).get("requirements")):
+                    note({"kind": "verification", "op": "spec_check", "args": {}, "ok": True,
+                          "result": {"summary": "finished without a design brief: the body "
+                                                "was not scored against the request"}})
             finished = True
             # A status/report request can finish while the saved design plan
             # still has work. Only the planner may clear an explicit plan.

@@ -154,6 +154,44 @@ Planning context:
 """
 
 
+#: Write down what the part is supposed to be, before building it.
+#:
+#: `verify_against_spec` is the reward function and `_unmet_requirements` is the
+#: gate that reads it — and both are inert when nobody ever wrote a spec, which
+#: was the common case: the run finished, the score was never computed, and
+#: "done" meant only that the body was a valid solid. A brief recorded from the
+#: request turns that gate back on.
+#:
+#: **Only what the request says.** A spec is scored, so an invented dimension is
+#: not a harmless guess — it becomes a target the run then passes, which is a
+#: false reading of the one number meant to say whether the part is right.
+#: Document subject only: an assembly is judged by its mates and interference,
+#: and `set_spec` does not take an assembly id.
+BRIEF_RULE = """
+- Write the brief before you build. On a request to build or change geometry,
+  record the measurable requirements with set_spec before the first edit:
+  overall size (bounding_box, in mm), holes (hole: diameter and count), and
+  mass, volume, material, watertight or bodies where the request gives them.
+- Record only what the request states or clearly implies. A spec is what the
+  finished part is scored against, so a number you invent becomes a target this
+  run will then report as met — a guess is worse than an absent requirement.
+- If the state above already shows a spec, reconcile with it rather than
+  rewriting it. A request with nothing measurable in it — a fillet, a rename, a
+  question — needs no spec, and inventing one to have one is the failure above.
+"""
+
+
+def control_rules(subject: str = "document") -> str:
+    """The standing rules, plus the ones that only make sense for this subject.
+
+    Assembled here rather than concatenated at the call site because the planner
+    prompt is built twice — once for tool-calling providers and once, from
+    scratch, for prose ones — and a rule added to only one of them is a rule
+    production sends to half its runs.
+    """
+    return CONTROL_RULES + (BRIEF_RULE if subject == "document" else "")
+
+
 def control_tools() -> list[dict]:
     return [
         {"type": "function", "function": {
