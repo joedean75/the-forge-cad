@@ -760,6 +760,32 @@ def _bill_of_materials(asm_id, args):
     return bom.bill_of_materials(asm_id)
 
 
+@operation("export_srdf", "query",
+           "The semantic half a URDF cannot carry: which chains of links are "
+           "worth planning for, and which pairs may touch. A planner that "
+           "treats every contact as a collision will not move a machine whose "
+           "parts are bolted together by design. Groups are the kinematic "
+           "chains; disabled pairs are the mated ones (exact) plus the ones "
+           "the interference check finds touching at this pose. End effectors, "
+           "virtual joints and named states are planning decisions nothing in "
+           "an assembly answers, so they are left out rather than guessed.",
+           {"name": {"type": "string",
+                     "description": "robot name; must match the URDF's"},
+            "clearance_mm": {"type": "number", "default": 1.0, "unit": "mm",
+                             "description": "pairs closer than this are treated "
+                                            "as touching"}},
+           subject="assembly")
+def _export_srdf(asm_id, args):
+    from app.services import srdf
+
+    _assembly(asm_id)
+    try:
+        return srdf.export_srdf(asm_id, name=args.get("name"),
+                                clearance_mm=float(args.get("clearance_mm", 1.0)))
+    except ValueError as exc:
+        raise PreconditionFailed(str(exc))
+
+
 @operation("export_sdf", "query",
            "The assembly as SDFormat (Gazebo), which represents two things URDF "
            "cannot: a ball mate becomes a real `ball` joint rather than a fixed "

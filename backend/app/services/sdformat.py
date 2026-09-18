@@ -44,7 +44,7 @@ import numpy as np
 
 from app.services import assembly_service
 from app.services import mass_properties as part_mass
-from app.services.urdf import _rpy, _safe, _spin
+from app.services.urdf import _rpy, _safe, _spin, link_names_for
 
 MM = 1000.0
 
@@ -131,15 +131,7 @@ def export_sdf(asm_id: str, *, name: Optional[str] = None,
 
     frames = assembly_service.connector_frames(asm)
     placements = {c.id: _component_placement(c) for c in asm.components}
-    link_names: Dict[str, str] = {}
-    used: set = set()
-    for index, component in enumerate(asm.components):
-        base = _safe(component.name, f"link_{index}")
-        candidate, suffix = base, 2
-        while candidate in used:
-            candidate, suffix = f"{base}_{suffix}", suffix + 1
-        used.add(candidate)
-        link_names[component.id] = candidate
+    link_names = link_names_for(asm)
 
     warnings: List[str] = []
     unsupported: List[Dict[str, str]] = []

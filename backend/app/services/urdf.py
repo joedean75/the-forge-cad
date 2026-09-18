@@ -107,6 +107,28 @@ def _frames(asm) -> Dict[str, Dict[str, Any]]:
     return assembly_service.connector_frames(asm)
 
 
+def link_names_for(asm) -> Dict[str, str]:
+    """Component id -> the link name every robot-description exporter must use.
+
+    Derived once because three files now describe the same assembly — URDF,
+    SDFormat and SRDF — and two transcriptions of a naming rule agree on the day
+    they are written. After that a URDF and its SRDF disagree about which link
+    is `arm_2`, and the SRDF plans against a link that is not there: a failure
+    with no error message anywhere, which is the kind this codebase keeps
+    single-sourcing to avoid.
+    """
+    names: Dict[str, str] = {}
+    used: set = set()
+    for index, component in enumerate(asm.components):
+        base = _safe(component.name, f"link_{index}")
+        candidate, suffix = base, 2
+        while candidate in used:
+            candidate, suffix = f"{base}_{suffix}", suffix + 1
+        used.add(candidate)
+        names[component.id] = candidate
+    return names
+
+
 def _link_xml(name: str, mass_kg: float, cog_m, inertia_si, mesh_url: Optional[str]) -> str:
     ixx, ixy, ixz = inertia_si[0]
     _, iyy, iyz = inertia_si[1]
@@ -138,15 +160,7 @@ def export_urdf(asm_id: str, *, name: Optional[str] = None,
         raise ValueError("an empty assembly has no links to write")
 
     frames = _frames(asm)
-    link_names: Dict[str, str] = {}
-    used: set = set()
-    for index, component in enumerate(asm.components):
-        base = _safe(component.name, f"link_{index}")
-        candidate, suffix = base, 2
-        while candidate in used:
-            candidate, suffix = f"{base}_{suffix}", suffix + 1
-        used.add(candidate)
-        link_names[component.id] = candidate
+    link_names = link_names_for(asm)
 
     warnings: List[str] = []
     unsupported: List[Dict[str, str]] = []
