@@ -89,6 +89,9 @@ _CORE = {
     "add_primitive", "add_extrude", "add_modifier", "set_feature_params",
     "get_feature", "list_features", "bounding_box", "check_geometry",
     "get_spec", "set_spec", "verify_against_spec", "set_parameters", "get_parameters",
+    # Nearly every request names a material, and every live run so far spent
+    # two turns on it being unloaded: refused once, then discovered.
+    "set_material",
 }
 
 
@@ -144,8 +147,12 @@ Planning context:
 - When the design is complete, update remaining to [] and record what was
   verified. Answering a status question does not complete unfinished design
   work: keep that work in the plan even if the latest question is answered.
-- Read the remaining planner-turn and wall-clock budget. Reserve about two
-  turns for verification and handoff. If work remains, leave an accurate plan.
+- Read the remaining planner-turn and wall-clock budget. If work remains,
+  leave an accurate plan.
+- Finishing runs the checks for you: the spec is scored, the solid is
+  validated and the result is rendered for you to look at. Do not spend turns
+  calling verify_against_spec or check_geometry just before finishing — call
+  them only to diagnose something. Keep turns for the repairs they may ask for.
 - Only a relevant subset of CAD schemas may be loaded. The operation directory
   lists additional operations for this subject. Use discover_operations with
   exact names or a search query to load their full schemas before calling them.

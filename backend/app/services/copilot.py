@@ -26,7 +26,12 @@ from app.services.llm_errors import LLMFailure
 
 _LOGGER = logging.getLogger(__name__)
 
-MAX_STEPS_DEFAULT = 8
+#: Twelve, not eight. The brief rule spends the first turn on `set_spec`, and a
+#: plain four-hole plate is then seven actions — so eight left no room for the
+#: one repair the spec gate exists to ask for. Measured live: at eight the gate
+#: caught a missing hole and the run ran out of budget fixing it; at twelve the
+#: same request finished and confirmed.
+MAX_STEPS_DEFAULT = 12
 MAX_STEPS_CAP = 16
 
 #: An assembly run is a different size of job. One part is a whole nested
@@ -207,9 +212,17 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
         model=model)
 
     calls = message.get("tool_calls") or []
+    deferred: List[str] = []
     if len(calls) > 1:
-        raise LLMFailure("PROVIDER_PROTOCOL", "The planner returned multiple actions.",
-                         "Retry with one action at a time.", retryable=True)
+        # We ask for one call per turn, and not every provider honours it. A
+        # batch is not a malformed answer — it is several reasonable next steps
+        # — so run the first and let the rest be re-planned against the state it
+        # leaves, rather than failing a run that has done nothing wrong. An
+        # operation is preferred over `finish_task`: "build this, then finish"
+        # must not finish first.
+        ordered = sorted(calls, key=lambda c: ((c or {}).get("function") or {}).get("name") == "finish_task")
+        deferred = [((c or {}).get("function") or {}).get("name") or "?" for c in ordered[1:]]
+        calls = ordered[:1]
     if calls:
         function = (calls[0] or {}).get("function") or {}
         raw_args = function.get("arguments") or "{}"
@@ -223,8 +236,14 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
             if parsed.get("outcome") not in ("completed", "answered", "needs_input", "paused") or not str(parsed.get("summary") or "").strip():
                 raise LLMFailure("PROVIDER_PROTOCOL", "The completion result was incomplete.", "Report the outcome and summary.", retryable=True)
             return {"done": True, "summary": parsed["summary"], "result_kind": parsed["outcome"]}
+        rationale = (message.get("content") or "").strip()[:200]
+        if deferred:
+            # Said in the transcript the planner reads next turn, so it knows
+            # the rest did not run and is not left believing they did.
+            rationale = (rationale + " " if rationale else "") + (
+                f"(one action per turn: {', '.join(deferred)} not run — plan it again)")
         return {"op": function.get("name"), "args": parsed,
-                "rationale": (message.get("content") or "").strip()[:200], "_via": "tools"}
+                "rationale": rationale, "_via": "tools"}
 
     content = message.get("content") or ""
     if with_tools:
@@ -277,7 +296,9 @@ def _user_content(text: str, images: Optional[List[str]],
 #: and a rule that fires with nothing to look at trains a planner to ignore it.
 _REVIEW_RULE = (
     "These renders show the body you have actually built. Compare them with the "
-    "goal and with any reference image above. If they match, finish. If they do "
+    "goal and with any reference image above. If they match, finish now with "
+    "finish_task — this is the last check, not the start of another round of "
+    "queries. If they do "
     "not, say which specific difference you see — a missing hole, a feature on "
     "the wrong face, a part facing the wrong way — and fix that before "
     "finishing. Do not report success for a body that does not look like what "

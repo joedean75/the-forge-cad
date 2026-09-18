@@ -104,3 +104,39 @@ def test_the_status_rides_on_the_failure_for_the_job_to_report(monkeypatch):
     failure = _failure(monkeypatch, _Resp(429, {"error": {"message": "slow down"}}))
     assert failure.to_dict()["provider_status"] == 429
     assert failure.code == "PROVIDER_THROTTLED" and failure.retryable is True
+
+
+def _recording(monkeypatch):
+    """A client that answers politely and remembers what it was sent."""
+    sent = []
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, *a, **kw):
+            sent.append(kw.get("json") or {})
+            return _Resp(200, {"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setattr(llm_client.httpx, "Client", _Client)
+    monkeypatch.setattr(llm_client, "LLM_API_KEY", "test-key")
+    return sent
+
+
+def test_a_tool_call_asks_for_one_action_at_a_time(monkeypatch):
+    """Left to default, a live model returned `set_spec` and `add_primitive`
+    together and the run stopped before doing either. Nothing here executes a
+    batch, so it is asked not to send one."""
+    sent = _recording(monkeypatch)
+    tool = {"type": "function", "function": {"name": "noop", "parameters": {"type": "object"}}}
+    llm_client._post_chat([{"role": "user", "content": "hi"}], timeout=5.0, tools=[tool])
+    assert sent[-1]["parallel_tool_calls"] is False
+
+    llm_client._post_chat([{"role": "user", "content": "hi"}], timeout=5.0)
+    assert "parallel_tool_calls" not in sent[-1], "only meaningful when tools are offered"

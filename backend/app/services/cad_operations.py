@@ -2617,7 +2617,9 @@ def _set_tolerances(doc_id, args):
 
 @operation("set_spec", "mutate", "Record what the part is supposed to be: measurable requirements the body "
            "is scored against by verify_against_spec. Kinds: bounding_box (axis + value/tolerance or "
-           "min/max, mm), mass (g), volume (cm³), material (id), hole (diameter mm + count), "
+           "min/max, mm), mass (g), volume (cm³), material (a grade id like al-6061, or a "
+           "category like aluminum or steel when the request names only the family), "
+           "hole (diameter mm + count), "
            "feature (a feature type that must be present), watertight, bodies. "
            "Set this before modelling and the score tells you how close the part is.",
            {"requirements": {"type": "array", "required": True,

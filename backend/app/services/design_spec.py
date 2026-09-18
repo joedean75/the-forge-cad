@@ -131,13 +131,45 @@ def _c_volume(req, ctx) -> Tuple[str, str, float]:
     return status, detail, actual
 
 
+#: Spellings of a category that name the same thing. Deliberately a table and
+#: not a similarity match: "aluminium" is aluminum, and "alum" is not anything.
+_CATEGORY_ALIASES = {"aluminium": "aluminum"}
+
+
 def _c_material(req, ctx) -> Tuple[str, str, Optional[float]]:
-    wanted = req.get("value")
+    """A specific grade, or any grade of a category.
+
+    A request says "aluminium", not "6061-T6". Holding the part to an exact id
+    meant a planner recording the request faithfully wrote `aluminum`, then
+    failed a requirement the body met — and a live run spent its remaining turns
+    trying to satisfy it. Forcing a grade instead would make the brief invent
+    one, which is the thing the brief rule exists to forbid. So a category is a
+    requirement on the family and any member meets it; an exact id still means
+    exactly that grade.
+    """
+    from app.services import materials
+
+    wanted = str(req.get("value") or "").strip()
     if not wanted:
-        raise SpecError(f"requirement {req.get('id', '?')}: 'value' must be a material id")
+        raise SpecError(f"requirement {req.get('id', '?')}: 'value' must be a "
+                        f"material id or a category")
     actual = ctx["material_id"]
-    return (("pass" if actual == wanted else "fail"),
-            f"material is {actual or 'unset'}, required {wanted}", None)
+    by_id = {m.id: m for m in materials.list_materials()}
+    categories = {c["id"] for c in materials.CATEGORIES}
+    key = _CATEGORY_ALIASES.get(wanted.lower(), wanted.lower())
+
+    if wanted in by_id:
+        return (("pass" if actual == wanted else "fail"),
+                f"material is {actual or 'unset'}, required {wanted}", None)
+    if key in categories:
+        family = getattr(by_id.get(actual), "category", None) if actual else None
+        return (("pass" if family == key else "fail"),
+                f"material is {actual or 'unset'} ({family or 'no category'}), "
+                f"required any {key}", None)
+    # Neither: say so, rather than reporting an ordinary mismatch against a
+    # value that can never match anything.
+    return ("fail", f"{wanted!r} is neither a material id nor a category; "
+                    f"categories are {', '.join(sorted(categories))}", None)
 
 
 def _c_watertight(req, ctx) -> Tuple[str, str, Optional[float]]:

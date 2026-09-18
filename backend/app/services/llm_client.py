@@ -506,6 +506,12 @@ def _post_chat(messages: list[dict[str, Any]], *, timeout: float = 60.0,
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
+        # One call per turn. Nothing here executes a batch — the copilot plans
+        # each step against the state the previous one left — and left to
+        # default, a current model will happily return `set_spec` and
+        # `add_primitive` together, which is two sensible actions and was a run
+        # that stopped before doing either.
+        payload["parallel_tool_calls"] = False
 
     from app.services import trajectories
     context = CALL_CONTEXT.get() or {}

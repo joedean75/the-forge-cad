@@ -1128,3 +1128,52 @@ def test_the_playbook_keys_on_the_code_the_transcript_actually_carries(monkeypat
     # The remedy rides alongside, so the planner gets both the code and the
     # sentence about it without the playbook restating every remedy.
     assert failed[0]["error_detail"]["remedy"]
+
+
+def _tool_batches(monkeypatch, turns):
+    """A tool-calling provider that answers each turn with a list of calls."""
+    from app.services import llm_client
+
+    queue = list(turns)
+
+    def call(name, args):
+        return {"function": {"name": name, "arguments": json.dumps(args)}}
+
+    def fake_post(messages, *, timeout=60.0, max_tokens=None, tools=None, model=None):
+        batch = queue.pop(0) if len(queue) > 1 else queue[0]
+        return {"content": "", "tool_calls": [call(n, a) for n, a in batch]}
+
+    monkeypatch.setattr(llm_client, "is_configured", lambda: True)
+    monkeypatch.setattr(llm_client, "supports_tools", lambda: True)
+    monkeypatch.setattr(llm_client, "_post_chat", fake_post)
+
+
+def test_a_batch_of_calls_runs_the_first_rather_than_failing_the_run(monkeypatch):
+    """What a live Sonnet run did: two sensible calls in one turn. It used to be
+    a protocol failure that stopped the run with nothing done; it is one action
+    now, and the planner is told the other did not run."""
+    finish = ("finish_task", {"outcome": "completed", "summary": "built it"})
+    _tool_batches(monkeypatch, [
+        [("add_primitive", _PLATE["args"]),
+         ("set_spec", {"requirements": [{"kind": "bounding_box", "axis": "x",
+                                         "value": 50, "tolerance": 1}]})],
+        [finish],
+    ])
+    out = copilot.run(_new_doc(), "a 50 mm plate", max_steps=6)
+
+    ops = [s for s in out["steps"] if s.get("kind") == "op"]
+    assert ops[0]["op"] == "add_primitive" and ops[0]["ok"]
+    assert "set_spec not run" in ops[0]["rationale"], "the planner is told what was dropped"
+    assert out["stop_reason"] != "planner_error"
+
+
+def test_a_batch_that_ends_in_finish_does_the_work_first(monkeypatch):
+    """"Build this, then finish" must not finish first."""
+    _tool_batches(monkeypatch, [
+        [("finish_task", {"outcome": "completed", "summary": "done"}),
+         ("add_primitive", _PLATE["args"])],
+        [("finish_task", {"outcome": "completed", "summary": "done"})],
+    ])
+    out = copilot.run(_new_doc(), "a 50 mm plate", max_steps=6)
+    ops = [s for s in out["steps"] if s.get("kind") == "op"]
+    assert ops and ops[0]["op"] == "add_primitive"
