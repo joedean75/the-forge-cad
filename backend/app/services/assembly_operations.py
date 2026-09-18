@@ -760,6 +760,33 @@ def _bill_of_materials(asm_id, args):
     return bom.bill_of_materials(asm_id)
 
 
+@operation("export_sdf", "query",
+           "The assembly as SDFormat (Gazebo), which represents two things URDF "
+           "cannot: a ball mate becomes a real `ball` joint rather than a fixed "
+           "one, and a closed kinematic loop is expressible because an SDFormat "
+           "model is a graph rather than a tree. It is not strictly better — "
+           "SDFormat has no planar joint where URDF does, and no cylindrical "
+           "joint either (`screw` couples rotation to translation, which a "
+           "cylindrical mate does not). Whatever it cannot say is named in "
+           "`unsupported` rather than quietly emitted as something else.",
+           {"name": {"type": "string",
+                     "description": "model name in the file; defaults to the "
+                                    "assembly's"},
+            "mesh_urls": {"type": "boolean", "default": True,
+                          "description": "reference each link's mesh for visual "
+                                         "and collision geometry"}},
+           subject="assembly")
+def _export_sdf(asm_id, args):
+    from app.services import sdformat
+
+    _assembly(asm_id)
+    try:
+        return sdformat.export_sdf(asm_id, name=args.get("name"),
+                                   mesh_urls=bool(args.get("mesh_urls", True)))
+    except ValueError as exc:
+        raise PreconditionFailed(str(exc))
+
+
 @operation("render_assembly", "query",
            "Look at the assembly as it stands. Renders shaded views of every "
            "component **in its placed position** and returns a URL per view, "
