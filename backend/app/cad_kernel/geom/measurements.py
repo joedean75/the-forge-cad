@@ -6,16 +6,69 @@ centroid, but no enclosed volume or mass inertia.
 """
 
 
-def exact_measurements(shape, kind: str) -> dict:
+def exact_bounds(shape):
+    """The optimal axis-aligned box of a shape, as (lo_x, lo_y, lo_z, hi_x, hi_y, hi_z).
+
+    The same answer as `BRepBndLib.AddOptimal` over the whole shape, which is
+    the union of each face's optimal box — but that call optimises *every*
+    face, and on a supplier motor with 1,658 B-spline faces it was 48 of the
+    59 seconds it took to open the part. Only a face that can reach an extreme
+    can change the result. Each face's conservative box (analytic bounds, or the
+    control polygon for a spline, which contains the surface by the convex-hull
+    property) is cheap; per side of the box, faces are visited in order of how
+    far that conservative bound reaches, the optimal box is computed only for
+    those, and the walk stops at the first face whose conservative bound cannot
+    beat the best exact value so far. Triangulation is still never used: a
+    tessellated box is short on every curved face by the chordal sag, and the
+    drawing prints its dimension figures from this box.
+    """
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
+
+    from app.cad_kernel.core import naming
+
+    faces = naming.faces(shape)
+    if not faces:
+        box = Bnd_Box()
+        BRepBndLib.AddOptimal_s(shape, box, False, False)
+        return box.Get()
+
+    loose = []
+    for face in faces:
+        box = Bnd_Box()
+        BRepBndLib.Add_s(face, box, False)
+        loose.append(box.Get())
+
+    exact: dict = {}
+
+    def optimal(i):
+        if i not in exact:
+            box = Bnd_Box()
+            BRepBndLib.AddOptimal_s(faces[i], box, False, False)
+            exact[i] = box.Get()
+        return exact[i]
+
+    result = []
+    for k in range(6):             # lo_x, lo_y, lo_z, hi_x, hi_y, hi_z
+        high = k >= 3
+        order = sorted(range(len(faces)), key=lambda i: loose[i][k], reverse=high)
+        best = None
+        for i in order:
+            reach = loose[i][k]
+            if best is not None and (reach <= best if high else reach >= best):
+                break
+            value = optimal(i)[k]
+            if best is None or (value > best if high else value < best):
+                best = value
+        result.append(best)
+    return tuple(result)
+
+
+def exact_measurements(shape, kind: str) -> dict:
     from OCP.BRepGProp import BRepGProp
     from OCP.GProp import GProp_GProps
 
-    bounds = Bnd_Box()
-    # Do not use triangulation or control-polygon bounds for curved surfaces.
-    BRepBndLib.AddOptimal_s(shape, bounds, False, False)
-    lo_x, lo_y, lo_z, hi_x, hi_y, hi_z = bounds.Get()
+    lo_x, lo_y, lo_z, hi_x, hi_y, hi_z = exact_bounds(shape)
     surface = GProp_GProps()
     BRepGProp.SurfaceProperties_s(shape, surface)
     props = surface

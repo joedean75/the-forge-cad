@@ -132,36 +132,48 @@ def _build(mesh: Union[FaceMesh, Solid]) -> "_StepBuilder":
     global_axis = b.axis2(origin_id, z_id, x_id)
     context_id = b.unit_context()
 
+    # Shared topology, as a closed shell should have it: one VERTEX_POINT per
+    # point and one EDGE_CURVE per edge, the second triangle to use an edge
+    # traversing it reversed. Emitting both per triangle — as this did — wrote
+    # every edge twice and three vertices a triangle, so a 210k-triangle shell
+    # came to 293 MB and sixteen seconds, and the "closed" shell had no two
+    # faces sharing an edge, leaving every importer to sew it back together.
+    x_ref, y_ref = x_id, b.direction(0.0, 1.0, 0.0)
+    vertex_of: dict = {}
+    edge_of: dict = {}
+
+    def vertex(point_id: int) -> int:
+        found = vertex_of.get(point_id)
+        if found is None:
+            found = vertex_of[point_id] = b.vertex(point_id)
+        return found
+
     face_ids: List[int] = []
     for tri, normal in zip(faces, normals):
-        # Vertex points
-        p_ids = [b.point(*verts[idx]) for idx in tri]
-        v_ids = [b.vertex(pid) for pid in p_ids]
-
-        # Edges as straight lines between consecutive vertices
+        corners = [verts[idx] for idx in tri]
+        p_ids = [b.point(*c) for c in corners]
+        if len(set(p_ids)) < 3:
+            continue                  # degenerate: two corners are one point
         edge_oriented: List[int] = []
         for i in range(3):
             j = (i + 1) % 3
             p1, p2 = p_ids[i], p_ids[j]
-            dx = float(verts[tri[j]][0] - verts[tri[i]][0])
-            dy = float(verts[tri[j]][1] - verts[tri[i]][1])
-            dz = float(verts[tri[j]][2] - verts[tri[i]][2])
-            dir_id = b.direction(dx, dy, dz)
-            vec_id = b.vector(dir_id)
-            line_id = b.line(p1, vec_id)
-            edge_id = b.edge_curve(v_ids[i], v_ids[j], line_id)
+            existing = edge_of.get((p2, p1))
+            if existing is not None:
+                edge_oriented.append(b.oriented_edge(existing, ".F."))
+                continue
+            d = corners[j] - corners[i]
+            line_id = b.line(p1, b.vector(b.direction(float(d[0]), float(d[1]), float(d[2]))))
+            edge_id = b.edge_curve(vertex(p1), vertex(p2), line_id)
+            edge_of[(p1, p2)] = edge_id
             edge_oriented.append(b.oriented_edge(edge_id))
 
-        loop_id = b.edge_loop(edge_oriented)
-        bound_id = b.face_bound(loop_id)
-
-        # Plane for this triangle
-        centroid = verts[tri].mean(axis=0)
-        center_id = b.point(*centroid)
-        ref_dir = b.direction(1.0, 0.0, 0.0) if abs(float(normal[0])) < 0.9 else b.direction(0.0, 1.0, 0.0)
-        axis_id = b.axis2(center_id, b.direction(*normal), ref_dir)
-        plane_id = b.plane(axis_id)
-        face_ids.append(b.face_surface(bound_id, plane_id))
+        bound_id = b.face_bound(b.edge_loop(edge_oriented))
+        # Any point of the plane locates it; a corner already exists, where a
+        # centroid was one more point per triangle.
+        ref_dir = x_ref if abs(float(normal[0])) < 0.9 else y_ref
+        axis_id = b.axis2(p_ids[0], b.direction(*normal), ref_dir)
+        face_ids.append(b.face_surface(bound_id, b.plane(axis_id)))
 
     shell_id = b.closed_shell(face_ids)
     manifold_id = b.manifold(shell_id)
