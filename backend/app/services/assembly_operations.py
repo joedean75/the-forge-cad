@@ -73,6 +73,47 @@ def _has_connector(part_id: str, connector_id: str) -> bool:
                for n in walk_nodes(part.feature_tree))
 
 
+@operation("record_component_facts", "mutate",
+           "Record facts the geometry cannot show about the part a component "
+           "places — a motor's KV and turns, a part number — with their source. "
+           "They are stored on the part itself, so every instance and every "
+           "assembly using it sees them, and they appear on the component in "
+           "this assembly's state from then on. Record what the user confirms "
+           "instead of asking for it again next run.",
+           {"component_id": {"type": "string", "required": True,
+                             "description": "the placed component whose part the "
+                                            "facts describe"},
+            "facts": {"type": "object", "required": True,
+                      "description": "name -> value, or name -> {value, unit, "
+                                     "note}; null removes one. Dimensions are "
+                                     "refused — component_interfaces measures them"},
+            "source": {"type": "string", "enum": ["user", "datasheet", "label", "measured"],
+                       "default": "user", "description": "where the facts came from"}},
+           subject="assembly")
+def _record_component_facts(asm_id, args):
+    from app.services import document_service, part_facts
+
+    asm = _assembly(asm_id)
+    comp = _component(asm, require(args, "component_id"))
+    part = document_service.get_document(comp.part_id)
+    if part is None:
+        raise PreconditionFailed(f"component {comp.name!r} names a part that no longer exists")
+    # The facts land on the part document, which may be shared into this
+    # assembly by someone else. Placing a part needs only read access to it;
+    # writing to it through the assembly door would be a way around that.
+    if (part.owner_id or None) != (asm.owner_id or None):
+        raise PreconditionFailed(
+            f"{comp.name!r} belongs to another account, so its facts can only be "
+            "recorded by its owner")
+    try:
+        facts = part_facts.record(part, require(args, "facts"), args.get("source") or "user")
+    except part_facts.FactError as exc:
+        raise BadArgument(str(exc), arg="facts") from exc
+    document_service.persist_document(part)
+    return {"message": f"{len(facts)} fact(s) recorded on {part.name}",
+            "component": comp.name, "part_id": part.id, "facts": facts}
+
+
 @operation("component_interfaces", "query",
            "How one placed component mounts, read off its part's exact geometry "
            "(the part-document reading of inspect_interfaces): shaft diameter and "
@@ -338,7 +379,8 @@ def _search_assembly_parts(asm_id, args):
 @operation("insert_standard_part", "mutate",
            "Place a purchased part without modelling it — a screw, nut, washer, "
            "dowel pin, bearing, stepper or T-slot extrusion from the published "
-           "dimensional standards, or a brushless motor, flight controller, "
+           "dimensional standards, or a brushless outrunner or RC-car can motor "
+           "(540, 3650, 3660), flight controller, "
            "4-in-1 ESC, RC servo, hex standoff, propeller, carbon plate or tube "
            "or LiPo pack from the settled conventions of RC, drone and robotics "
            "work. Adafruit catalog keys automatically fetch original manufacturer "

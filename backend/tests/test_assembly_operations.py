@@ -56,7 +56,7 @@ def test_the_catalog_declares_which_kind_of_id_each_operation_takes():
         "remove_component", "place_component", "list_mates", "add_mate",
         "remove_mate", "drive_mate", "check_interference",
         "bill_of_materials", "dof",
-        "mass_budget", "export_urdf", "prop_clearance", "render_assembly", "export_sdf", "export_srdf", "component_interfaces",
+        "mass_budget", "export_urdf", "prop_clearance", "render_assembly", "export_sdf", "export_srdf", "component_interfaces", "record_component_facts",
     }
 
 

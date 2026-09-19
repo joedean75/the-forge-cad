@@ -354,4 +354,21 @@ def read_document(doc_id: str) -> Dict[str, Any]:
             "this part has no exact body, so its faces cannot be measured — interfaces "
             "are read from B-rep cylinders, which a voxelised mesh import does not have")
     mesh = Kernel.tessellate(document_service.get_solid(doc_id))
-    return read_interfaces(body.shape, np.asarray(mesh.vertices, dtype=float))
+    reading = read_interfaces(body.shape, np.asarray(mesh.vertices, dtype=float))
+    return with_facts(reading, document_service.get_document(doc_id))
+
+
+def with_facts(reading: Dict[str, Any], doc) -> Dict[str, Any]:
+    """Attach what has been recorded about the real part, and stop listing as
+    unknown what a recorded fact already answers."""
+    from app.services import part_facts
+
+    facts = part_facts.compact(doc)
+    if facts:
+        reading["recorded_facts"] = facts
+    if "not_in_geometry" in reading:
+        reading["not_in_geometry"] = part_facts.unanswered(doc, reading["not_in_geometry"])
+        if reading["not_in_geometry"]:
+            reading["how_to_record"] = ("confirmed values go in record_part_facts "
+                                        "(record_component_facts in an assembly)")
+    return reading

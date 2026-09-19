@@ -368,6 +368,12 @@ class DesignDocument(BaseModel):
     # from anything else, and a mass budget that also knows the pack's energy
     # is what a flight-time or run-time estimate needs. See `add_battery`.
     battery: Optional[Dict[str, Any]] = None
+    # Facts about the real object that its geometry cannot carry: a motor's KV
+    # and winding, a part number, a rated current. `{name: {value, unit?,
+    # source, note?, recorded_at}}`, written by `record_part_facts`. Recorded
+    # because nothing can measure them — a copilot that could not find a KV in
+    # the body asked the user for it on every run. See `services/part_facts`.
+    part_facts: Dict[str, Dict[str, Any]] = {}
     # How the part moves: which shaft turns about what, which way a gear runs,
     # what bearing sits in which pocket, what screw goes in which hole.
     #

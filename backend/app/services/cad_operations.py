@@ -114,6 +114,7 @@ _HOLE_TYPES = ("simple", "counterbore", "countersink")
 #: `test_mounting_pattern` asserts the two lists still agree.
 _BOLT_PATTERN_NAMES = ("fc-30.5", "fc-20", "fc-16",
                        "motor-12", "motor-16", "motor-19", "motor-25",
+                       "motor-16x19", "can-25",
                        "nema8", "nema11", "nema14", "nema17", "nema23",
                        "nema34",
                        "servo-standard", "servo-mini", "servo-micro")
@@ -2822,6 +2823,40 @@ def _set_manufacturing(doc_id, args):
     document_service.persist_document(doc)
     return {"message": f"recorded a {record['process']} intent",
             "manufacturing": record}
+
+
+_FACTS_PARAMS = {
+    "facts": {"type": "object", "required": True,
+              "description": "name -> value, or name -> {value, unit, note}; "
+                             "lower_snake_case names (kv, turns, part_number, "
+                             "rated_current). null removes a fact. Dimensions "
+                             "are refused: they are measured by "
+                             "inspect_interfaces, not recorded"},
+    "source": {"type": "string", "enum": ["user", "datasheet", "label", "measured"],
+               "default": "user",
+               "description": "where the facts came from"},
+}
+
+
+@operation("record_part_facts", "mutate",
+           "Record facts about the real part that its geometry cannot show — a "
+           "motor's KV and turns, a part number, a rated current — with where "
+           "they came from. Stored on the part, so every assembly placing it "
+           "sees them and nobody has to ask again. Use it when the user confirms "
+           "such a fact, or it is on a datasheet or label.",
+           _FACTS_PARAMS)
+def _record_part_facts(doc_id, args):
+    from app.services import part_facts
+
+    doc = _get(doc_id)
+    try:
+        facts = part_facts.record(doc, require(args, "facts"), args.get("source") or "user")
+    except part_facts.FactError as exc:
+        raise BadArgument(str(exc), arg="facts") from exc
+    # Not geometry, so no re-evaluation — but a real edit, so it persists and
+    # moves the revision (the rule `set_part_mass` follows).
+    document_service.persist_document(doc)
+    return {"message": f"{len(facts)} fact(s) recorded on {doc.name}", "facts": facts}
 
 
 @operation("inspect_interfaces", "query",

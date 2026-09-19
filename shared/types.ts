@@ -313,6 +313,9 @@ export interface DesignDocument {
    * volume. See `services/part_mass`.
    */
   mass_override_g?: number | null
+  /** Facts about the real part its geometry cannot carry (KV, part number…),
+   *  written by `record_part_facts`. Mirrors `DesignDocument.part_facts`. */
+  part_facts?: Record<string, PartFact>
   /**
    * Electrical metadata for a document that *is* a battery pack.
    *
@@ -1416,4 +1419,13 @@ export interface OperationSpec {
   params: Record<string, OperationParam>
   /** Which endpoint runs it: a document or an assembly. */
   subject?: 'document' | 'assembly'
+}
+
+/** One recorded fact about a purchased part — see `services/part_facts`. */
+export interface PartFact {
+  value: string | number | boolean
+  unit?: string
+  note?: string
+  source: 'user' | 'datasheet' | 'label' | 'measured'
+  recorded_at: string
 }

@@ -127,6 +127,16 @@ def summarize(doc) -> dict:
     return out
 
 
+def _part_facts(part_id):
+    from app.services import document_service, part_facts
+
+    try:
+        doc = document_service.get_document(part_id)
+    except Exception:  # noqa: BLE001 — a summary must not fail on one part
+        return None
+    return part_facts.compact(doc) if doc is not None else None
+
+
 def summarize_assembly(asm) -> dict:
     """The same job as `summarize`, for an assembly rather than a part.
 
@@ -163,6 +173,11 @@ def summarize_assembly(asm) -> dict:
             # geometry; an agent that cannot see that will try to mate to it.
             "missing": bool(c.missing),
         }
+        # What has been recorded about the real part (KV, part number…), so a
+        # planner reading the assembly sees it without asking again.
+        facts = _part_facts(c.part_id) if not c.missing else None
+        if facts:
+            item["facts"] = facts
         if c.bbox is not None and not c.missing:
             corners = np.array(list(product(*[(getattr(c.bbox.min, a), getattr(c.bbox.max, a))
                                               for a in ("x", "y", "z")])))
