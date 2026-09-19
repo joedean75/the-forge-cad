@@ -99,3 +99,38 @@ def test_a_tap_drill_is_offered_as_both_screws_it_could_be():
     reader does not pick between them."""
     found = {(c["screw"], c["as"]) for c in interfaces.screw_candidates(2.5)}
     assert {("M3", "tapped"), ("M2.5", "nominal")} <= found
+
+
+def _round_trip(tree, name):
+    source = whole_tree_document(tree, name=f"{name} source")
+    data = artifacts._render(source.id, "step", resolution=64, spec=None)
+    return import_service.import_document(f"{name}.step", data, name=name)
+
+
+def test_the_2212_row_reads_back_as_the_cross_the_real_a2212_has():
+    """The row was sized from the user's A2212, so the catalog motor has to read
+    back as the same interfaces the real one did: 1/8 in shaft, M3 tapped on the
+    16 / 19 cross — here with the catalog's clearance-drilled holes."""
+    reading = _read(_round_trip(parts_catalog.brushless_motor("2212"), "2212").id)
+    assert reading["shaft"]["diameter_mm"] == pytest.approx(3.175, abs=0.01)
+    assert "1/8 in (3.175 mm)" in reading["shaft"]["fits"]
+    assert reading["can"]["diameter_mm"] == pytest.approx(27.7, abs=0.01)
+    circles = sorted(c["diameter_mm"] for c in reading["mount_patterns"][0]["circles"])
+    assert circles == pytest.approx([16.0, 19.0], abs=0.01)
+
+
+def test_a_car_can_motor_mounts_on_its_shaft_face():
+    """An inrunner is mounted from the end the shaft comes out of — the reading
+    has to put the holes on the same end as the shaft, and read them as M3
+    tapped, which is what the motor itself has."""
+    reading = _read(_round_trip(parts_catalog.inrunner_motor("3650"), "3650").id)
+    shaft = reading["shaft"]
+    top = next(e for e in shaft["ends"] if e["end"] == "+axis")
+    assert shaft["diameter_mm"] == pytest.approx(3.175, abs=0.01)
+    assert top["projection_mm"] == pytest.approx(15.0, abs=0.05)
+    mount = reading["mount_patterns"][0]
+    assert mount["count"] == 2 and mount["end"] == "+axis"
+    assert mount["circles"][0]["diameter_mm"] == pytest.approx(25.0, abs=0.01)
+    # 2.5 mm is an M3 tap drill and an M2.5 at nominal, equally — both offered.
+    assert ("M3", "tapped") in {(c["screw"], c["as"]) for c in mount["screw_candidates"]}
+    assert reading["can"]["diameter_mm"] == pytest.approx(36.0, abs=0.01)

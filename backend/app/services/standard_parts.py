@@ -35,6 +35,8 @@ is what the default configuration produces.
 
 from __future__ import annotations
 
+import re
+
 import logging
 from typing import Optional
 
@@ -87,12 +89,9 @@ def listing(owner_id: Optional[str] = None, *, category: Optional[str] = None,
     rows = mine + generated + adafruit
     if category:
         rows = [r for r in rows if r["category"] == category]
-    needle = (search or "").strip().lower()
-    if needle:
-        rows = [r for r in rows
-                if needle in r["designation"].lower()
-                or needle in r["key"].lower()
-                or needle in str(r.get("standard", "")).lower()]
+    match = "all"
+    if (search or "").strip():
+        rows, match = _search(rows, search)
 
     limit = max(1, min(int(limit or 60), 250))
     counts: dict = {}
@@ -100,7 +99,7 @@ def listing(owner_id: Optional[str] = None, *, category: Optional[str] = None,
         counts[row["category"]] = counts.get(row["category"], 0) + 1
     offset = max(0, int(offset))
     page = rows[offset:offset + limit]
-    return {"parts": page, "count": len(rows), "offset": offset,
+    return {"parts": page, "count": len(rows), "offset": offset, "match": match,
             "returned": len(page), "categories": counts,
             "imported": len(mine),
             "sources": [adafruit_parts.SOURCE, *supplier_parts.sources()],
@@ -233,3 +232,77 @@ def published_mass_kg(catalog_ref: Optional[str]) -> Optional[float]:
         return None
     grams = parts_catalog.published_mass_g(ref)
     return None if grams is None else float(grams) / 1000.0
+
+
+_SEARCH_FIELDS = ("key", "designation", "standard", "category", "notes", "name",
+                  "manufacturer", "part_number")
+#: Where a match counts for more: the row's own name rather than its notes,
+#: which mention other sizes in passing ("3650 is 36 mm across" is in the 540's).
+_PRIMARY_FIELDS = ("key", "designation", "name", "part_number")
+#: What people call a standard part, which the designation does not say:
+#: "ISO 4762 M4x4" is a screw to anyone asking for one.
+_COMMON_NAMES = {
+    "ISO 4762": "socket head cap screw bolt",
+    "ISO 4032": "hex nut",
+    "ISO 7089": "flat washer",
+    "ISO 2338": "dowel pin",
+    "ISO 15": "ball bearing",
+    "NEMA": "stepper motor",
+}
+
+
+_STOP = {"a", "an", "and", "the", "for", "of", "to", "with", "in", "on", "my", "some"}
+
+
+def _words(text: str) -> list:
+    return [w for w in re.split(r"[^a-z0-9.]+", text.lower())
+            if w.strip(".") and w not in _STOP]
+
+
+def _search(rows: list, search: str):
+    """Rows matching every word of `search`, anywhere in the row's text.
+
+    The whole query used to be one substring, so "540 motor" missed "540 can
+    motor (brushed)" and "2212 motor" missed "2212 brushless motor" — and the
+    copilot logs show eight searches for a car motor that came back empty. Each
+    word now matches on its own, in the key, the designation, the standard, the
+    category or the notes. A model name such as "A2212" also matches on its
+    number, because that is the part of it the catalog carries.
+
+    When nothing matches every word, the rows matching the most words come back
+    and `match` says `partial`, so an empty page is reserved for a query that
+    matched nothing at all.
+    """
+    terms = _words(search)
+    if not terms:
+        return rows, "all"
+    # The exact phrase in a row's own name is the strongest answer there is:
+    # "NEMA 17" means the NEMA 17, not every row mentioning a NEMA and a 17.
+    phrase = " ".join(search.lower().split())
+    named = [r for r in rows
+             if phrase in " ".join(str(r.get(f) or "") for f in _PRIMARY_FIELDS).lower()]
+    if named:
+        return named, "all"
+    def found(term, hay):
+        digits = re.sub(r"^[a-z]+", "", term) if re.match(r"^[a-z]+\d{3,}", term) else ""
+        return term in hay or bool(digits and digits in hay)
+
+    scored = []
+    for row in rows:
+        standard = str(row.get("standard") or "")
+        common = " ".join(v for k, v in _COMMON_NAMES.items() if standard.startswith(k))
+        hay = " ".join([*(str(row.get(f) or "") for f in _SEARCH_FIELDS), common]).lower()
+        primary = " ".join(str(row.get(f) or "") for f in _PRIMARY_FIELDS).lower()
+        hits = sum(found(t, hay) for t in terms)
+        if hits:
+            scored.append((hits, sum(found(t, primary) for t in terms), row))
+    # Stable within a rank, so the catalog's own order (M4x4 before M4x5)
+    # survives among equally good matches.
+    scored.sort(key=lambda x: (-x[0], -x[1]))
+    full = [row for hits, _, row in scored if hits == len(terms)]
+    if full:
+        return full, "all"
+    if not scored:
+        return [], "none"
+    best = scored[0][0]
+    return [row for hits, _, row in scored if hits == best], "partial"

@@ -57,7 +57,9 @@ their pairs carry `tolerance_mm`, the band inside which a reading is not a clash
 projection at each end, tips in assembly space), its mounting holes (bolt
 circles, and every metric screw each could take) and its can, off the exact
 body. Use it before asking the user for dimensions. It cannot tell you KV,
-turns or a part number, and says so.
+turns or a part number, and says so — when the user confirms one, record it with
+`record_component_facts` (it lands on the part, and every assembly sees it) so
+the next run does not ask again. Dimensions are refused there: they are measured.
 
 `prop_clearance` is a different question: a rotor is reduced to the annulus it
 sweeps, because two blades frozen at one azimuth answer only for that azimuth.

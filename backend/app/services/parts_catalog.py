@@ -265,6 +265,29 @@ MOUNT_PATTERNS: Dict[str, MountPattern] = {
 }
 
 
+def _diagonals(a_mm: float, b_mm: float) -> Tuple[Tuple[float, float], ...]:
+    """Two hole pairs on the two diagonals: `a` apart on one, `b` on the other."""
+    ra, rb = a_mm / 2 / math.sqrt(2), b_mm / 2 / math.sqrt(2)
+    return ((ra, ra), (-ra, -ra), (-rb, rb), (rb, -rb))
+
+
+#: Patterns no pair of spans describes, as explicit placements (mm, about the
+#: pattern centre, in the plane of the mounting face).
+#:
+#: * **`motor-16x19`** is the cross the 22xx outrunners are sold with: one pair
+#:   of holes 16 mm apart on one diagonal, the other pair 19 mm apart on the
+#:   other, so one motor fits arms drilled for either class. Read off a real
+#:   A2212 STEP by `inspect_interfaces` — M3 tapped on a 16 and a 19 circle.
+#: * **`can-25`** is the face of a 540 / 36 mm can motor: two M3 holes 25 mm
+#:   apart across the shaft. It is the pattern every RC-car motor plate is cut
+#:   for, which is why a brushed 540 and a 3650 brushless swap without a new
+#:   plate.
+EXTRA_PATTERNS: Dict[str, Tuple[str, str, Tuple[Tuple[float, float], ...]]] = {
+    "motor-16x19": ("16 / 19 mm cross motor mount (M3)", "M3", _diagonals(16.0, 19.0)),
+    "can-25": ("540 can face, 2 x M3 on 25 mm", "M3", ((-12.5, 0.0), (12.5, 0.0))),
+}
+
+
 class Motor(NamedTuple):
     """An outrunner, by the four-digit code every one of them is sold under.
 
@@ -292,6 +315,11 @@ class Motor(NamedTuple):
 #: gimbal frame size.
 MOTORS: Dict[str, Motor] = {
     "1507": Motor("motor-12", 19.5, 16.0, 1.5, 16.0),
+    # The 22xx class drones and fixed-wing trainers were built on before the
+    # 5-inch racers: a 22 mm x 12 mm stator on a 1/8 in (3.175 mm) shaft and the
+    # 16 / 19 cross. Bell and height measured off a real A2212 STEP; the mass is
+    # the common 10T/1400 KV winding's.
+    "2212": Motor("motor-16x19", 27.7, 28.0, 3.175, 50.0),
     "2207": Motor("motor-16", 27.8, 20.0, 5.0, 32.0),
     "2306": Motor("motor-16", 27.9, 19.5, 5.0, 30.0),
     "2807": Motor("motor-16", 34.5, 22.5, 5.0, 52.0),
@@ -428,6 +456,8 @@ def bolt_patterns() -> Dict[str, BoltPattern]:
         out[frame.lower().replace(" ", "")] = BoltPattern(
             f"{frame} face ({n.bolt_circle:g} mm, {n.bolt})", n.bolt,
             _corners(n.bolt_circle, n.bolt_circle))
+    for name, (label, screw, holes) in EXTRA_PATTERNS.items():
+        out[name] = BoltPattern(label, screw, holes)
     for cls, s in SERVOS.items():
         out[f"servo-{cls}"] = BoltPattern(
             f"{cls} servo ears ({s.ear_span:g} mm)", s.screw,
@@ -752,6 +782,65 @@ def brushless_motor(code: str, bell_dia_mm: Optional[float] = None,
         name=f"{code} brushless motor"))
 
 
+class Inrunner(NamedTuple):
+    """A can motor for an RC car, by its size code.
+
+    **The code means something different from an outrunner's.** `3650` is the
+    *can*: 36 mm across and 50 mm long. `2212` on an outrunner is the *stator*
+    inside a bell. So a 3650 and a 3660 differ only in length, and both mount on
+    the face the shaft comes out of — `can-25`, the pattern a 540 has had since
+    the Mabuchi RS-540 made it the default, and the reason a brushed 540 and a
+    brushless 3650 swap without a new motor plate.
+
+    Everything but the diameter and the pattern is a **parameter default**:
+    typical for the size, and varying by maker and winding.
+    """
+    label: str
+    can_dia: float        # the code's first two digits, for the 36xx sizes
+    length: float         # parameter default: can length, excluding the shaft
+    shaft: float          # parameter default
+    mass_g: float         # parameter default
+    brushless: bool
+
+
+INRUNNERS: Dict[str, Inrunner] = {
+    "540": Inrunner("540 can motor (brushed)", 35.8, 50.0, 3.175, 160.0, False),
+    "3650": Inrunner("3650 brushless inrunner", 36.0, 50.0, 3.175, 200.0, True),
+    "3660": Inrunner("3660 brushless inrunner", 36.0, 60.0, 3.175, 260.0, True),
+}
+
+#: How far an inrunner's shaft stands off its face: room for a pinion and its
+#: grub screw, which is what the shaft is for.
+_INRUNNER_SHAFT_STICKOUT = 15.0
+
+
+def inrunner_motor(code: str, can_dia_mm: Optional[float] = None,
+                   length_mm: Optional[float] = None,
+                   shaft_dia_mm: Optional[float] = None) -> dict:
+    """A can motor: the can, the shaft out of its face, and the face's holes.
+
+    Along +Z with the mounting face at the top, because that is the face the
+    shaft and the screws are on. The holes are the *tapped* size (M3 -> 2.5 mm):
+    a motor plate is drilled clearance and the screws go into the motor, so a
+    tapped hole is what the motor itself has — and what `inspect_interfaces`
+    reads back off a supplier's STEP.
+    """
+    m = INRUNNERS[code]
+    dia = m.can_dia if can_dia_mm is None else float(can_dia_mm)
+    length = m.length if length_mm is None else float(length_mm)
+    shaft = m.shaft if shaft_dia_mm is None else float(shaft_dia_mm)
+    stick = _INRUNNER_SHAFT_STICKOUT
+    tapped = 3.0 - METRIC["M3"].pitch
+    body = _union([
+        _cyl(dia / 2, length, length / 2, name="Can"),
+        _cyl(shaft / 2, stick, length + stick / 2, name="Output shaft"),
+    ], name=f"{code} motor")
+    return _tree(_subtract(
+        [body, *pattern_holes("can-25", _MOTOR_MOUNT_DEPTH * 1.2,
+                              length - _MOTOR_MOUNT_DEPTH / 2, diameter_mm=tapped)],
+        name=m.label))
+
+
 #: FR4 is 1.6 mm. It is the one dimension of a circuit board that really is
 #: standard, and it is what a board sits on in a stack.
 _PCB_THICKNESS = 1.6
@@ -1047,7 +1136,7 @@ def catalog() -> List[Entry]:
     # does not have.
 
     for code, m in MOTORS.items():
-        p = MOUNT_PATTERNS[m.pattern]
+        p = bolt_patterns()[m.pattern]
         out.append(Entry(
             key=f"bldc-{code}", category="motor",
             designation=f"{code} brushless motor",
@@ -1079,6 +1168,32 @@ def catalog() -> List[Entry]:
                 "mass_g": _p(m.mass_g, "what the motor weighs; the default is "
                                        "typical for the class and varies with "
                                        "the winding", 0.1, 20000.0),
+            }))
+
+    for code, m in INRUNNERS.items():
+        out.append(Entry(
+            key=f"inrunner-{code}", category="motor",
+            designation=m.label,
+            standard=("can size (legacy Mabuchi RS-540)" if code == "540"
+                      else "can size (diameter x length, mm)"),
+            material="steel-1018", fidelity="envelope",
+            notes=(f"RC car / truck / buggy / crawler can motor. {'36 mm' if code != '540' else '35.8 mm'} "
+                   f"can, mounted on the shaft face by 2 x M3 on 25 mm (can-25) — "
+                   f"the plate pattern brushed 540s and 36 mm brushless motors "
+                   f"share. Unlike an outrunner's stator code, the digits here are "
+                   f"the can: 3650 is 36 mm across and 50 mm long. Length, shaft "
+                   f"and mass are typical defaults; set them from your motor. "
+                   f"{'Brushless: KV and turns are not geometry — record them with record_part_facts.' if m.brushless else 'Brushed: the turn count (e.g. 27T) is not geometry — record it with record_part_facts.'}"),
+            build=(lambda c=code, **kw: inrunner_motor(c, **kw)),
+            typical_mass_g=m.mass_g,
+            params={
+                "can_dia_mm": _p(m.can_dia, "outside diameter of the can", 10.0, 120.0),
+                "length_mm": _p(m.length, "can length, excluding the shaft", 10.0, 200.0),
+                "shaft_dia_mm": _p(m.shaft, "output shaft diameter (1/8 in is "
+                                            "3.175 mm, 5 mm on larger cans)", 1.0, 12.0),
+                "mass_g": _p(m.mass_g, "what the motor weighs; the default is "
+                                       "typical and varies with the winding",
+                             1.0, 5000.0),
             }))
 
     for key, b in BOARDS.items():
