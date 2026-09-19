@@ -499,6 +499,90 @@ def _provider_message(resp) -> str:
         return ""
 
 
+#: Model families that need an explicit cache breakpoint. OpenAI caches a
+#: repeated prefix on its own; Anthropic and Gemini cache only what a
+#: `cache_control` marker covers, and bill a read at a tenth of the input price.
+_EXPLICIT_CACHE = ("anthropic/", "google/")
+
+
+def explicit_cache(model: Optional[str] = None) -> bool:
+    """Whether this model caches only what a `cache_control` marker covers."""
+    context = CALL_CONTEXT.get() or {}
+    model = model or context.get("model") or LLM_MODEL
+    return str(model).startswith(_EXPLICIT_CACHE) and _provider_name(LLM_BASE_URL) == "openrouter"
+
+
+def _cache_marked(messages: list, model: str) -> list:
+    """Place prompt-cache breakpoints, or strip the markers where they mean nothing.
+
+    The copilot marks the end of the part of its prompt that is identical from
+    one turn to the next with ``"cache": True`` on a content part. For a model
+    that needs explicit breakpoints that becomes ``cache_control`` — on the
+    system prompt too, which is fixed for the run. For every other model the
+    marker is removed, and a prompt that is text only is joined back into one
+    string, because not every OpenAI-compatible provider accepts content parts.
+    """
+    explicit = explicit_cache(model)
+    out = []
+    for message in messages:
+        content = message.get("content")
+        if explicit and message.get("role") == "system" and isinstance(content, str):
+            out.append({**message, "content": [{"type": "text", "text": content,
+                                                "cache_control": {"type": "ephemeral"}}]})
+            continue
+        if not isinstance(content, list):
+            out.append(message)
+            continue
+        parts = []
+        for part in content:
+            if not isinstance(part, dict) or "cache" not in part:
+                parts.append(part)
+                continue
+            part = {k: v for k, v in part.items() if k != "cache"}
+            if explicit:
+                part["cache_control"] = {"type": "ephemeral"}
+            parts.append(part)
+        if not explicit and all(isinstance(p, dict) and p.get("type") == "text" for p in parts):
+            out.append({**message, "content": "\n\n".join(p["text"] for p in parts)})
+        else:
+            out.append({**message, "content": parts})
+    return out
+
+
+def _usage(raw: dict) -> dict:
+    """The billing-relevant part of a provider's usage block."""
+    out = {k: raw[k] for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+           if isinstance(raw.get(k), (int, float))}
+    details = raw.get("prompt_tokens_details") or {}
+    if isinstance(details.get("cached_tokens"), (int, float)):
+        out["cached_tokens"] = details["cached_tokens"]
+    if isinstance(details.get("cache_write_tokens"), (int, float)):
+        out["cache_write_tokens"] = details["cache_write_tokens"]
+    if isinstance(raw.get("cost"), (int, float)):
+        out["cost"] = raw["cost"]
+    return out
+
+
+def new_ledger() -> dict:
+    return {"calls": 0, "prompt_tokens": 0, "cached_tokens": 0,
+            "completion_tokens": 0, "cost_usd": 0.0, "cost_known": True}
+
+
+def _charge(ledger: Optional[dict], usage: dict) -> None:
+    """Add one call's usage to the run's running total, if a run is keeping one."""
+    if ledger is None:
+        return
+    ledger["calls"] += 1
+    for key in ("prompt_tokens", "cached_tokens", "completion_tokens"):
+        ledger[key] += int(usage.get(key) or 0)
+    if "cost" in usage:
+        ledger["cost_usd"] = round(ledger["cost_usd"] + float(usage["cost"]), 6)
+    else:
+        # A provider that does not report cost makes the total a lower bound,
+        # and saying so is better than a confident undercount.
+        ledger["cost_known"] = False
+
+
 def _post_chat(messages: list[dict[str, Any]], *, timeout: float = 60.0,
                max_tokens: Optional[int] = None,
                tools: Optional[list[dict[str, Any]]] = None,
@@ -536,6 +620,12 @@ def _post_chat(messages: list[dict[str, Any]], *, timeout: float = 60.0,
     from app.services import trajectories
     context = CALL_CONTEXT.get() or {}
     payload["model"] = model or context.get("model") or LLM_MODEL
+    payload["messages"] = _cache_marked(payload["messages"], payload["model"])
+    if _provider_name(LLM_BASE_URL) == "openrouter":
+        # Ask for the bill with the answer: OpenRouter then returns the cost and
+        # the cached-token count, which is the only way to know what a run spent
+        # and whether the prompt cache is doing anything.
+        payload["usage"] = {"include": True}
     deadline = context.get("deadline", time.monotonic() + timeout * 2)
     for attempt in range(2):
         if context.get("cancelled") and context["cancelled"]():
@@ -572,12 +662,13 @@ def _post_chat(messages: list[dict[str, Any]], *, timeout: float = 60.0,
             choices = data.get("choices") or []
             message = (choices[0].get("message") or {}) if choices else {}
             finish = choices[0].get("finish_reason") if choices else None
+            usage = _usage(data.get("usage") or {})
             metadata = {"model": payload["model"], "finish_reason": finish,
                         "request_id": str(resp.headers.get("x-request-id") or data.get("id") or "")[:160],
-                        "usage": {k: v for k, v in (data.get("usage") or {}).items()
-                                  if k in ("prompt_tokens", "completion_tokens", "total_tokens") and isinstance(v, (int, float))},
+                        "usage": usage,
                         "latency_ms": round((time.monotonic() - started) * 1000), "attempt": attempt + 1}
             trajectories.event("provider_response", **metadata)
+            _charge(context.get("ledger"), usage)
             if message.get("refusal") or finish == "content_filter":
                 raise LLMFailure("PROVIDER_REFUSAL", "The provider declined this request.", "Review the request before continuing.")
             if finish == "length":

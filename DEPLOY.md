@@ -142,6 +142,18 @@ them. That document's last section is the checklist.
   analysis honour it, and the analysis reports the device it used in `solver`.
   There is no GPU requirement anywhere — it is a speed knob, not a dependency.
 
+- **`FORGE_COPILOT_MAX_USD`** caps what one copilot run may spend, in dollars.
+  Unset (the default) means no cap. A nested `build_part` run shares its
+  parent's ledger, so this bounds a whole assembly build, and the run stops
+  *between* steps with `stop_reason: "cost_limit"` and its work saved — a
+  continuation carries on. Every run reports `usage` (calls, prompt tokens,
+  how many were served from the provider's prompt cache, and dollars where the
+  provider reports them), which is also what the copilot panel shows.
+- **The model is the biggest single factor in that bill.** Measured on one
+  six-step part run through OpenRouter: $0.18 on `anthropic/claude-sonnet-5`
+  against $0.58 on `openai/gpt-6-astra`, for the same work. `LLM_MODEL` sets
+  the default; the panel's picker overrides it per run.
+
 ### Background workers
 
 Long work — SIMP solves, release packages, large FEA — runs on a pool of worker

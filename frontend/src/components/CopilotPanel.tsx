@@ -4,7 +4,7 @@ import { useDocumentStore } from '../store/useDocumentStore'
 import { useAuthStore } from '../store/useAuthStore'
 import { useAssemblyStore } from '../store/useAssemblyStore'
 import { api, authHeaders } from '../api/client'
-import type { CopilotContext, CopilotStep, CopilotView } from '../../../shared/types'
+import type { CopilotContext, CopilotStep, CopilotUsage, CopilotView } from '../../../shared/types'
 import { isNearBottom } from '../util/nearBottom'
 import { prepareImage, dataUriBytes, MAX_IMAGES, MAX_TOTAL_IMAGE_BYTES } from '../util/imageAttach'
 import { captureViewport, type ViewCapture } from '../util/viewportCapture'
@@ -63,6 +63,16 @@ function rememberModel(model: string): void {
 /** `anthropic/claude-sonnet-5` -> `claude-sonnet-5`: the vendor prefix is the
  *  same for every row of a provider's list and costs the width that tells two
  *  models apart. */
+/** "$0.42 · 180k in, 72% cached" — what a run cost, in the terms that decide it:
+ *  input tokens dominate, and the cached share is billed at a tenth. */
+function spent(usage: CopilotUsage | null | undefined): string | null {
+  if (!usage || !usage.calls) return null
+  const k = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`)
+  const cached = usage.prompt_tokens ? Math.round((100 * usage.cached_tokens) / usage.prompt_tokens) : 0
+  const cost = usage.cost_usd > 0 ? `${usage.cost_known ? '' : '≥'}$${usage.cost_usd.toFixed(2)} · ` : ''
+  return `${cost}${k(usage.prompt_tokens)} in, ${cached}% cached · ${usage.calls} calls`
+}
+
 function shortModel(id: string): string {
   return id.includes('/') ? id.slice(id.indexOf('/') + 1) : id
 }
@@ -500,6 +510,7 @@ function CopilotConversationPanel({ open, onClose, subject, scope }: {
               {turn.running ? (
                 <div className="flex items-center gap-2 text-[11px] text-cad-accent-hot">
                   <Loader2 size={12} className="animate-spin" /> {turn.stopping ? 'Stopping after current operation...' : 'Planning & building...'}
+                  {spent(turn.result?.usage) && <span className="text-cad-text/45">{spent(turn.result?.usage)}</span>}
                   {turn.result?.job_id && <button onClick={() => stop(turn)} disabled={turn.stopping}
                     className="ml-auto px-2 py-1 border border-cad-border rounded-sm disabled:opacity-40">Stop</button>}
                 </div>
@@ -509,8 +520,11 @@ function CopilotConversationPanel({ open, onClose, subject, scope }: {
                   {/* On the turn rather than only in the picker: the picker says
                       what the *next* run will use, which is the wrong question
                       when reading back a transcript of several. */}
-                  {turn.result.model && (
-                    <div className="eyebrow text-cad-text/40 mt-1">{shortModel(turn.result.model)}</div>
+                  {(turn.result.model || spent(turn.result.usage)) && (
+                    <div className="eyebrow text-cad-text/40 mt-1">
+                      {[turn.result.model && shortModel(turn.result.model), spent(turn.result.usage)]
+                        .filter(Boolean).join(' · ')}
+                    </div>
                   )}
                 </div>
               ) : (

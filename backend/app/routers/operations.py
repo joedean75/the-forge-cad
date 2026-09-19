@@ -290,6 +290,10 @@ class CopilotJobState(BaseModel):
     finished: bool = False
     stop_reason: Optional[str] = None
     task_state: Optional[WorkPlan] = None
+    #: What the run has spent so far — calls, tokens (and how many were served
+    #: from the provider's cache) and dollars where the provider reports them.
+    #: Live while the run is going; nested part runs are included.
+    usage: Optional[Dict[str, Any]] = None
 
 
 # In-memory copilot jobs (single-instance, like the optimize job store).
@@ -312,6 +316,7 @@ def _copilot_state(job: Dict[str, Any], document: Optional[DesignDocument],
         finished=job.get("finished", False),
         stop_reason=job.get("stop_reason"),
         task_state=job.get("task_state"),
+        usage=dict(job["usage"]) if job.get("usage") else None,
     )
 
 
@@ -320,10 +325,14 @@ def _run_copilot_job(job: Dict[str, Any], subject_id: str, goal: str, max_steps:
                      model: Optional[str] = None,
                      images: Optional[List[str]] = None,
                      history: str = "", context: Optional[dict] = None) -> None:
+    from app.services import llm_client
+
+    job["usage"] = llm_client.new_ledger()
     try:
         outcome = copilot.run(
             subject_id,
             goal,
+            ledger=job["usage"],
             max_steps=max_steps,
             meter=lambda: meter_operation(acc),
             on_step=lambda entry: job["steps"].append(entry),

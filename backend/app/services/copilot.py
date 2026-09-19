@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import functools
 from copy import deepcopy
@@ -49,6 +50,12 @@ ASSEMBLY_MAX_STEPS_CAP = 120
 #: the browser would abandon a run the server is still executing.
 MAX_SECONDS_DEFAULT = 600
 ASSEMBLY_MAX_SECONDS_DEFAULT = 1080
+
+#: A hard stop on what one run may spend, in dollars, from
+#: `FORGE_COPILOT_MAX_USD`. Unset means no cap, which is the default: a cap is a
+#: deployment's policy, and a silent one would look like a run that gave up.
+#: A nested part run shares its parent's ledger, so this bounds a whole build.
+MAX_COST_USD = float(os.getenv("FORGE_COPILOT_MAX_USD") or 0.0)
 
 #: The image types a vision model is sent. Anything else is refused at the
 #: route rather than forwarded to a provider that answers with its own error.
@@ -150,6 +157,7 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
                subject: str = "document", model: Optional[str] = None,
                images: Optional[List[str]] = None, history: str = "",
                enabled_tools: Optional[set[str]] = None,
+               discovery_order: Optional[List[str]] = None,
                renders: Optional[List[dict]] = None) -> dict:
     """Ask the LLM for the next operation. Returns a decision dict.
 
@@ -175,22 +183,39 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
         for s in transcript
         if s.get("kind") in ("op", "verification", "plan", "discovery")
     ]
-    user = (
+    # **Ordered for the provider's prompt cache.** Every turn re-sends all of
+    # this, and a cached prefix is billed at a tenth of the price — but only up
+    # to the first byte that differs from the last call. The current state
+    # changes every turn, and it used to sit before the transcript and the
+    # reference images, so everything after it was paid for in full on every
+    # turn. Now: what never changes in a run (history, goal, the images, the
+    # operation directory), then what only grows (the steps), then what changes
+    # (the state, any render). Measured on real runs, input was 98% of tokens.
+    head = (
         (f"Previous conversation about this {subject}:\n{history}\n\n"
          "Use this as context for the new request, including unfinished work. "
          "Past operations already ran; do not repeat them blindly. The current "
-         "state below is authoritative if it differs from the conversation.\n\n"
+         "state further down is authoritative if it differs from the "
+         "conversation.\n\n"
          if history else "") +
-        f"Goal: {goal}\n\n"
-        f"Current document:\n{json.dumps(summary)}\n\n"
-        f"Steps so far in this run:\n{json.dumps(steps) if steps else '(none yet)'}\n\n"
-        "Take the next single action."
+        f"Goal: {goal}"
     )
+    user = (f"Steps so far in this run:\n{json.dumps(steps) if steps else '(none yet)'}")
+    tail = (f"Current {subject} (as it stands now):\n{json.dumps(summary)}\n\n"
+            "Take the next single action.")
     with_tools = llm_client.supports_tools()
     system = action_space.system_prompt(with_tools=with_tools, subject=subject, names=enabled_tools)
     definitions = action_space.tools(subject)
     if enabled_tools is not None:
-        definitions = [t for t in definitions if t["function"]["name"] in enabled_tools]
+        # **Ordered by when a tool was enabled, not by catalog position.** The
+        # tools are the first thing a provider hashes for its prompt cache, so
+        # a schema `discover_operations` loads mid-run must land at the end:
+        # inserted in catalog order it falls in the middle, and every token
+        # after it — the rest of the tools, the system prompt, the whole
+        # transcript — is billed at full price for the rest of the run.
+        order = {name: i for i, name in enumerate(discovery_order or ())}
+        definitions = sorted((t for t in definitions if t["function"]["name"] in enabled_tools),
+                             key=lambda t: order.get(t["function"]["name"], -1))
         definitions += copilot_context.control_tools()
         system += copilot_context.control_rules(subject)
         if not with_tools:
@@ -200,11 +225,12 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
                       + copilot_context.control_rules(subject)
                       + "\nAvailable operation schemas (respond with op/args JSON):\n"
                       + json.dumps(definitions))
-        user += "\n\nAdditional operation directory (load schemas with discover_operations):\n" + json.dumps(
+        head += "\n\nAdditional operation directory (load schemas with discover_operations):\n" + json.dumps(
             copilot_context.tool_directory(subject, enabled_tools))
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": _user_content(user, images, renders)},
+        {"role": "user", "content": _user_content(head, images, renders, steps=user, tail=tail,
+                                                  mark_cache=llm_client.explicit_cache(model))},
     ]
     message = llm_client._post_chat(
         messages, timeout=60.0, max_tokens=2400,
@@ -259,7 +285,8 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
 
 
 def _user_content(text: str, images: Optional[List[str]],
-                  renders: Optional[List[dict]] = None):
+                  renders: Optional[List[dict]] = None, steps: str = "", tail: str = "",
+                  mark_cache: bool = False):
     """The user turn, with the reference images attached when there are any.
 
     Sent on **every** turn, not only the first. The planner is stateless between
@@ -269,7 +296,16 @@ def _user_content(text: str, images: Optional[List[str]],
     """
     images, renders = list(images or []), list(renders or [])
     if not images and not renders:
-        return text
+        if not mark_cache:
+            return "\n\n".join(x for x in (text, steps, tail) if x)
+        # Parts only where a model caches explicitly, so the end of the
+        # unchanging prefix can carry the breakpoint (`llm_client._cache_marked`).
+        parts = [{"type": "text", "text": text}]
+        if steps:
+            parts.append({"type": "text", "text": steps, "cache": True})
+        if tail:
+            parts.append({"type": "text", "text": tail})
+        return parts
     # **Every image is labelled, and the labels are interleaved.** Once a render
     # of what was built travels beside the user's reference photo, an unlabelled
     # list makes the two indistinguishable — and telling them apart is the whole
@@ -281,6 +317,12 @@ def _user_content(text: str, images: Optional[List[str]],
                               + (f" ({index} of {len(images)}, in the order they gave them)."
                                  if len(images) > 1 else ".")})
         parts.append({"type": "image_url", "image_url": {"url": uri}})
+    # The transcript follows the references (it only ever grows, so it stays
+    # inside the cached prefix) and the state follows it (it changes).
+    if steps:
+        parts.append({"type": "text", "text": steps, **({"cache": True} if mark_cache else {})})
+    if tail:
+        parts.append({"type": "text", "text": tail})
     for offset, render in enumerate(renders, start=len(images) + 1):
         parts.append({"type": "text",
                       "text": f"Image {offset}: a render of what you have built as it "
@@ -400,9 +442,17 @@ def _run_scope(fn):
             # another. Every call in this run, nested part runs and LLM-backed
             # operations included, now reads this one value.
             "model": kwargs.get("model") or inherited.get("model") or llm_client.LLM_MODEL,
+            # One running total for the whole build: a nested part run adds to
+            # its parent's, so the assembly's figure is what the user paid.
+            # A caller may pass its own (the job does, to show spend live).
+            "ledger": (inherited.get("ledger") or kwargs.get("ledger")
+                       or llm_client.new_ledger()),
         })
         try:
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
+            if isinstance(result, dict):
+                result["usage"] = dict(llm_client.CALL_CONTEXT.get()["ledger"])
+            return result
         finally:
             if trajectories.current() != parent and trajectories.current():
                 trajectories.finish(outcome="interrupted", summary="Run interrupted; inspect current state before continuing.")
@@ -424,6 +474,7 @@ def run(
     model: Optional[str] = None,
     images: Optional[List[str]] = None,
     history: str = "",
+    ledger: Optional[dict] = None,
     context: Optional[dict] = None,
     parent_brief: Optional[dict] = None,
     on_plan: Optional[Callable[[dict], None]] = None,
@@ -467,6 +518,7 @@ def run(
     planner = planner or (
         lambda g, t, summary: _plan_next(g, t, summary, subject=subject, model=model,
                                          images=images, history=history, enabled_tools=enabled_tools,
+                                         discovery_order=discovery_order,
                                          renders=evidence))
     max_steps = max(1, min(int(max_steps), step_cap(subject)))
     transcript: List[dict] = []
@@ -506,6 +558,9 @@ def run(
                  if doc0 else {})
     task_state = copilot_context.initial_plan(goal, request_context.task_state, initial_summary)
     managed_plan = request_context.task_state is not None
+    #: Tools enabled after the run started, in the order they were loaded, so
+    #: they stay at the end of the list the provider caches.
+    discovery_order: List[str] = []
     enabled_tools = copilot_context.initial_tools(subject, goal + " " + task_state["objective"],
                                                   {**initial_summary, "selection": selection})
 
@@ -544,6 +599,18 @@ def run(
             break
         if cancelled and cancelled():
             stop_reason = "cancelled"
+            break
+        spent = (llm_client.CALL_CONTEXT.get() or {}).get("ledger") or {}
+        if MAX_COST_USD and spent.get("cost_usd", 0.0) >= MAX_COST_USD:
+            # Checked between steps, where the state is consistent and the work
+            # so far is saved — the same place `budget` and `timeout` stop. A
+            # nested part run shares the parent's ledger, so a build cannot walk
+            # past the cap by spending inside its sub-runs.
+            note({"kind": "error",
+                  "error": f"stopped at the spending cap: ${spent['cost_usd']:.2f} of "
+                           f"${MAX_COST_USD:.2f} (FORGE_COPILOT_MAX_USD). The work so "
+                           f"far is saved; continue to carry on."})
+            stop_reason = "cost_limit"
             break
         if time.monotonic() >= deadline:
             stop_reason = "timeout"
@@ -710,6 +777,7 @@ def run(
                     result = {"summary": "Updated work plan", "task_state": deepcopy(task_state)}
                 else:
                     found = copilot_context.discover(subject, args)
+                    discovery_order.extend(sorted(set(found) - enabled_tools))
                     enabled_tools.update(found)
                     result = {"summary": "Loaded operations: " + ", ".join(found), "operations": found}
                 note({"kind": "plan" if op == "update_work_plan" else "discovery",
@@ -788,7 +856,7 @@ def run(
             _ACTIVE_MODEL.reset(model_token)
             _ACTIVE_CONTEXT.reset(context_token)
         entry = {"kind": "op", "op": op, "args": args, "ok": env["ok"],
-                 "rationale": rationale, "result": _trim_result(env.get("result") or {})}
+                 "rationale": rationale, "result": _transcript_result(op, env.get("result") or {})}
         if env.get("error"):
             # The planner is told to react to failures, so give it the typed code
             # and message rather than a stringified exception.
@@ -922,6 +990,42 @@ def _unmet_requirements(doc_id: str) -> List[str]:
 
 
 _HEAVY_KEYS = {"document", "mesh_url", "feature_tree", "profile", "sketch"}
+#: Row fields that help a person browsing and cost a planner on every later
+#: turn: a catalog row's notes and supplier links are ~350 of its ~450 characters,
+#: and a search result stays in the transcript for the rest of the run.
+_ROW_NOISE = {"notes", "supplier_search", "license", "attribution", "url",
+              "source_url", "links", "download_on_place", "removable"}
+#: Listing-level fields the planner does not act on.
+_LISTING_NOISE = {"sources", "source", "categories"}
+#: The most rows of a face or edge listing kept in the transcript. The ids are
+#: what the planner needs; a 60-face listing repeated for twenty turns is not.
+_MAX_TOPOLOGY_ROWS = 24
+#: A transcript entry larger than this is cut to a preview. It was 12 000
+#: characters — one search could then cost 3k tokens on every remaining turn.
+_MAX_ENTRY_CHARS = 6000
+
+
+def _transcript_result(op: Optional[str], result: Any) -> Any:
+    """What of an operation's result the planner keeps for the rest of the run.
+
+    Everything a result carries is re-sent on every later turn, so the cost of a
+    field is its size times the turns left. The full result is still in the
+    trajectory record and the planner can ask again; what it keeps is what it
+    acts on.
+    """
+    if isinstance(result, dict):
+        if isinstance(result.get("parts"), list):          # catalog searches
+            result = {k: v for k, v in result.items() if k not in _LISTING_NOISE}
+            result["parts"] = [{k: v for k, v in row.items() if k not in _ROW_NOISE}
+                               if isinstance(row, dict) else row for row in result["parts"]]
+        for key in ("faces", "edges"):
+            rows = result.get(key)
+            if isinstance(rows, list) and len(rows) > _MAX_TOPOLOGY_ROWS:
+                result = {**result, key: rows[:_MAX_TOPOLOGY_ROWS],
+                          f"{key}_omitted": len(rows) - _MAX_TOPOLOGY_ROWS,
+                          "note": f"first {_MAX_TOPOLOGY_ROWS} {key} shown; filter the "
+                                  f"listing to see others"}
+    return _trim_result(result)
 
 
 def _trim_result(result: Any, depth: int = 0) -> Any:
@@ -939,7 +1043,7 @@ def _trim_result(result: Any, depth: int = 0) -> Any:
         trimmed = result[:2000]
     else:
         trimmed = result
-    if depth == 0 and len(json.dumps(trimmed, default=str)) > 12000:
-        return {"truncated": True, "preview": json.dumps(trimmed, default=str)[:10000],
+    if depth == 0 and len(json.dumps(trimmed, default=str)) > _MAX_ENTRY_CHARS:
+        return {"truncated": True, "preview": json.dumps(trimmed, default=str)[:_MAX_ENTRY_CHARS - 1000],
                 "note": "Full operation details are in the trajectory record."}
     return trimmed

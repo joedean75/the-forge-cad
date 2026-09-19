@@ -41,8 +41,12 @@ def provider(monkeypatch, decisions, tools=True):
 def snapshot(call):
     content = call['messages'][-1]['content']
     if isinstance(content, list):
-        content = content[0]['text']
-    return json.loads(content.split('Current document:\n', 1)[1].split('\n\nSteps so far', 1)[0])
+        content = "\n\n".join(p.get('text', '') for p in content if isinstance(p, dict))
+    # The state comes last, after the goal and the transcript, so the part of
+    # the prompt that repeats between turns stays a cacheable prefix.
+    marker = next(m for m in ('Current document (as it stands now):\n',
+                              'Current assembly (as it stands now):\n') if m in content)
+    return json.loads(content.split(marker, 1)[1].split('\n\nTake the next single action.', 1)[0])
 
 
 def test_initial_part_snapshot_contains_real_constraints_and_driving_parameters():
@@ -206,10 +210,11 @@ def test_nested_part_receives_focused_interfaces_requirements_and_selected_image
     assert brief['interfaces'][0]['part_design']['manufacturing']['clearance_mm'] == .25
     assert brief['reference_image_indices'] == [1]
     content = calls[0]['messages'][-1]['content']
-    # The goal, the image's own label, then the image. Every image is introduced
-    # by name so that a review render attached later in the run cannot be
-    # mistaken for one of the user's references.
-    assert [part['type'] for part in content] == ['text', 'text', 'image_url']
+    # The goal, the image's own label, then the image — every image introduced
+    # by name so a review render attached later cannot be mistaken for one of
+    # the user's references — and then the transcript and the current state,
+    # after the image so the image stays inside the cached prefix.
+    assert [part['type'] for part in content] == ['text', 'text', 'image_url', 'text', 'text']
     assert copilot.nested_context() is None
 
 

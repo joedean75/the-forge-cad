@@ -971,6 +971,21 @@ export interface CopilotResult {
    *  rather than polymorphic: a client that has to infer which kind it was
    *  handed from the shape of the value will eventually infer wrong. */
   assembly?: AssemblyDoc | null
+  /** What the run has spent, live while it runs, nested part runs included.
+   *  `cost_known` is false when the provider does not report cost, in which
+   *  case `cost_usd` is a lower bound. Mirrors `CopilotJobState.usage`. */
+  usage?: CopilotUsage | null
+}
+
+export interface CopilotUsage {
+  calls: number
+  prompt_tokens: number
+  /** Of `prompt_tokens`, how many the provider served from its prompt cache —
+   *  billed at about a tenth of the input price. */
+  cached_tokens: number
+  completion_tokens: number
+  cost_usd: number
+  cost_known: boolean
 }
 
 // --- Machines: the shop's real equipment ---
