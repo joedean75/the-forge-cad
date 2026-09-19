@@ -295,6 +295,80 @@ class SmoothBooleanSDF(SDF):
         return Bounds(mins.min(axis=0) - pad, maxs.max(axis=0) + pad)
 
 
+#: The most surface samples one voxelisation may generate. Each is a few dozen
+#: bytes in flight, but they are produced in chunks of `_SAMPLE_CHUNK`, so the
+#: bound is on time; memory stays at one chunk plus the grid.
+MAX_SURFACE_SAMPLES = 40_000_000
+_SAMPLE_CHUNK = 2_000_000
+
+
+class MeshTooDetailed(ValueError):
+    """Voxelising at this pitch would take more samples than the budget allows."""
+
+
+def _barycentric(n: int) -> np.ndarray:
+    """The (i/n, j/n, k/n) lattice on a triangle, n+1 points along each edge."""
+    i, j = np.meshgrid(np.arange(n + 1), np.arange(n + 1), indexing="ij")
+    keep = (i + j) <= n
+    i, j = i[keep], j[keep]
+    return np.stack([i, j, n - i - j], axis=1).astype(float) / n
+
+
+def _surface_voxels(vertices: np.ndarray, faces: np.ndarray, pitch: float):
+    """The voxels a closed mesh's surface passes through, and the grid's corner.
+
+    Every triangle is sampled on a lattice spaced under half a pitch, and each
+    sample marks the voxel it rounds into, which keeps the shell 6-connected so
+    the fill cannot leak — the same rule as trimesh's `voxelized`. Two things
+    differ, and the second is why this exists.
+
+    Only triangles longer than half a pitch are sampled at all: an imported
+    motor meshes to 640k triangles almost all of which are already far smaller
+    than a voxel, and trimesh spent seventy seconds re-examining them.
+
+    **Memory is bounded, not proportional to the mesh.** The version before this
+    subdivided the big triangles all at once, and the motor's long thin spline
+    triangles asked for millions of points each — 15 GB, an OOM kill, and the
+    WSL distro it was running in torn down with it. Samples are now generated in
+    chunks and written straight into the grid, and a mesh that would need more
+    than `MAX_SURFACE_SAMPLES` raises `MeshTooDetailed` so the caller can choose
+    a coarser pitch rather than the machine choosing for it.
+    """
+    max_edge = pitch / 2.0
+    lo = np.round(vertices.min(axis=0) / pitch).astype(np.int64)
+    hi = np.round(vertices.max(axis=0) / pitch).astype(np.int64)
+    shell = np.zeros(hi - lo + 1, dtype=bool)
+
+    def mark(points: np.ndarray) -> None:
+        hit = np.round(points / pitch).astype(np.int64) - lo
+        np.clip(hit, 0, np.array(shell.shape) - 1, out=hit)
+        shell[hit[:, 0], hit[:, 1], hit[:, 2]] = True
+
+    mark(vertices)
+    tri = vertices[faces]
+    longest = np.max(np.linalg.norm(tri - np.roll(tri, 1, axis=1), axis=2), axis=1)
+    steps = np.ceil(longest / max_edge).astype(np.int64)
+    big = steps > 1
+    if big.any():
+        steps_big = steps[big]
+        needed = int(((steps_big + 1) * (steps_big + 2) // 2).sum())
+        if needed > MAX_SURFACE_SAMPLES:
+            raise MeshTooDetailed(
+                f"{needed:,} surface samples at a {pitch * 1000:.3f} mm pitch "
+                f"(budget {MAX_SURFACE_SAMPLES:,})")
+        tri_big = tri[big]
+        for n in np.unique(steps_big):
+            weights = _barycentric(int(n))
+            group = tri_big[steps_big == n]
+            per_chunk = max(1, _SAMPLE_CHUNK // len(weights))
+            for start in range(0, len(group), per_chunk):
+                chunk = group[start:start + per_chunk]
+                mark(np.einsum("kv,tvc->tkc", weights, chunk).reshape(-1, 3))
+    # Voxel i is centred on (lo + i) * pitch; the grid's corner is half a cell
+    # below the first centre.
+    return shell, (lo - 0.5) * pitch
+
+
 class GridSDF(SDF):
     """Signed distance sampled from a voxel density field (generative results).
 
@@ -335,6 +409,58 @@ class GridSDF(SDF):
 
     def bounds(self) -> Bounds:
         return Bounds(self._lo.copy(), self._lo + self.size)
+
+    #: How far inside the true surface a voxelised mesh's zero level sits, in
+    #: cells, measured over randomly rotated and offset boxes and cylinders:
+    #: -0.63 on average, between -0.93 and -0.06. `fill()` keeps every voxel the
+    #: surface crosses, so the body always comes back fat.
+    MESH_BIAS_CELLS = 0.63
+    #: What is left after the bias is taken off: surface points then read
+    #: between -0.38 and +0.61 cells over the same set. The band a reading from
+    #: `from_mesh` can be trusted to, in either direction.
+    MESH_TOLERANCE_CELLS = 0.65
+
+    @classmethod
+    def from_mesh(cls, vertices, faces, pitch: float, pad_cells: int = 2) -> "GridSDF":
+        """A signed distance field for a closed triangle mesh, by voxelising it.
+
+        For a body with no analytic field — an imported STEP solid, an exact edge
+        fillet. Two things differ from the density-grid constructor, and both
+        were wrong in the first version of this, which lived in `drawing`:
+
+        * **The grid is padded.** Voxelising leaves the body touching the grid
+          boundary on every side, so the complement has no voxels there and the
+          distance transform of the inside has nothing to measure to — the
+          surface read 31 mm deep on a 40 mm box.
+        * **The distance is half-cell centred and de-biased.** The density
+          constructor's `d_out - d_in` jumps by two cells across one cell at the
+          surface; `d - 0.5` is continuous with unit slope, and the measured
+          dilation (`MESH_BIAS_CELLS`) is subtracted, so a coincident face reads
+          near zero rather than as half a cell of penetration.
+        """
+        from scipy.ndimage import binary_fill_holes, distance_transform_edt
+
+        pitch = float(pitch)
+        pad = max(int(pad_cells), 2)
+        shell, corner = _surface_voxels(np.asarray(vertices, dtype=float),
+                                        np.asarray(faces, dtype=np.int64), pitch)
+        occ = np.pad(binary_fill_holes(shell), pad)
+        if occ.any():
+            vol = np.where(occ, -(distance_transform_edt(occ) - 0.5),
+                           distance_transform_edt(~occ) - 0.5)
+        else:
+            vol = np.full(occ.shape, 1e6)
+        field = cls.__new__(cls)
+        field.density = occ.astype(float)
+        field.dims = np.array(occ.shape)
+        field.cell = np.full(3, float(pitch))
+        field.mean_cell = float(pitch)
+        field.size = field.dims * float(pitch)
+        field._lo = corner - pad * pitch
+        field.center = field._lo + field.size / 2.0
+        field.sdf_vol = (vol + cls.MESH_BIAS_CELLS) * float(pitch)
+        field.tolerance = cls.MESH_TOLERANCE_CELLS * float(pitch)
+        return field
 
 
 # Building a GridSDF runs a full EDT over the voxel grid (expensive at 160³),

@@ -361,6 +361,16 @@ def _verify(subject: str, subject_id: str, note: Callable[[dict], None]) -> List
                           "axis or offset_mm — rather than deleting it."]
         else:
             failures = []
+        skipped = (result.get("skipped") or []) if env["ok"] else []
+        if skipped:
+            # An unchecked part is unverified, not clear. This is the gap a live
+            # run fell through: "3 of 4 checked, 0 interferences" read as a pass
+            # while the unexamined part was the new motor.
+            names = ", ".join(str(s.get("component")) for s in skipped[:4])
+            failures.append(f"{len(skipped)} component(s) could not be checked for "
+                            f"interference ({names}): {skipped[0].get('reason')}. "
+                            "Clearance for them is unverified; say so rather than "
+                            "reporting the assembly clear.")
         passed = ("No parts intersect" if not near else
                   f"No parts intersect ({near} pair(s) touching or within the "
                   f"clearance threshold, which a mate normally causes)")

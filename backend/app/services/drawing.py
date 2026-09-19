@@ -175,22 +175,14 @@ def _field_from_mesh(doc):
     edge-filleted, chamfered and face-shelled parts, and only to the *outline* —
     the dimension figures come from the evaluated bounding box regardless.
     """
-    import trimesh
-
     from app.cad_kernel.evaluator.sdf import GridSDF
     from app.cad_kernel.kernel import Kernel
 
     mesh = Kernel.tessellate(document_service.get_solid(doc.id))
-    body = trimesh.Trimesh(vertices=np.asarray(mesh.vertices, dtype=float),
-                           faces=np.asarray(mesh.faces, dtype=np.int64), process=False)
-    extents = np.maximum(body.extents, 1e-6)
+    verts = np.asarray(mesh.vertices, dtype=float)
+    extents = np.maximum(verts.max(axis=0) - verts.min(axis=0), 1e-6)
     pitch = float(extents.max()) / (2 * _GRID)
-
-    voxels = body.voxelized(pitch=pitch).fill()
-    density = np.asarray(voxels.matrix, dtype=float)
-    origin = np.asarray(voxels.bounds, dtype=float).mean(axis=0)
-    size = np.asarray(density.shape, dtype=float) * pitch
-    return GridSDF(density, origin, size, threshold=0.5)
+    return GridSDF.from_mesh(verts, mesh.faces, pitch, pad_cells=4)
 
 
 def _contours(field2d: np.ndarray, o0: float, o1: float, cell: float) -> List[Polyline]:

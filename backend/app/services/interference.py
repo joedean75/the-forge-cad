@@ -72,14 +72,28 @@ class _Placed:
     see `_overlap_volume`.
     """
 
-    def __init__(self, comp):
+    def __init__(self, comp, clearance_m: float = 1.0 / MM):
         doc = document_service.get_document(comp.part_id)
         active = document_service.resolved_tree(doc)
         root = FeatureTree.from_dict(active).root
-        self.sdf = sdf_from_feature(root)
 
         from app.cad_kernel.kernel import Kernel
         mesh = Kernel.tessellate(document_service.get_solid(comp.part_id))
+        # How far this part's field can be trusted, in metres. Zero for an
+        # analytic field; a voxelised one says how coarse it had to be.
+        self.tolerance = 0.0
+        self.field_source = "analytic"
+        try:
+            self.sdf = sdf_from_feature(root)
+        except ValueError:
+            # An imported STEP solid, an exact fillet: bodies that exist only on
+            # the exact kernel have no analytic field, and this used to drop the
+            # whole component from the check without a word — "3 checked,
+            # clear" for a four-part assembly. Its mesh still bounds the same
+            # volume, so it is voxelised instead.
+            self.sdf = _mesh_field(mesh, clearance_m)
+            self.tolerance = float(self.sdf.tolerance)
+            self.field_source = "mesh"
         verts = _surface_samples(mesh)
         # The part's own extent, taken before the subsample: `np.linspace`
         # indexing is not obliged to keep an extreme vertex, and the propeller
@@ -106,6 +120,40 @@ class _Placed:
         """Signed distance (world units) from this part's surface to given points."""
         local = ((self.R.T @ (world_pts - self.t).T).T) / self.scale
         return self.sdf(local) * self.scale
+
+
+#: The largest voxel grid a mesh-derived field may use. EDT and voxelisation
+#: are both linear in it; ~2M is about a second.
+_MAX_FIELD_VOXELS = 2_000_000
+
+
+def _mesh_field(mesh, clearance_m: float):
+    """A signed distance field for a part that has only a mesh, sized to the check.
+
+    The pitch is set by the clearance being asked about, not by the body: half
+    the clearance, so a near miss is resolved as one. A large body under a small
+    clearance would ask for an enormous grid, so the pitch coarsens to stay under
+    `_MAX_FIELD_VOXELS` — and the field's `tolerance` coarsens with it, which is
+    what the report states rather than hides. The padding reaches past the
+    clearance so a point that near the body is still inside the grid.
+    """
+    from app.cad_kernel.evaluator.sdf import GridSDF
+
+    verts = np.asarray(mesh.vertices, dtype=float)
+    extent = np.maximum(verts.max(axis=0) - verts.min(axis=0), 1e-6)
+    pitch = max(clearance_m / 2.0, float(extent.max()) / 400.0, 1e-5)
+    while float(np.prod(extent / pitch + 1.0)) > _MAX_FIELD_VOXELS:
+        pitch *= 1.25
+    from app.cad_kernel.evaluator.sdf import MeshTooDetailed
+
+    faces = np.asarray(mesh.faces)
+    for _ in range(8):
+        pad = int(np.ceil(clearance_m / pitch)) + 3
+        try:
+            return GridSDF.from_mesh(verts, faces, pitch, pad_cells=pad)
+        except MeshTooDetailed:
+            pitch *= 1.5
+    raise MeshTooDetailed("no pitch within the sample budget")
 
 
 def _world_shape(root, rotation: np.ndarray, scale: float, translation: np.ndarray):
@@ -174,14 +222,18 @@ def check_assembly(asm_id: str, clearance_mm: float = 1.0) -> Dict:
     if asm is None:
         raise KeyError(asm_id)
     comps = [c for c in asm.components if not c.missing]
+    clearance_m = clearance_mm / MM
     placed: List[_Placed] = []
+    skipped: List[dict] = []
     for c in comps:
         try:
-            placed.append(_Placed(c))
-        except Exception:
-            continue
-
-    clearance_m = clearance_mm / MM
+            placed.append(_Placed(c, clearance_m))
+        except Exception as exc:  # noqa: BLE001 — reported, never swallowed
+            # A component that cannot be checked is named with the reason. The
+            # alternative — leaving it out of the count — reads as "clear" for
+            # an assembly whose one unexamined part is the one in the way.
+            skipped.append({"component": c.name, "part_id": c.part_id,
+                            "reason": f"{type(exc).__name__}: {exc}"[:300]})
     pairs: List[dict] = []
     interferences = 0
     warnings = 0
@@ -194,7 +246,13 @@ def check_assembly(asm_id: str, clearance_mm: float = 1.0) -> Dict:
             d_ab = float(b.signed_distance_at(a.world_verts).min())
             d_ba = float(a.signed_distance_at(b.world_verts).min())
             gap = min(d_ab, d_ba)
-            if gap < -1e-6:
+            # Each direction is read against one part's field, so it is trusted
+            # to that part's tolerance. Without the band, a coincident mate
+            # against a voxelised part reads as a fraction of a cell of
+            # penetration and every correctly mated import is a "clash".
+            clash = (d_ab < -(b.tolerance * b.scale) - 1e-6
+                     or d_ba < -(a.tolerance * a.scale) - 1e-6)
+            if clash:
                 status = "interference"
                 interferences += 1
             elif gap < clearance_m:
@@ -207,6 +265,9 @@ def check_assembly(asm_id: str, clearance_mm: float = 1.0) -> Dict:
                 "gap_mm": round(gap * MM, 3),
                 "penetration_mm": round(-gap * MM, 3) if gap < 0 else 0.0,
             }
+            band = max(a.tolerance * a.scale, b.tolerance * b.scale)
+            if band > 0:
+                row["tolerance_mm"] = round(band * MM, 3)
             if status == "interference":
                 # How much material is actually in the way. Only asked of a real
                 # clash: `Common` on two parts that merely sit close is an OCC
@@ -224,12 +285,19 @@ def check_assembly(asm_id: str, clearance_mm: float = 1.0) -> Dict:
     return {
         "assembly_id": asm_id,
         "components_checked": len(placed),
+        "components_total": len(comps),
+        # Parts whose geometry could not be read at all. Not "clear": unknown.
+        "skipped": skipped,
+        # Parts checked against a voxelised copy of their mesh rather than an
+        # exact field, with how far that reading can be trusted.
+        "approximated": [{"component": p.name, "tolerance_mm": round(p.tolerance * p.scale * MM, 3)}
+                         for p in placed if p.field_source == "mesh"],
         "interferences": interferences,
         "clearance_warnings": warnings,
         "clearance_threshold_mm": clearance_mm,
         "pairs": pairs,
         "overlap_mm3": round(sum(measured), 4) if measured else None,
-        "clear": interferences == 0 and warnings == 0,
+        "clear": interferences == 0 and warnings == 0 and not skipped,
     }
 
 
