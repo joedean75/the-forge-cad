@@ -659,7 +659,11 @@ def test_without_a_model_the_configured_default_answers(monkeypatch):
 
     seen = _capture_model(monkeypatch, {"done": True, "summary": "done"})
     out = copilot.run(_new_doc(), "leave it alone")
-    assert seen == [None], "no override means the client falls back on its own"
+    # The default is pinned to a concrete id when the run starts, not looked up
+    # per call: `LLM_MODEL` is process-wide, and a per-call fallback is how a
+    # build's parts came to be designed by a different model from its plan
+    # (see test_model_pinning).
+    assert seen == [llm_client.LLM_MODEL]
     assert out["model"] == llm_client.LLM_MODEL
 
 

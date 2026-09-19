@@ -122,7 +122,17 @@ def _vec_deg(v: Optional[dict]) -> Vector3:
     return Vector3(x=float(v.get("x", 0)), y=float(v.get("y", 0)), z=float(v.get("z", 0)))
 
 
-def create_assembly_from_prompt(
+def create_assembly_from_prompt(*args, **kwargs) -> AssemblyDoc:
+    """Generate parts + assembly from one prompt (see `_create_assembly_from_prompt`).
+
+    Run under one pinned model, so the plan and every part it builds are the
+    work of the same model even if the process default changes mid-job.
+    """
+    with llm_client.pinned_model():
+        return _create_assembly_from_prompt(*args, **kwargs)
+
+
+def _create_assembly_from_prompt(
     prompt: str,
     owner_id: Optional[str] = None,
     resolution: int = 96,

@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import time
+import contextlib
 from contextvars import ContextVar
 from typing import Any, Optional
 
@@ -104,6 +105,25 @@ def _provider_name(base_url: str) -> str:
     if "openai" in base_url:
         return "openai"
     return "custom"
+
+
+@contextlib.contextmanager
+def pinned_model(model: Optional[str] = None):
+    """Every provider call inside the block uses one model, fixed on entry.
+
+    `LLM_MODEL` is process-wide and `set_model` changes it for everyone, so a
+    long job that reads it per call can plan with one model and build its parts
+    with another. The copilot pins the model in its own run scope; this is the
+    same thing for a job that is not a copilot run (text-to-assembly). An
+    enclosing pin wins over the default, and an explicit `model` over both.
+    """
+    inherited = CALL_CONTEXT.get() or {}
+    token = CALL_CONTEXT.set({**inherited,
+                              "model": model or inherited.get("model") or LLM_MODEL})
+    try:
+        yield CALL_CONTEXT.get()["model"]
+    finally:
+        CALL_CONTEXT.reset(token)
 
 
 def set_model(model: str) -> None:

@@ -393,7 +393,13 @@ def _run_scope(fn):
         token = llm_client.CALL_CONTEXT.set({
             "deadline": min(time.monotonic() + seconds, inherited.get("deadline", float("inf"))),
             "cancelled": kwargs.get("cancelled") or inherited.get("cancelled"),
-            "model": kwargs.get("model") or inherited.get("model"),
+            # Pinned to a concrete id when the outermost run starts. `None`
+            # used to mean "whatever LLM_MODEL is when each call is made", and
+            # that is a process-wide setting anyone can change mid-build — so
+            # an assembly planned by one model could have its parts designed by
+            # another. Every call in this run, nested part runs and LLM-backed
+            # operations included, now reads this one value.
+            "model": kwargs.get("model") or inherited.get("model") or llm_client.LLM_MODEL,
         })
         try:
             return fn(*args, **kwargs)
@@ -450,6 +456,9 @@ def run(
     """
     from app.services import trajectories
 
+    # The concrete id `_run_scope` pinned, so the recorded metadata, the vision
+    # check and `nested_model()` all name the model every call actually uses.
+    model = model or (llm_client.CALL_CONTEXT.get() or {}).get("model")
     custom_planner = planner is not None
     # **Mutable, and read at call time.** The default planner is built once, so
     # a render appended to a list captured by value would never be seen; the
