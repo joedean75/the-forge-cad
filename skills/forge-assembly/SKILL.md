@@ -47,6 +47,18 @@ a 0 mm gap **by definition**. Gating on `clear` fails every correctly assembled
 stack while the same result says "0 pair(s) of parts intersect". Read the
 `interferences` count. A near miss is worth reporting and is not a refusal.
 
+A component listed in `skipped` was **not checked** — that is unverified, not
+clear. Imported STEP parts are checked against a voxelised copy of their mesh;
+their pairs carry `tolerance_mm`, the band inside which a reading is not a clash.
+
+## Read an imported part before asking for its drawing
+
+`component_interfaces` reads a placed purchased part's shaft (diameter, signed
+projection at each end, tips in assembly space), its mounting holes (bolt
+circles, and every metric screw each could take) and its can, off the exact
+body. Use it before asking the user for dimensions. It cannot tell you KV,
+turns or a part number, and says so.
+
 `prop_clearance` is a different question: a rotor is reduced to the annulus it
 sweeps, because two blades frozen at one azimuth answer only for that azimuth.
 Stacked coaxial rotors overlap in plan by design and are not a clash.

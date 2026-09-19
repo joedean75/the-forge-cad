@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+import numpy as np
+
 from app.models.schemas import ComponentTransform, Vector3
 from app.services import assembly_service
 from app.services.cad_operations import operation
@@ -69,6 +71,39 @@ def _has_connector(part_id: str, connector_id: str) -> bool:
         return False
     return any(n.get("type") == "MateConnectorFeature" and n.get("id") == connector_id
                for n in walk_nodes(part.feature_tree))
+
+
+@operation("component_interfaces", "query",
+           "How one placed component mounts, read off its part's exact geometry "
+           "(the part-document reading of inspect_interfaces): shaft diameter and "
+           "projection, mounting-hole pattern with candidate screws, can "
+           "diameter. The axis and the shaft tip are also given in assembly "
+           "space, so a mount can be designed where the part actually sits. Use "
+           "it before asking the user for a drawing of an imported part.",
+           {"component_id": {"type": "string", "required": True,
+                             "description": "the placed component, from the "
+                                            "assembly's component list"}},
+           subject="assembly")
+def _component_interfaces(asm_id, args):
+    from app.cad_kernel.evaluator.sdf import _euler_matrix
+    from app.services import interfaces
+
+    asm = _assembly(asm_id)
+    comp = _component(asm, require(args, "component_id"))
+    try:
+        reading = interfaces.read_document(comp.part_id)
+    except ValueError as exc:
+        raise PreconditionFailed(str(exc)) from exc
+    t = comp.transform
+    scale = float(t.scale or 1.0)
+    rotation = _euler_matrix(t.rotate_deg.x, t.rotate_deg.y, t.rotate_deg.z)
+    translation = np.array([t.translate.x, t.translate.y, t.translate.z])
+    reading["component"] = comp.name
+    reading["in_assembly"] = interfaces.placed(reading, rotation, scale, translation)
+    if abs(scale - 1.0) > 1e-9:
+        reading["note"] = (f"this instance is scaled by {scale:g}; the dimensions above "
+                           "are the part's own, not the scaled instance's")
+    return reading
 
 
 @operation("dof", "query",

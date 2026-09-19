@@ -2824,6 +2824,26 @@ def _set_manufacturing(doc_id, args):
             "manufacturing": record}
 
 
+@operation("inspect_interfaces", "query",
+           "Read how this part mounts, off its exact geometry: the main axis, the "
+           "shaft (diameter, how far it projects past the body, which end), "
+           "the mounting holes (diameter, count, bolt-circle or spacing, which "
+           "end, and every metric screw each could take — tapped, clearance or "
+           "modelled at nominal) and the outer can. Built for purchased parts "
+           "imported from STEP, such as a motor, whose drawing is not to hand. "
+           "Reports what geometry cannot say (KV, turns) as absent rather than "
+           "guessing it.",
+           {})
+def _inspect_interfaces(doc_id, args):
+    from app.services import interfaces
+
+    _get(doc_id)
+    try:
+        return interfaces.read_document(doc_id)
+    except ValueError as exc:
+        raise PreconditionFailed(str(exc)) from exc
+
+
 @operation("check_printability", "query",
            "Measure the body against one printer: does it fit the bed in any "
            "90-degree orientation (and if not, how many pieces it would take), "
