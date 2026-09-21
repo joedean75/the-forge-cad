@@ -153,42 +153,45 @@ def test_copilot_surfaces_the_typed_error_code_to_its_planner():
 # ------------------------------------------------------------------ export --
 
 def _export(tid):
+    """The first training line for a recorded trajectory."""
     record = trajectories.get(tid)
-    return json.loads(trajectories.export_jsonl([record]))
+    lines = trajectories.export_jsonl([record]).splitlines()
+    return json.loads(lines[0]) if lines else None
 
 
-def test_export_produces_tool_calling_messages():
+def test_export_produces_one_line_per_planner_turn():
+    """A turn is one rebuilt user message and one tool call — what the copilot
+    sends. It used to be an alternating system/user/assistant/tool conversation,
+    which inference never sends; `datasets/corpus.py` holds the single generator
+    and `test_dataset.py` pins it against a live payload."""
     doc = _doc()
     with trajectories.recording(doc.id, goal="make a plate") as tid:
         ops.execute("add_primitive", doc.id, {"shape": "box"})
 
     example = _export(tid)
-    roles = [m["role"] for m in example["messages"]]
-    assert roles == ["system", "user", "assistant", "tool"]
-
-    call = example["messages"][2]["tool_calls"][0]
+    assert [m["role"] for m in example["messages"]] == ["system", "user", "assistant"]
+    call = example["messages"][-1]["tool_calls"][0]
     assert call["function"]["name"] == "add_primitive"
     assert json.loads(call["function"]["arguments"]) == {"shape": "box"}
-    assert example["messages"][3]["tool_call_id"] == call["id"]
+    assert example["parallel_tool_calls"] is False
+    assert example["meta"]["source"] == "recorded" and example["meta"]["op"] == "add_primitive"
 
 
-def test_the_system_prompt_is_generated_from_the_live_catalog():
+def test_the_prompt_is_generated_from_the_live_catalog():
     """So the training format cannot drift from the surface the model will call."""
     doc = _doc()
     with trajectories.recording(doc.id, goal="g") as tid:
         ops.execute("add_primitive", doc.id, {"shape": "box"})
-    system = _export(tid)["messages"][0]["content"]
-    for name in ("add_primitive", "check_geometry", "set_feature_params"):
-        assert name in system
+    example = _export(tid)
+    offered = {t["function"]["name"] for t in example["tools"]}
+    assert {"add_primitive", "check_geometry", "set_feature_params"} <= offered
 
 
-def test_the_tool_result_a_model_sees_is_the_envelope():
+def test_a_failed_call_is_not_exported_as_something_to_copy():
     doc = _doc()
     with trajectories.recording(doc.id, goal="g") as tid:
-        ops.execute("add_sketch", doc.id, {})
-    result = json.loads(_export(tid)["messages"][3]["content"])
-    assert result["ok"] is False
-    assert result["error"]["code"] == "MISSING_ARG"
+        ops.execute("add_sketch", doc.id, {})          # MISSING_ARG
+    assert trajectories.export_jsonl([trajectories.get(tid)]) == ""
 
 
 def test_export_drops_trajectories_with_no_actions():
@@ -220,7 +223,12 @@ def test_the_jsonl_endpoint_returns_one_example_per_line():
     r = client.get("/api/trajectories/export.jsonl")
     assert r.status_code == 200
     lines = [json.loads(ln) for ln in r.text.splitlines() if ln]
-    assert any(ex["goal"] == "line goal" for ex in lines)
+    # The goal lives inside the turn now, where the planner reads it, rather
+    # than as a field beside the messages.
+    def goal_of(example):
+        content = example["messages"][1]["content"]
+        return content if isinstance(content, str) else json.dumps(content)
+    assert any("line goal" in goal_of(ex) for ex in lines)
 
 
 def test_an_unknown_trajectory_is_a_typed_404():

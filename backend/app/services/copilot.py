@@ -153,23 +153,23 @@ def _summary(subject: str, obj) -> dict:
             else observation.summarize(obj))
 
 
-def _plan_next(goal: str, transcript: List[dict], summary: dict,
-               subject: str = "document", model: Optional[str] = None,
-               images: Optional[List[str]] = None, history: str = "",
-               enabled_tools: Optional[set[str]] = None,
-               discovery_order: Optional[List[str]] = None,
-               renders: Optional[List[dict]] = None) -> dict:
-    """Ask the LLM for the next operation. Returns a decision dict.
+def planner_request(goal: str, transcript: List[dict], summary: dict,
+                    subject: str = "document", model: Optional[str] = None,
+                    images: Optional[List[str]] = None, history: str = "",
+                    enabled_tools: Optional[set[str]] = None,
+                    discovery_order: Optional[List[str]] = None,
+                    renders: Optional[List[dict]] = None):
+    """The exact `(messages, tools)` a planner turn sends, as a pure function.
 
-    Two paths, and which one ran is recorded on the decision as ``_via`` the
-    same way `AnalysisReport.solver` marks a closed-form fallback: a prompt is
-    not a measurement, and a benchmark comparing runs has to be able to tell a
-    schema-constrained call from a parsed one.
+    Pure so that **one generator** serves the run and the training corpus.
+    `datasets/build.py` calls this to produce a sample, so a fine-tune cannot be
+    taught a protocol inference does not use — which is what the previous
+    exporter did: it emitted the prose system prompt and an alternating
+    tool-call conversation, where a real turn is one rebuilt user message and
+    one tool call. CLAUDE.md records the same failure for the three action-space
+    generators; `test_dataset.py` pins these two byte for byte.
     """
     from app.services import action_space
-
-    if not llm_client.is_configured():
-        return {"done": True, "summary": "No LLM configured — the copilot needs an LLM key.", "_unconfigured": True}
 
     steps = [
         {
@@ -232,10 +232,33 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
         {"role": "user", "content": _user_content(head, images, renders, steps=user, tail=tail,
                                                   mark_cache=llm_client.explicit_cache(model))},
     ]
+    return messages, (definitions if with_tools else None)
+
+
+def _plan_next(goal: str, transcript: List[dict], summary: dict,
+               subject: str = "document", model: Optional[str] = None,
+               images: Optional[List[str]] = None, history: str = "",
+               enabled_tools: Optional[set[str]] = None,
+               discovery_order: Optional[List[str]] = None,
+               renders: Optional[List[dict]] = None) -> dict:
+    """Ask the LLM for the next operation. Returns a decision dict.
+
+    Two paths, and which one ran is recorded on the decision as ``_via`` the
+    same way `AnalysisReport.solver` marks a closed-form fallback: a prompt is
+    not a measurement, and a benchmark comparing runs has to be able to tell a
+    schema-constrained call from a parsed one.
+    """
+    if not llm_client.is_configured():
+        return {"done": True, "summary": "No LLM configured — the copilot needs an LLM key.", "_unconfigured": True}
+
+    messages, tools = planner_request(
+        goal, transcript, summary, subject=subject, model=model, images=images,
+        history=history, enabled_tools=enabled_tools,
+        discovery_order=discovery_order, renders=renders)
+    with_tools = tools is not None
     message = llm_client._post_chat(
-        messages, timeout=60.0, max_tokens=2400,
-        tools=definitions if with_tools else None,
-        model=model)
+
+        messages, timeout=60.0, max_tokens=2400, tools=tools, model=model)
 
     calls = message.get("tool_calls") or []
     deferred: List[str] = []
@@ -282,6 +305,22 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
     if raw is None:
         raise ValueError(f"planner returned no JSON: {content[:200]}")
     return {**json.loads(raw), "_via": "prose"}
+
+
+def transcript_entry(op: str, args: dict, env: dict, rationale: str = "") -> dict:
+    """One executed step as the planner will read it back on the next turn.
+
+    Extracted because `datasets/corpus.py` rebuilds transcripts to make training
+    samples, and a corpus whose steps are shaped differently from the ones a run
+    shows teaches the difference. The error is the **typed code and message**,
+    which is what `copilot_context.PLAYBOOK` is indexed on.
+    """
+    entry = {"kind": "op", "op": op, "args": args, "ok": env["ok"],
+             "rationale": rationale, "result": _transcript_result(op, env.get("result") or {})}
+    if env.get("error"):
+        entry["error"] = f"{env['error']['code']}: {env['error']['message']}"
+        entry["error_detail"] = _trim_result(env["error"])
+    return entry
 
 
 def _user_content(text: str, images: Optional[List[str]],
@@ -576,7 +615,12 @@ def run(
         subject_id, goal=goal, kind="copilot", actor="copilot",
         owner_id=getattr(doc0, "owner_id", None),
         metadata={"model": model or llm_client.LLM_MODEL, "subject": subject,
-                  "context_version": 2, **(run_metadata or {})})
+                  # What a turn cannot be rebuilt without: which half of the
+                  # catalog was offered, the carried conversation, and whether
+                  # images were in the prompt (the bytes are never kept, so a
+                  # sample built from this run would be missing them).
+                  "history": (history or "")[:4000], "image_count": len(images or []),
+                  "context_version": 3, **(run_metadata or {})})
 
     def note(entry: dict) -> None:
         if entry.get("kind") != "op":
@@ -637,6 +681,14 @@ def run(
             }
             if parent_brief:
                 current_summary["parent_assembly_brief"] = parent_brief
+            # What `execute` records as `obs_before` is this summary *without*
+            # the block below — so a training sample rebuilt from the record
+            # would be missing it, and `datasets/corpus.py` would be teaching a
+            # prompt this loop never sends. Only the difference is recorded; the
+            # base is already in the step.
+            trajectories.event("planner_context", turn=turn_index,
+                               request_context=deepcopy(current_summary["request_context"]),
+                               parent_assembly_brief=parent_brief or None)
             decision = planner(goal, transcript, current_summary)
         except Exception as exc:  # LLM / parse failure — surface and stop
             _LOGGER.warning("copilot planner failed: %s", exc)
@@ -667,6 +719,14 @@ def run(
             break
         if decision.get("done"):
             result_kind = decision.get("result_kind") or ("completed" if mutated else "answered")
+            # **The turn that stops is a turn worth learning.** It is not an
+            # operation, so nothing recorded it, and a corpus of only edits
+            # trains a model that never finishes. The transcript it was decided
+            # against is `steps` up to here, which is what the record already
+            # holds; this adds the decision.
+            trajectories.event("finish_task", turn=turn_index, outcome=result_kind,
+                               summary=str(decision.get("summary") or "")[:2000],
+                               after_steps=len([e for e in transcript if e.get("kind") == "op"]))
             if result_kind in ("paused", "needs_input"):
                 final_summary = decision.get("summary")
                 stop_reason = result_kind
@@ -765,6 +825,15 @@ def run(
         op = decision.get("op")
         args = decision.get("args") or {}
         rationale = decision.get("rationale")
+        # **What the planner chose, as distinct from what ran.** The done gate
+        # runs `check_geometry` / `verify_against_spec` / a render itself, and
+        # those land in the transcript as steps like any other — so a corpus
+        # built from steps alone labels them as the planner's own choices and
+        # teaches a model to make calls the loop already makes for it.
+        # `after_steps` places the decision in the transcript it was made on.
+        trajectories.event("planner_decision", turn=turn_index, op=op,
+                           args=_trim_result(args), rationale=(rationale or "")[:200],
+                           after_steps=len([e for e in transcript if e.get("kind") == "op"]))
 
         if op in ("update_work_plan", "discover_operations"):
             try:
@@ -855,13 +924,7 @@ def run(
             _ACTIVE_METER.reset(meter_token)
             _ACTIVE_MODEL.reset(model_token)
             _ACTIVE_CONTEXT.reset(context_token)
-        entry = {"kind": "op", "op": op, "args": args, "ok": env["ok"],
-                 "rationale": rationale, "result": _transcript_result(op, env.get("result") or {})}
-        if env.get("error"):
-            # The planner is told to react to failures, so give it the typed code
-            # and message rather than a stringified exception.
-            entry["error"] = f"{env['error']['code']}: {env['error']['message']}"
-            entry["error_detail"] = _trim_result(env["error"])
+        entry = transcript_entry(op, args, env, rationale)
         if env["ok"]:
             mutated = mutated or cad_operations.OPERATIONS[op].kind == "mutate"
             if cad_operations.OPERATIONS[op].kind == "query":

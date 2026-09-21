@@ -262,77 +262,35 @@ def corpus_stats(records: Optional[List[dict]] = None) -> Dict[str, Any]:
 
 # ------------------------------------------------------------------ export --
 
-def to_messages(record: dict, catalog_text: str = "") -> List[dict]:
-    """One trajectory as an OpenAI-style tool-calling message list.
-
-    This is the shape a tool-use fine-tune consumes: a system prompt describing
-    the action space, the user's goal, then alternating assistant tool calls and
-    tool results. Emitting it here — rather than in a separate script — keeps the
-    training format honest, because it is built from the same envelope the model
-    will see at inference.
-    """
-    messages: List[dict] = []
-    if catalog_text:
-        messages.append({"role": "system", "content": catalog_text})
-    messages.append({"role": "user", "content": record.get("goal") or ""})
-
-    for step in record.get("steps", []):
-        call_id = f"call_{step['i']}"
-        messages.append({
-            "role": "assistant",
-            "content": step.get("rationale") or "",
-            "tool_calls": [{
-                "id": call_id,
-                "type": "function",
-                "function": {"name": step["op"],
-                             "arguments": json.dumps(step.get("args") or {})},
-            }],
-        })
-        messages.append({
-            "role": "tool",
-            "tool_call_id": call_id,
-            "content": json.dumps(_tool_result(step)),
-        })
-    return messages
-
-
-def _tool_result(step: dict) -> Dict[str, Any]:
-    """What the model sees back from a call — the envelope, minus bulk.
-
-    `obs_after` is dropped: it repeats the observation the next turn already
-    carries, and duplicating it doubles the token cost of every example.
-    """
-    result: Dict[str, Any] = {"ok": step.get("ok")}
-    if step.get("error"):
-        result["error"] = step["error"]
-    if step.get("result"):
-        result["result"] = step["result"]
-    if step.get("warnings"):
-        result["warnings"] = step["warnings"]
-    if step.get("delta"):
-        result["delta"] = step["delta"]
-    return result
-
-
 def export_jsonl(records: Optional[List[dict]] = None, *, include_catalog: bool = True,
                  min_steps: int = 1) -> str:
-    """Trajectories as JSONL, one training example per line."""
-    from app.services import cad_operations
+    """Recorded runs as JSONL training lines, one **planner turn** per line.
 
-    catalog_text = _catalog_text() if include_catalog else ""
+    Delegates to `datasets.corpus`, which builds each line with
+    `copilot.planner_request` — the function a live turn uses. This used to
+    assemble its own: the prose system prompt and an alternating tool-call
+    conversation, where a turn is one rebuilt user message and one tool call. A
+    corpus in a shape inference never sends teaches an API that does not exist,
+    which is the mistake CLAUDE.md records for the three action-space generators.
+
+    Each line carries its `meta` (source, model, whether the state was recorded
+    exactly), which a trainer that rejects unknown keys should strip —
+    `python -m datasets.build` writes the training lines and the provenance as
+    separate files for exactly that reason, and is the path to prefer.
+
+    ``include_catalog`` is accepted and ignored: the system prompt is part of the
+    turn now, not an optional preamble.
+    """
+    from datasets import corpus
+
     lines: List[str] = []
     for record in (records if records is not None else list_all()):
-        steps = record.get("steps") or []
-        if len(steps) < min_steps:
+        if len(record.get("steps") or []) < min_steps:
             continue  # a trajectory with no actions teaches nothing
-        lines.append(json.dumps({
-            "id": record["id"],
-            "goal": record.get("goal") or "",
-            "kind": record.get("kind"),
-            "outcome": record.get("outcome"),
-            "n_steps": len(steps),
-            "messages": to_messages(record, catalog_text),
-        }))
+        for sample in corpus.samples_from_record(record, include_unfinished=True):
+            body = sample.line()
+            body["meta"] = sample.meta
+            lines.append(json.dumps(body))
     return "\n".join(lines)
 
 
