@@ -135,6 +135,8 @@ def card(report: dict) -> str:
         f"| samples | {train.get('samples', 0):,} | {val.get('samples', 0):,} |",
         f"| finishing turns | {train.get('finish_samples', 0):,} | {val.get('finish_samples', 0):,} |",
         f"| turns that recover from a failure | {train.get('recovery_samples', 0):,} | {val.get('recovery_samples', 0):,} |",
+        f"| geometry verified by replay | {train.get('verified', 0):,} | {val.get('verified', 0):,} |",
+        f"| prompt exact (state as sent, not as recorded) | {train.get('state_exact', 0):,} | {val.get('state_exact', 0):,} |",
         f"| approx tokens | {train.get('approx_tokens', 0):,} | {val.get('approx_tokens', 0):,} |",
         f"| approx tokens per sample | {train.get('mean_tokens', 0):,} | {val.get('mean_tokens', 0):,} |",
         "",

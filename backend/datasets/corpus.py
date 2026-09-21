@@ -495,6 +495,12 @@ def stats(splits: Dict[str, List[Sample]]) -> Dict[str, Any]:
         out[name] = {
             "samples": len(rows),
             "recovery_samples": sum(1 for s in rows if s.meta.get("recovers_failure")),
+            # Samples whose prompt is *exactly* what a turn sent, rather than the
+            # recorded observation without the loop's per-turn block. Replayed
+            # sequences and runs recorded before `planner_context` have none, and
+            # a corpus that hid that would be claiming a fidelity it lacks.
+            "state_exact": sum(1 for s in rows if s.meta.get("state_exact")),
+            "verified": sum(1 for s in rows if s.meta.get("verified")),
             "finish_samples": sum(1 for s in rows if s.meta.get("op") == "finish_task"),
             "approx_tokens": chars // CHARS_PER_TOKEN,
             "mean_tokens": (chars // CHARS_PER_TOKEN // len(rows)) if rows else 0,
