@@ -153,12 +153,26 @@ def _summary(subject: str, obj) -> dict:
             else observation.summarize(obj))
 
 
+#: Which prompt a turn sends. `full` hands over every schema — what a frontier
+#: model needs and what 6.2k of the 11.7k tokens in a sample were. `finetuned`
+#: drops the schemas and the operation directory and keeps the rules, the
+#: playbook and a bare list of operation names: a model fine-tuned on this API
+#: has the arguments memorised, and `op_schema.validate` still refuses an
+#: invented one at execute time, so the safety net does not move. Set by
+#: `FORGE_COPILOT_PROMPT=finetuned` (or per run), and **the corpus is built with
+#: the same value** — a fine-tune trained on one prompt and served another is
+#: the drift this module keeps being rebuilt to prevent.
+PROMPT_PROFILES = ("full", "finetuned")
+PROMPT_PROFILE = os.getenv("FORGE_COPILOT_PROMPT") or "full"
+
+
 def planner_request(goal: str, transcript: List[dict], summary: dict,
                     subject: str = "document", model: Optional[str] = None,
                     images: Optional[List[str]] = None, history: str = "",
                     enabled_tools: Optional[set[str]] = None,
                     discovery_order: Optional[List[str]] = None,
-                    renders: Optional[List[dict]] = None):
+                    renders: Optional[List[dict]] = None,
+                    profile: Optional[str] = None):
     """The exact `(messages, tools)` a planner turn sends, as a pure function.
 
     Pure so that **one generator** serves the run and the training corpus.
@@ -203,7 +217,26 @@ def planner_request(goal: str, transcript: List[dict], summary: dict,
     user = (f"Steps so far in this run:\n{json.dumps(steps) if steps else '(none yet)'}")
     tail = (f"Current {subject} (as it stands now):\n{json.dumps(summary)}\n\n"
             "Take the next single action.")
+    profile = profile or PROMPT_PROFILE
     with_tools = llm_client.supports_tools()
+    if profile == "finetuned":
+        # No schemas, no directory, no tool payload: the weights carry the
+        # arguments. The rules and the playbook stay, because they are behaviour
+        # rather than signature, and the names stay so the vocabulary is present.
+        names = sorted(enabled_tools) if enabled_tools is not None else sorted(
+            t["function"]["name"] for t in action_space.tools(subject))
+        system = (action_space.system_prompt(with_tools=True, subject=subject,
+                                             names=enabled_tools)
+                  + action_space._DONE_PROTOCOL
+                  + copilot_context.control_rules(subject)
+                  + "\n\nOperations available (their arguments are not repeated "
+                    "here):\n" + ", ".join(names))
+        return [
+            {"role": "system", "content": system},
+            {"role": "user", "content": _user_content(
+                head, images, renders, steps=user, tail=tail,
+                mark_cache=llm_client.explicit_cache(model))},
+        ], None
     system = action_space.system_prompt(with_tools=with_tools, subject=subject, names=enabled_tools)
     definitions = action_space.tools(subject)
     if enabled_tools is not None:

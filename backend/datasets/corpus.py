@@ -78,8 +78,22 @@ class Sample:
         return len(json.dumps(self.line()))
 
 
-def _tool_call(name: str, args: dict, rationale: str = "") -> dict:
-    """The label: the assistant turn, as a provider would have returned it."""
+def _tool_call(name: str, args: dict, rationale: str = "",
+               profile: str = "full") -> dict:
+    """The label: the assistant turn, in the form this profile's turn answers in.
+
+    `full` is a provider tool call. `finetuned` sends no tool schemas, so the
+    answer is the JSON object `action_space._DONE_PROTOCOL` describes and
+    `llm_client._extract_json` parses — the same prose path `FORGE_LLM_TOOLS=0`
+    already uses. Training on the tool-call form and serving the prose one (or
+    the reverse) is the drift the single generator exists to prevent.
+    """
+    if profile == "finetuned":
+        body = ({"done": True, "summary": args.get("summary") or "",
+                 "result_kind": args.get("outcome") or "completed"}
+                if name == "finish_task" else
+                {"op": name, "args": args, "rationale": rationale or ""})
+        return {"role": "assistant", "content": json.dumps(body)}
     return {"role": "assistant", "content": rationale or "",
             "tool_calls": [{"id": "call_1", "type": "function",
                             "function": {"name": name, "arguments": json.dumps(args)}}]}
@@ -169,7 +183,8 @@ GATE_OPS = ("check_geometry", "check_interference", "verify_against_spec",
 
 def samples_from_record(record: dict, *, include_unfinished: bool = False,
                         source: str = "recorded",
-                        synthetic_finish: bool = False) -> List[Sample]:
+                        synthetic_finish: bool = False,
+                        profile: str = "full") -> List[Sample]:
     """Every turn of one recorded run that is worth learning from.
 
     A sample is built per *planner decision*, not per executed step: the done
@@ -215,9 +230,9 @@ def samples_from_record(record: dict, *, include_unfinished: bool = False,
         transcript = entries[:after_steps]
         messages, tools = copilot.planner_request(
             goal, list(transcript), state, subject=subject, history=history,
-            enabled_tools=enabled, discovery_order=discovery)
+            enabled_tools=enabled, discovery_order=discovery, profile=profile)
         return Sample(
-            messages=[*messages, _tool_call(op, args, rationale)],
+            messages=[*messages, _tool_call(op, args, rationale, profile)],
             tools=tools,
             meta={"source": source, "record_id": record.get("id"),
                   "doc_id": record.get("doc_id"), "subject": subject, "op": op,
@@ -225,7 +240,8 @@ def samples_from_record(record: dict, *, include_unfinished: bool = False,
                   "model": record.get("model"), "outcome": record.get("outcome"),
                   "recovers_failure": bool(transcript and not transcript[-1].get("ok")),
                   "license": "internal", "verified": source != "recorded",
-                  "state_exact": turn in contexts, **(extra or {})})
+                  "state_exact": turn in contexts, "profile": profile,
+                  **(extra or {})})
 
     out: List[Sample] = []
     if decisions:
@@ -283,7 +299,8 @@ def _finish_summary(goal: str, summary: dict) -> str:
 
 def samples_from_document(doc_id: str, goal: str, *, source: str,
                           license_name: str = "internal",
-                          resolution: int = 48) -> List[Sample]:
+                          resolution: int = 48,
+                          profile: str = "full") -> List[Sample]:
     """Turn samples for a document, via a decompiled and *verified* sequence.
 
     `decompile_document` replays what it recovered into a scratch document and
@@ -301,7 +318,8 @@ def samples_from_document(doc_id: str, goal: str, *, source: str,
     if record is None:
         return []
     record = {**record, "outcome": "done", "subject": "document", "history": ""}
-    samples = samples_from_record(record, source=source, synthetic_finish=True)
+    samples = samples_from_record(record, source=source, synthetic_finish=True,
+                                  profile=profile)
     for sample in samples:
         sample.meta.update({"source": source, "license": license_name, "verified": True})
     return samples
@@ -309,14 +327,16 @@ def samples_from_document(doc_id: str, goal: str, *, source: str,
 
 # ------------------------------------------------------------------ sources --
 
-def recorded_samples(*, include_unfinished: bool = False) -> List[Sample]:
+def recorded_samples(*, include_unfinished: bool = False,
+                     profile: str = "full") -> List[Sample]:
     from app.services import trajectories
 
     out: List[Sample] = []
     for record in trajectories.list_all():
         if (record.get("kind") or "") != "copilot":
             continue
-        out.extend(samples_from_record(record, include_unfinished=include_unfinished))
+        out.extend(samples_from_record(record, include_unfinished=include_unfinished,
+                                       profile=profile))
     return out
 
 
@@ -330,7 +350,8 @@ def _drop(cause: str) -> None:
     DROPS[cause] = DROPS.get(cause, 0) + 1
 
 
-def catalog_samples(limit: Optional[int] = None, *, owner_id: str = "dataset") -> List[Sample]:
+def catalog_samples(limit: Optional[int] = None, *, owner_id: str = "dataset",
+                    profile: str = "full") -> List[Sample]:
     """Every generated purchased part, as (designation -> operations).
 
     The catalog is the one source here with a *written* goal for each sample:
@@ -348,7 +369,7 @@ def catalog_samples(limit: Optional[int] = None, *, owner_id: str = "dataset") -
             _drop("catalog:not_built")
             continue
         goal = f"{entry.designation} — {entry.category}, built to {entry.standard}"
-        samples = samples_from_document(doc_id, goal, source="catalog")
+        samples = samples_from_document(doc_id, goal, source="catalog", profile=profile)
         if not samples:
             _drop("catalog:not_decompilable")
         out.extend(samples)
@@ -369,7 +390,8 @@ def _variation_goal(name: str, parameters: Sequence[dict]) -> str:
 
 
 def template_samples(*, owner_id: str = "dataset", variations: int = 0,
-                     factors: Sequence[float] = (0.6, 1.5, 2.2)) -> List[Sample]:
+                     factors: Sequence[float] = (0.6, 1.5, 2.2),
+                     profile: str = "full") -> List[Sample]:
     """The starter parts, each as its own sequence.
 
     A template *is* an operation sequence, so this is the one source whose
@@ -389,7 +411,7 @@ def template_samples(*, owner_id: str = "dataset", variations: int = 0,
         if not env["ok"]:
             continue
         goal = f"{row.get('name') or key}: {row.get('description') or key}"
-        samples = samples_from_document(doc.id, goal, source="template")
+        samples = samples_from_document(doc.id, goal, source="template", profile=profile)
         if not samples:
             _drop("template:not_decompilable")
         out.extend(samples)
@@ -420,14 +442,15 @@ def template_samples(*, owner_id: str = "dataset", variations: int = 0,
             varied = samples_from_document(
                 copy.id, _variation_goal(row.get("name") or key,
                                          values.get("parameters") or scaled),
-                source="template_variation")
+                source="template_variation", profile=profile)
             if not varied:
                 _drop("variation:not_decompilable")
             out.extend(varied)
     return out
 
 
-def library_samples(owner_id: Optional[str] = None, limit: Optional[int] = None) -> List[Sample]:
+def library_samples(owner_id: Optional[str] = None, limit: Optional[int] = None,
+                    profile: str = "full") -> List[Sample]:
     """Documents somebody actually built, where the decompiler can verify them.
 
     The goal is the document's own prompt when it has one, and its name
@@ -442,7 +465,7 @@ def library_samples(owner_id: Optional[str] = None, limit: Optional[int] = None)
         if not goal:
             _drop("library:no_goal")
             continue
-        samples = samples_from_document(summary.id, goal, source="library")
+        samples = samples_from_document(summary.id, goal, source="library", profile=profile)
         if not samples:
             _drop("library:not_decompilable")
         out.extend(samples)

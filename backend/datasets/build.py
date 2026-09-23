@@ -35,13 +35,16 @@ def _gather(names: List[str], args) -> List[corpus.Sample]:
     samples: List[corpus.Sample] = []
     for name in names:
         if name == "recorded":
-            samples += corpus.recorded_samples(include_unfinished=args.include_unfinished)
+            samples += corpus.recorded_samples(include_unfinished=args.include_unfinished,
+                                               profile=args.profile)
         elif name == "catalog":
-            samples += corpus.catalog_samples(limit=args.catalog_limit)
+            samples += corpus.catalog_samples(limit=args.catalog_limit, profile=args.profile)
         elif name == "template":
-            samples += corpus.template_samples(variations=args.variations)
+            samples += corpus.template_samples(variations=args.variations,
+                                               profile=args.profile)
         elif name == "library":
-            samples += corpus.library_samples(args.owner, limit=args.library_limit)
+            samples += corpus.library_samples(args.owner, limit=args.library_limit,
+                                              profile=args.profile)
         elif name == "imported":
             samples += _imported(args.imported)
         else:
@@ -74,6 +77,11 @@ def main(argv=None) -> int:
     parser.add_argument("--val-fraction", type=float, default=0.1,
                         help="share of *sources* held out (never of samples)")
     parser.add_argument("--catalog-limit", type=int, default=None)
+    parser.add_argument("--profile", default="full", choices=("full", "finetuned"),
+                        help="which prompt a sample carries. 'finetuned' drops the "
+                             "schemas and the operation directory — for a model that "
+                             "has the API in its weights, and the profile that run "
+                             "must then be served with (FORGE_COPILOT_PROMPT)")
     parser.add_argument("--variations", type=int, default=3,
                         help="how many re-dimensioned copies of each template to build; "
                              "each is a verified sequence with a goal stating its sizes")
@@ -104,7 +112,8 @@ def main(argv=None) -> int:
             for sample in rows:
                 fh.write(json.dumps(sample.meta) + "\n")
 
-    report = {"figures": figures, "duplicates_dropped": built["duplicates_dropped"],
+    report = {"profile": args.profile,
+              "figures": figures, "duplicates_dropped": built["duplicates_dropped"],
               "dropped_sources": dict(sorted(corpus.DROPS.items())),
               "sources": names, "val_fraction": args.val_fraction,
               "database": os.environ.get("DATABASE_URL", "(default dev database)")}
@@ -129,6 +138,10 @@ def card(report: dict) -> str:
         "as it stood, and the single tool call as the label. Built by",
         "`copilot.planner_request` — the same function a live turn uses — so the format",
         "cannot drift from inference.",
+        "",
+        f"**Prompt profile: `{report.get('profile', 'full')}`.** Serve the trained model "
+        f"with `FORGE_COPILOT_PROMPT={report.get('profile', 'full')}`; the `finetuned` "
+        "profile sends no tool schemas and expects the JSON answer the rules describe.",
         "",
         "| | train | val |",
         "|---|---|---|",
