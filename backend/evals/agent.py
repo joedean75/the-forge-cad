@@ -295,7 +295,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--compare", help="read a baseline and print the movement")
     args = parser.parse_args(argv)
 
-    from app.services import llm_client
+    from app.services import llm_client, persistence
+
+    # A benchmark is routinely pointed at a throwaway database (a sweep must not
+    # write into somebody's library), and nothing else on this path creates the
+    # schema — `main.py` does it for the server and `conftest` for the tests, so
+    # running the harness against a fresh file failed on every persist.
+    persistence.init_db()
 
     suite = task_module.SUITES[args.suite]
     if not all(t.scripted for t in suite) and not llm_client.is_configured():

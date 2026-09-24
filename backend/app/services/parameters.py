@@ -117,13 +117,48 @@ def _looks_expr(value: str) -> bool:
     return any(ch in value for ch in "+-*/()") and any(c.isalpha() for c in value)
 
 
+def _declared_expression(value) -> bool:
+    """Whether anything in here is explicitly an expression (`"=width/2"`)."""
+    if isinstance(value, str):
+        return value.startswith("=")
+    if isinstance(value, dict):
+        return any(_declared_expression(v) for k, v in value.items() if k != "children")
+    if isinstance(value, list):
+        return any(_declared_expression(v) for v in value)
+    return False
+
+
+def has_expressions(tree: dict) -> bool:
+    """Does this tree bind any parameter expression at all?
+
+    Lets the common case — a document with no parameters and no bindings — skip
+    the walk and the copy, while a document that *does* bind one is still
+    resolved (and told when the parameter is missing) even with an empty table.
+    """
+    def walk(node: dict) -> bool:
+        if _declared_expression(node.get("params") or {}):
+            return True
+        return any(walk(child) for child in node_children(node))
+
+    root = tree.get("root")
+    return bool(isinstance(root, dict) and walk(root))
+
+
 def resolve_tree(tree: dict, scope: Dict[str, float]) -> dict:
     """Return a copy of the feature tree with expression-string params evaluated.
 
-    No parameters (empty scope) → the tree is returned unchanged, so documents
-    that never use parameters pay nothing.
+    Nothing to do — no parameters *and* no bindings — and the tree comes back
+    untouched, so a document that never uses parameters pays nothing.
+
+    **A declared expression that does not resolve raises.** It used to be
+    swallowed, to protect enum strings like `"union"` from being read as
+    expressions: the two are told apart by the leading `=` instead, because
+    swallowing it left the *string* in the tree, and it reached the kernel as
+    `unsupported operand type(s) for /: 'str' and 'float'` — a Python error
+    naming neither the feature nor the parameter. `derived.error` carries the
+    typed message instead, which is the supported "bound before defined" state.
     """
-    if not scope:
+    if not scope and not has_expressions(tree):
         return tree
     import copy
 
@@ -135,10 +170,13 @@ def resolve_tree(tree: dict, scope: Dict[str, float]) -> dict:
             for k, v in list(params.items()):
                 if k == "children":
                     continue
+                if _declared_expression(v):
+                    params[k] = _resolve_leaf(v, scope)   # raises, named, typed
+                    continue
                 try:
                     params[k] = _resolve_leaf(v, scope)
                 except ParameterError:
-                    pass  # leave non-expression strings (enums) untouched
+                    pass  # a bare string that is an enum, not an expression
             for child in node_children(node):
                 walk(child)
 

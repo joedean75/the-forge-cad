@@ -53,10 +53,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 
 try:                                     # in this repository
-    from training.copilot_sft import LoRALinear, apply_lora, render
+    from training.copilot_sft import LoRALinear, apply_lora, merge_lora, render
 except ImportError:                      # staged beside the trainer, no package
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from copilot_sft import LoRALinear, apply_lora, render  # noqa: E402
+    from copilot_sft import LoRALinear, apply_lora, merge_lora, render  # noqa: E402
 
 #: One model on one GPU: requests are serialised rather than interleaved, which
 #: would multiply the KV cache by the number of callers and out-of-memory a 6 GB
@@ -90,6 +90,8 @@ def load(args) -> None:
         if not any(k.endswith((".a", ".b")) for k in adapters):
             raise SystemExit("adapter file holds no LoRA tensors")
         print(f"loaded {len(adapters)} adapter tensors from {args.lora}", flush=True)
+        if not args.keep_adapters:
+            print(f"merged {merge_lora(model)} adapters into the base weights", flush=True)
     model.to(device).eval()
     for parameter in model.parameters():
         parameter.requires_grad_(False)
@@ -99,12 +101,13 @@ def load(args) -> None:
     _STATE.update({"model": model, "tokenizer": tokenizer, "device": device,
                    "name": args.model_name, "max_new": args.max_new_tokens,
                    "end_id": tokenizer.encode("<|im_end|>")[0],
+                   "json_stop": not args.no_json_stop,
                    "context": config["context_length"]})
     print(f"serving {args.model_name} on {device}", flush=True)
 
 
 def generate(prompt: str, max_new: int, temperature: float,
-             top_p: float) -> Tuple[str, int, int, str]:
+             top_p: float, json_stop: bool = True) -> Tuple[str, int, int, str]:
     """Greedy or sampled continuation. Returns `(text, prompt_tokens, new_tokens, stop)`."""
     from reasoning_from_scratch.qwen3 import KVCache
 
@@ -125,6 +128,7 @@ def generate(prompt: str, max_new: int, temperature: float,
     cache = KVCache(n_layers=len(model.trf_blocks))
     produced: List[int] = []
     stop = "length"
+    watcher = JsonStop() if json_stop else None
     with torch.no_grad():
         logits = model(tokens, cache=cache)[:, -1]
         for _ in range(max_new):
@@ -147,8 +151,51 @@ def generate(prompt: str, max_new: int, temperature: float,
                 stop = "stop"
                 break
             produced.append(token)
+            if watcher is not None and watcher.feed(tokenizer.decode([token])):
+                stop = "stop"
+                break
             logits = model(nxt, cache=cache)[:, -1]
     return tokenizer.decode(produced), len(ids), len(produced), stop
+
+
+class JsonStop:
+    """Tracks whether one complete JSON object has been produced.
+
+    The protocol's answer is exactly one object, so a closing brace at depth zero
+    is an *exact* stop condition — not a heuristic. It is needed because the
+    fine-tuned model emits a well-formed action and then keeps going instead of
+    its stop token: the token is a single one out of ~80 in each label, so two
+    epochs left it under-learned while the averaged loss looked healthy, and the
+    client correctly rejects a truncated reply. Braces inside strings are
+    ignored, or an argument containing "{" would stop generation early.
+    """
+
+    def __init__(self) -> None:
+        self.depth = 0
+        self.opened = False
+        self.in_string = False
+        self.escaped = False
+
+    def feed(self, text: str) -> bool:
+        for character in text:
+            if self.in_string:
+                if self.escaped:
+                    self.escaped = False
+                elif character == "\\":
+                    self.escaped = True
+                elif character == '"':
+                    self.in_string = False
+                continue
+            if character == '"':
+                self.in_string = True
+            elif character == "{":
+                self.depth += 1
+                self.opened = True
+            elif character == "}":
+                self.depth -= 1
+                if self.opened and self.depth <= 0:
+                    return True
+        return False
 
 
 def _first_json(text: str) -> Optional[dict]:
@@ -201,12 +248,17 @@ def completion(payload: dict) -> dict:
     """One chat completion, in the shape `llm_client._post_chat` reads."""
     messages = payload.get("messages") or []
     prompt, _ = render([*messages, {"role": "assistant", "content": ""}])
-    max_new = int(payload.get("max_tokens") or _STATE["max_new"])
+    # The caller's ceiling, bounded by this server's own. The copilot asks for
+    # 2,400 tokens because a hosted provider answers that in seconds; at ~5
+    # tokens/s here that is eight minutes and every call would pass the
+    # planner's 60 s timeout. An action is a short JSON object, so the
+    # configured cap is the real one.
+    max_new = min(int(payload.get("max_tokens") or _STATE["max_new"]), _STATE["max_new"])
     started = time.time()
     with _LOCK:
         text, prompt_tokens, new_tokens, stop = generate(
             prompt, max_new, float(payload.get("temperature") or 0.0),
-            float(payload.get("top_p") or 0.0))
+            float(payload.get("top_p") or 0.0), json_stop=_STATE["json_stop"])
 
     message = message_for(text, bool(payload.get("tools")))
     return {
@@ -277,6 +329,13 @@ def main(argv=None) -> int:
     parser.add_argument("--lora", default=None, help="LoRA checkpoint from copilot_sft")
     parser.add_argument("--lora-rank", type=int, default=16, dest="lora_rank")
     parser.add_argument("--lora-alpha", type=int, default=32, dest="lora_alpha")
+    parser.add_argument("--no-json-stop", action="store_true", dest="no_json_stop",
+                        help="do not stop at the end of the first JSON object; for "
+                             "measuring whether the model emits its own stop token")
+    parser.add_argument("--keep-adapters", action="store_true", dest="keep_adapters",
+                        help="serve with the adapters as separate layers instead of "
+                             "merging them; slower, and only useful for checking that "
+                             "the merge changed nothing")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8099)

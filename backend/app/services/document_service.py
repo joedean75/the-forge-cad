@@ -577,16 +577,24 @@ def _resolved(doc: DesignDocument, chain: tuple, for_graft: bool) -> dict:
     # copy of it.
     active = feature_ops.resolve_for_evaluation(doc.feature_tree, derive=derive,
                                                 for_graft=for_graft)
-    if doc.parameters:
-        from app.services import parameters
+    # **Run even with no parameters defined.** Binding a feature to `"=length"`
+    # before defining `length` is a supported intermediate state, but skipping
+    # the substitution let the expression *string* through to the kernel, where
+    # it surfaced as `unsupported operand type(s) for /: 'str' and 'float'` —
+    # a leaked Python error where every other failure here names what is wrong.
+    # With an empty scope the substitution raises `unknown parameter 'length'`,
+    # which is the same typed warning a bad expression has always produced.
+    from app.services import parameters
 
-        overrides = {}
-        if doc.active_configuration:
-            cfg = next((c for c in doc.configurations if c.name == doc.active_configuration), None)
-            if cfg:
-                overrides = cfg.overrides
+    overrides = {}
+    if doc.active_configuration:
+        cfg = next((c for c in doc.configurations if c.name == doc.active_configuration), None)
+        if cfg:
+            overrides = cfg.overrides
+    scope: dict = {}
+    if doc.parameters:
         scope, _ = parameters.resolve_values(doc.parameters, overrides)
-        active = parameters.resolve_tree(active, scope)
+    active = parameters.resolve_tree(active, scope)
     return active
 
 

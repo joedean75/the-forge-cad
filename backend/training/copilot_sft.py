@@ -160,6 +160,28 @@ def apply_lora(model: nn.Module, rank: int, alpha: int) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
+def merge_lora(model: nn.Module) -> int:
+    """Fold every adapter into the weight it adapts, and unwrap it.
+
+    For serving. `LoRALinear` costs two extra matmuls per layer per token and
+    runs them in fp32 to keep training stable — 5 tokens/second on a 3050, which
+    is past the planner's 60 s timeout for any real answer. `W + scale * (B @ A)`
+    is the same function of the input, computed once, after which generation is
+    plain bf16 through the original layers. Returns how many were merged.
+    """
+    merged = 0
+    for module in model.modules():
+        for name, child in list(module.named_children()):
+            if isinstance(child, LoRALinear):
+                delta = (child.b @ child.a) * child.scale
+                base = child.base
+                with torch.no_grad():
+                    base.weight.add_(delta.to(base.weight.dtype))
+                setattr(module, name, base)
+                merged += 1
+    return merged
+
+
 def lora_state(model: nn.Module) -> Dict[str, torch.Tensor]:
     return {k: v.detach().cpu() for k, v in model.state_dict().items()
             if k.endswith((".a", ".b"))}

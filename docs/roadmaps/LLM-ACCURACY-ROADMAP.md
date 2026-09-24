@@ -19,7 +19,27 @@
 > was declared on nested objects and never enforced, so `add_primitive` with
 > three invented key names dropped all three and returned a default 50 mm cube.
 >
-> **The goal suite is written and unrun.** `evals/tasks.py::GOALS` holds six
+> **The goal suite has now been run once**, against a local fine-tune of Qwen3
+> 0.6B served through `backend/training/serve.py` (2026-09-24, baseline in
+> `backend/data/eval-goals-finetuned-20260924.json`): **solved 0/6, mean score
+> 0.533, geometry valid 5/6, finished 0/6, mean 3.5 steps, 9 failed calls all
+> `BAD_ARG`.** It builds the first primitive correctly and then stops: no task
+> reached its second feature (no holes, no boss, no fillets, no material), and no
+> run called `finish_task`. That is the expected result for a 0.6B base on 2,004
+> samples and it is a floor, not a verdict on the action space — what it measures
+> is that the surface is drivable and where a small model falls off it. A
+> frontier-model number on the same suite is still missing, and without it there
+> is nothing to compare against.
+>
+> Running it found two real defects, both now fixed: a declared parameter
+> expression bound before its parameter existed reached the kernel as a *string*
+> and came back as `unsupported operand type(s) for /: 'str' and 'float'`
+> (`parameters.resolve_tree` swallowed the typed error to protect enum strings;
+> the two are told apart by the leading `=`), and `evals.agent` never created the
+> schema, so pointing the harness at a throwaway database failed on every
+> persist.
+>
+> **The original note, for the record:** `evals/tasks.py::GOALS` holds six
 > tasks across primitives, holes, booleans, materials and the exact kernel, and
 > they need an API key this environment does not have — `evals.agent --suite
 > goals` exits 2 and says so rather than reporting a number it did not measure.

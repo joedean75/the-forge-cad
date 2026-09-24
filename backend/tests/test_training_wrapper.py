@@ -86,3 +86,46 @@ def test_prose_with_no_json_is_passed_through_not_invented():
     message = serve.message_for("I could not work out what to do.", wants_tools=True)
     assert message["content"].startswith("I could not")
     assert "tool_calls" not in message
+
+
+def test_merging_an_adapter_leaves_the_same_function():
+    """Serving merges LoRA into the weights for speed; the merge has to be a
+    change of representation, not of behaviour."""
+    import torch
+
+    torch.manual_seed(0)
+    base = torch.nn.Linear(8, 4, bias=False)
+    wrapped = copilot_sft.LoRALinear(base, rank=2, alpha=4)
+    with torch.no_grad():                     # give the adapter a real effect
+        wrapped.b.normal_(0, 0.1)
+    holder = torch.nn.Sequential(wrapped)
+    x = torch.randn(3, 8)
+    before = holder(x)
+
+    assert copilot_sft.merge_lora(holder) == 1
+    assert isinstance(holder[0], torch.nn.Linear), "the wrapper is gone"
+    assert torch.allclose(before, holder(x), atol=1e-6)
+
+
+@pytest.mark.parametrize("chunks, stops_after", [
+    (['{"op"', ': "dof"', ', "args": {}', '}'], 4),
+    (['{"a": {"b": 1}', '}'], 2),
+    (['{"note": "a } brace in a string"', '}'], 2),
+    # A quote escaped *inside* the string, built with json.dumps so the escaping
+    # is the real thing. The first version of this case wrote an escaped
+    # backslash followed by a quote, which genuinely ends the JSON string — so
+    # stopping there was right and the test was wrong.
+    ([json.dumps({"note": 'a quote " and a } brace'})[:-1], '}'], 2),
+])
+def test_generation_stops_at_the_end_of_one_json_object(chunks, stops_after):
+    """The protocol's answer is one object, so this is exact rather than a guess —
+    and braces inside strings must not end it early."""
+    watcher = serve.JsonStop()
+    fired = [i + 1 for i, chunk in enumerate(chunks) if watcher.feed(chunk)]
+    assert fired and fired[0] == stops_after
+
+
+def test_the_stop_watcher_ignores_text_before_the_object():
+    watcher = serve.JsonStop()
+    assert not watcher.feed("sure, here you go: ")
+    assert watcher.feed('{"op": "bounding_box", "args": {}}')
