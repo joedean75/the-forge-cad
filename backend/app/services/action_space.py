@@ -148,6 +148,18 @@ def catalog_text(kinds: Optional[Sequence[str]] = None,
     return "\n".join(lines)
 
 
+def rules_text(subject: Optional[str] = None) -> str:
+    """The behaviour rules alone — no output contract, no catalog.
+
+    `system_prompt` adds the contract for the shape of turn the provider is
+    getting; the `finetuned` prompt profile needs the rules *without* it,
+    because it hands over no tools and reads a JSON reply. Exposed here rather
+    than sliced apart at the call site: two copies of this prose is exactly the
+    drift this module exists to prevent.
+    """
+    return _RULES + (_ASSEMBLY_RULES if subject == "assembly" else "")
+
+
 def system_prompt(*, with_tools: bool, subject: Optional[str] = None,
                   names: Optional[set[str]] = None) -> str:
     """The planner's system message.
@@ -156,7 +168,7 @@ def system_prompt(*, with_tools: bool, subject: Optional[str] = None,
     is, the catalog is not repeated in the prompt — the schemas are already
     there, and restating them in prose is the drift this module exists to stop.
     """
-    rules = _RULES + (_ASSEMBLY_RULES if subject == "assembly" else "")
+    rules = rules_text(subject)
     if with_tools:
         return rules + (
             "\n\nCall exactly one operation per turn using the provided tools. "

@@ -54,7 +54,19 @@ import torch.nn.functional as F
 #: Sequence-length buckets. The first step tries the longest sample that fits the
 #: requested cap; on an OOM the cap drops to the next bucket down and the samples
 #: above it are dropped and counted.
-LENGTH_BUCKETS = (4096, 3072, 2048, 1536, 1024, 512)
+#:
+#: The rungs are close together near the top because that is where the corpus
+#: lives and the card runs out. Measured with the tokenizer on the copilot set,
+#: 3,072 keeps 67% of the samples and 2,048 keeps 29%; on the previous corpus,
+#: whose system prompt was 406 tokens longer, the same two rungs were 48% and
+#: **2%**. So the original ladder's one step down from 3,072 was a fall, and a
+#: run that took it would have trained on a twentieth of the set, checkpointed,
+#: and reported a clean finish. `MIN_SURVIVING_FRACTION` is what makes that a
+#: refusal instead, and 2,816 (58%) is a rung rather than a cliff.
+LENGTH_BUCKETS = (4096, 3584, 3072, 2816, 2560, 2048, 1536, 1024, 512)
+
+#: How much of the corpus a step-down may cost before the run refuses to start.
+MIN_SURVIVING_FRACTION = 0.75
 
 
 # --------------------------------------------------------------- the prompt --
@@ -361,10 +373,27 @@ def train(args) -> int:
         print(f"resumed from step {step}", flush=True)
 
     max_len = args.max_len
+    requested_fit = None
     while True:
         rows, dropped = load_samples(Path(args.train), tokenizer, max_len)
         if not rows:
             print("no samples fit; lower --max-len is not the problem", file=sys.stderr)
+            return 2
+        if requested_fit is None:
+            requested_fit = len(rows)
+        elif len(rows) < MIN_SURVIVING_FRACTION * requested_fit:
+            # A cap is a budget; a corpus is the thing being learned. Stepping
+            # down far enough to delete most of it produces a run that finishes,
+            # checkpoints and scores — against a set that no longer contains the
+            # behaviour it was assembled to teach. The longest samples are the ones
+            # with the most steps behind them, so what goes first is exactly the
+            # recovery and finishing turns. Refuse and name the numbers.
+            print(f"refusing: at --max-len {args.max_len} the set is "
+                  f"{requested_fit:,} samples, and this card only reaches "
+                  f"{max_len}, where it is {len(rows):,} "
+                  f"({100 * len(rows) // requested_fit}%). Shorten the prompt "
+                  f"profile or train a smaller base rather than a gutted set.",
+                  file=sys.stderr)
             return 2
         # **The first step measures itself**: the longest surviving sample, so an
         # out-of-memory failure happens in the first seconds rather than at hour

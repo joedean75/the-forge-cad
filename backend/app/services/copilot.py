@@ -223,12 +223,28 @@ def planner_request(goal: str, transcript: List[dict], summary: dict,
         # No schemas, no directory, no tool payload: the weights carry the
         # arguments. The rules and the playbook stay, because they are behaviour
         # rather than signature, and the names stay so the vocabulary is present.
+        #
+        # Two things this profile must *not* say, and both were being sent. It
+        # used to take `system_prompt(with_tools=True)`, whose closing sentence
+        # is "call one operation per turn using the provided tools … reply with
+        # plain text" — against `_DONE_PROTOCOL`'s "respond with exactly one
+        # JSON object", which is the contract that actually applies, while
+        # `tools` returns None. And `CONTROL_RULES` is about `update_work_plan`
+        # and `discover_operations`, neither of which exists here. Dropping the
+        # two is worth 406 tokens on a system prompt that was 1,535 against a
+        # 3,100-token median sample — which is not a saving but a *sample count*:
+        # the cap a 6 GB card imposes falls on the longest samples, and the
+        # longest sample is the one with the most steps behind it. Measured with
+        # the tokenizer at a 3,072-token cap, it moves the surviving set from 48%
+        # to 67% overall, and the two kinds that teach what a one-shot model gets
+        # wrong — 31% to 40% of the recovery samples, 32% to 54% of the finishing
+        # turns — while the short catalog samples were surviving anyway (70% to
+        # 81%), which is the skew being corrected.
         names = sorted(enabled_tools) if enabled_tools is not None else sorted(
             t["function"]["name"] for t in action_space.tools(subject))
-        system = (action_space.system_prompt(with_tools=True, subject=subject,
-                                             names=enabled_tools)
+        system = (action_space.rules_text(subject)
                   + action_space._DONE_PROTOCOL
-                  + copilot_context.control_rules(subject)
+                  + copilot_context.control_rules(subject, planning=False)
                   + "\n\nOperations available (their arguments are not repeated "
                     "here):\n" + ", ".join(names))
         return [

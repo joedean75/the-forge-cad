@@ -129,3 +129,40 @@ def test_the_stop_watcher_ignores_text_before_the_object():
     watcher = serve.JsonStop()
     assert not watcher.feed("sure, here you go: ")
     assert watcher.feed('{"op": "bounding_box", "args": {}}')
+
+
+class _FakeTokenizer:
+    """Decodes one integer per character, so a test can drive the criterion."""
+
+    def decode(self, ids, skip_special_tokens=False):
+        return "".join(chr(int(i)) for i in ids)
+
+
+def test_the_stopping_criterion_feeds_only_what_is_new():
+    """HF's `generate` owns its loop, so the watcher is handed the delta of the
+    decoded continuation. Re-feeding the whole tail would re-count the braces
+    and stop at the first `}` inside a nested object."""
+    import torch
+
+    text = '{"args": {"radius": 1}, "op": "add_hole"}'
+    criterion = serve._JsonStopCriteria(_FakeTokenizer(), prompt_len=2)
+    ids = [ord("x"), ord("y")]                     # the prompt, never fed
+    fired = None
+    for i, ch in enumerate(text):
+        ids.append(ord(ch))
+        if criterion(torch.tensor([ids]), None) and fired is None:
+            fired = i + 1
+    assert fired == len(text), (
+        f"stopped after {fired} of {len(text)} characters — the inner object's "
+        "closing brace ended generation")
+
+
+def test_the_criterion_stays_true_once_it_has_fired():
+    """`generate` may call a criterion again for the batch; a watcher that
+    answered yes and then no would let generation continue past the object."""
+    import torch
+
+    criterion = serve._JsonStopCriteria(_FakeTokenizer(), prompt_len=0)
+    ids = [ord(c) for c in '{"op": "dof"}']
+    assert criterion(torch.tensor([ids]), None)
+    assert criterion(torch.tensor([ids]), None)

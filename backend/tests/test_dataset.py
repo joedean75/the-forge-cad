@@ -275,3 +275,49 @@ def test_recovery_samples_label_the_call_that_recovered():
         if recovery[0].messages[-1].get("tool_calls") else \
         json.loads(recovery[0].messages[-1]["content"])
     assert label, "the label is the correct call, never the refused one"
+
+
+def test_the_finetuned_profile_states_one_output_contract_and_no_discovery():
+    """The profile that trains and serves a local model must not describe the
+    surface it withholds.
+
+    It used to take `system_prompt(with_tools=True)`, whose closing sentence
+    asks for a tool call and a plain-text finish, *and* `_DONE_PROTOCOL`, which
+    asks for one JSON object — while handing over no tools at all. It also
+    carried `CONTROL_RULES`, which tells a planner to load a schema with
+    `discover_operations` before calling an operation; in this profile every
+    name is already listed and no schema is ever sent, so that is an
+    instruction it cannot follow, once per turn, in ~370 tokens. Nothing caught
+    either, because both were correct prose for the other profile.
+    """
+    from app.services import copilot, copilot_context
+
+    messages, tools = copilot.planner_request(
+        "a 40 x 30 x 6 mm plate", [], {"kind": "document"}, profile="finetuned")
+    system = messages[0]["content"]
+
+    assert tools is None
+    assert "EXACTLY ONE JSON object" in system
+    assert "using the provided tools" not in system
+    assert "reply with plain text" not in system
+    assert copilot_context.CONTROL_RULES not in system
+    assert "update_work_plan" not in system
+    # What stays: the failure playbook and the brief rule are about operations
+    # this profile does have, and the brief rule is the only source of the
+    # behaviour — the corpus carries two `set_spec` samples in 2,428. The
+    # playbook's own UNKNOWN_OP line still names `discover_operations`, which is
+    # why this asserts the absence of the *block* rather than of the word: one
+    # stale pointer inside a block that is otherwise about the operations this
+    # profile has is worth keeping the block for, where 434 tokens of rules
+    # about two tools it does not ship is not.
+    assert "PRECONDITION" in system and "set_spec" in system
+
+
+def test_the_full_profile_keeps_the_planning_rules():
+    """The trim is scoped to one profile: production runs on `full`."""
+    from app.services import copilot_context
+
+    full = copilot_context.control_rules("document")
+    assert "discover_operations" in full and "update_work_plan" in full
+    assert copilot_context.CONTROL_RULES not in copilot_context.control_rules(
+        "document", planning=False)

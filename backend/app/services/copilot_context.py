@@ -223,15 +223,23 @@ BRIEF_RULE = """
 """
 
 
-def control_rules(subject: str = "document") -> str:
+def control_rules(subject: str = "document", *, planning: bool = True) -> str:
     """The standing rules, plus the ones that only make sense for this subject.
 
     Assembled here rather than concatenated at the call site because the planner
     prompt is built twice — once for tool-calling providers and once, from
     scratch, for prose ones — and a rule added to only one of them is a rule
     production sends to half its runs.
+
+    ``planning=False`` drops `CONTROL_RULES`, which is about `update_work_plan`
+    and `discover_operations`. The `finetuned` profile ships neither — it sends
+    every operation name and no schemas — so there telling a planner to load a
+    schema before calling it is an instruction it cannot follow, and 434 tokens
+    of it on every turn. The playbook and the brief rule stay: those are about
+    the operations that profile does have.
     """
-    return CONTROL_RULES + PLAYBOOK + (BRIEF_RULE if subject == "document" else "")
+    return ((CONTROL_RULES if planning else "") + PLAYBOOK
+            + (BRIEF_RULE if subject == "document" else ""))
 
 
 def control_tools() -> list[dict]:

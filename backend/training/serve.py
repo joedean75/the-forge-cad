@@ -66,6 +66,8 @@ _STATE: Dict[str, Any] = {}
 
 
 def load(args) -> None:
+    if args.hf:
+        return _load_hf(args)
     sys.path.insert(0, str(Path(args.package).resolve()))
     from reasoning_from_scratch.qwen3 import (QWEN_CONFIG_06_B, Qwen3Model,
                                              Qwen3Tokenizer)
@@ -102,13 +104,117 @@ def load(args) -> None:
                    "name": args.model_name, "max_new": args.max_new_tokens,
                    "end_id": tokenizer.encode("<|im_end|>")[0],
                    "json_stop": not args.no_json_stop,
+                   "backend": "book",
                    "context": config["context_length"]})
     print(f"serving {args.model_name} on {device}", flush=True)
+
+
+def _load_hf(args) -> None:
+    """Serve a Hugging Face causal LM — the same adapter contract, other weights.
+
+    The trainer grew `--hf` because the book's package ships 0.6B and nothing
+    else, and a base that can be trained and not served is a base nobody can
+    evaluate. `LoRALinear` wraps `nn.Linear` whatever built it and `LORA_TARGETS`
+    carries both naming schemes, so the adapters, the strictness about unexpected
+    keys and the merge are the ones above rather than a second implementation.
+    """
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    device = torch.device(args.device if args.device != "auto" else
+                          ("cuda" if torch.cuda.is_available() else "cpu"))
+    dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+    tokenizer = AutoTokenizer.from_pretrained(args.hf)
+    model = AutoModelForCausalLM.from_pretrained(args.hf, dtype=dtype)
+    if args.lora:
+        apply_lora(model, args.lora_rank, args.lora_alpha)
+        saved = torch.load(args.lora, map_location="cpu", weights_only=True)
+        adapters = saved.get("lora", saved)
+        _, unexpected = model.load_state_dict(adapters, strict=False)
+        if unexpected:
+            raise SystemExit(f"adapter has keys this model does not: {unexpected[:3]}")
+        if not any(k.endswith((".a", ".b")) for k in adapters):
+            raise SystemExit("adapter file holds no LoRA tensors")
+        print(f"loaded {len(adapters)} adapter tensors from {args.lora}", flush=True)
+        if not args.keep_adapters:
+            print(f"merged {merge_lora(model)} adapters into the base weights", flush=True)
+    model.to(device).eval()
+    for parameter in model.parameters():
+        parameter.requires_grad_(False)
+
+    # `<|im_end|>` is what `render` writes and what the labels end with, so it is
+    # the stop token whatever the tokenizer nominates as its own eos.
+    end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+    if end_id is None or end_id == tokenizer.unk_token_id:
+        raise SystemExit("this tokenizer has no <|im_end|>; the trained format "
+                         "would have no stop token")
+    _STATE.update({"model": model, "tokenizer": tokenizer, "device": device,
+                   "name": args.model_name, "max_new": args.max_new_tokens,
+                   "end_id": end_id, "json_stop": not args.no_json_stop,
+                   "backend": "hf",
+                   "context": getattr(model.config, "max_position_embeddings", 32768)})
+    print(f"serving {args.model_name} ({args.hf}) on {device}", flush=True)
+
+
+class _JsonStopCriteria:
+    """`JsonStop` as a transformers stopping criterion.
+
+    The book loop can ask the watcher about each token as it decodes; HF's
+    `generate` owns its loop, so the watcher is fed the *delta* of the decoded
+    continuation on each call. Decoding the whole tail and feeding it again
+    would re-count braces and stop at the first one.
+    """
+
+    def __init__(self, tokenizer, prompt_len: int) -> None:
+        self.tokenizer, self.prompt_len = tokenizer, prompt_len
+        self.watcher, self.fed, self.hit = JsonStop(), 0, False
+
+    def __call__(self, input_ids, scores, **kwargs) -> bool:
+        text = self.tokenizer.decode(input_ids[0][self.prompt_len:],
+                                     skip_special_tokens=True)
+        delta, self.fed = text[self.fed:], len(text)
+        if delta and self.watcher.feed(delta):
+            self.hit = True
+        return self.hit
+
+
+def _generate_hf(prompt: str, max_new: int, temperature: float,
+                 top_p: float, json_stop: bool) -> Tuple[str, int, int, str]:
+    from transformers import StoppingCriteriaList
+
+    model, tokenizer = _STATE["model"], _STATE["tokenizer"]
+    # `add_special_tokens=False`: the prompt `render` produced already carries
+    # its own `<|im_start|>` markers, and a tokenizer that prepends its own puts
+    # the model one token off the format it was trained on.
+    ids = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
+    if ids["input_ids"].shape[1] >= _STATE["context"]:
+        raise ValueError(f"prompt is {ids['input_ids'].shape[1]} tokens; the "
+                         f"model's context is {_STATE['context']}")
+    ids = {k: v.to(_STATE["device"]) for k, v in ids.items()}
+    prompt_len = ids["input_ids"].shape[1]
+    criteria = _JsonStopCriteria(tokenizer, prompt_len) if json_stop else None
+    with torch.no_grad():
+        out = model.generate(
+            **ids, max_new_tokens=max_new, eos_token_id=_STATE["end_id"],
+            pad_token_id=tokenizer.pad_token_id or _STATE["end_id"],
+            do_sample=bool(temperature and temperature > 0),
+            **({"temperature": temperature, "top_p": top_p}
+               if temperature and temperature > 0 else {}),
+            stopping_criteria=(StoppingCriteriaList([criteria]) if criteria else None))
+    produced = out[0][prompt_len:]
+    text = tokenizer.decode(produced, skip_special_tokens=True)
+    stop = "length"
+    if criteria is not None and criteria.hit:
+        stop = "stop"
+    elif len(produced) and int(produced[-1]) == _STATE["end_id"]:
+        stop = "stop"
+    return text, prompt_len, len(produced), stop
 
 
 def generate(prompt: str, max_new: int, temperature: float,
              top_p: float, json_stop: bool = True) -> Tuple[str, int, int, str]:
     """Greedy or sampled continuation. Returns `(text, prompt_tokens, new_tokens, stop)`."""
+    if _STATE.get("backend") == "hf":
+        return _generate_hf(prompt, max_new, temperature, top_p, json_stop)
     from reasoning_from_scratch.qwen3 import KVCache
 
     model, tokenizer = _STATE["model"], _STATE["tokenizer"]
@@ -323,8 +429,10 @@ class Handler(BaseHTTPRequestHandler):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--weights", required=True, help="qwen3-0.6B-base.pth")
-    parser.add_argument("--package", required=True,
+    parser.add_argument("--weights", help="qwen3-0.6B-base.pth (the book backend)")
+    parser.add_argument("--hf", help="a Hugging Face model id or path to serve "
+                                     "instead of the book's .pth")
+    parser.add_argument("--package", required=False,
                         help="directory containing the reasoning_from_scratch package")
     parser.add_argument("--lora", default=None, help="LoRA checkpoint from copilot_sft")
     parser.add_argument("--lora-rank", type=int, default=16, dest="lora_rank")
@@ -343,6 +451,13 @@ def main(argv=None) -> int:
     parser.add_argument("--model-name", default="forge-copilot-qwen3-0.6b",
                         dest="model_name")
     args = parser.parse_args(argv)
+    # argparse cannot say "one of these two": a `--weights` left required would
+    # refuse an HF run, and both left optional would reach `load` with nothing to
+    # load and fail somewhere less clear.
+    if not args.hf and not (args.weights and args.package):
+        parser.error("give --hf MODEL, or both --weights and --package")
+    if args.hf and args.weights:
+        parser.error("--hf and --weights name two different models to serve")
 
     load(args)
     server = ThreadingHTTPServer((args.host, args.port), Handler)

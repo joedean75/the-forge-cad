@@ -90,6 +90,25 @@ Three things that decide those numbers, each of which was wrong first:
   For 4B or 9B in bf16, an hour on a rented 24 GB GPU costs a dollar or two and
   the dataset is only ~7 M tokens an epoch.
 
+## Two flags that decide the wall clock
+
+`step` counts **samples**, not optimizer updates, and two defaults are read
+against it:
+
+* `--log-every 25` with `--val-size 32` runs 32 forward passes every 25 samples.
+  On the 0.6B that is cheap; on a 2B at ~2,250 tokens it is **40% of the run's
+  wall clock**, which turns a six-hour epoch into eight and a half. `--log-every
+  100 --val-size 16` is ~5% and still gives a couple of dozen loss points.
+* `--accumulate` divides the update count, not the sample count. At 8 over 2,200
+  samples that is 275 updates an epoch, where the 0.6B run that converged took
+  ~1,600. Accumulation is free in memory, so the number to pick is about gradient
+  noise against update count, not about fitting.
+
+Serving follows the same split: `--hf` on `serve.py` loads what `--hf` on the
+trainer trained, merges the adapter and stops on `<|im_end|>` through a
+`StoppingCriteria` wrapping the same `JsonStop`. A base that trains and cannot
+be served is a base nobody can evaluate.
+
 ## What is measured, and what is not
 
 * The wrapper works: consecutive completions return the OpenAI shape with usage,
