@@ -19,6 +19,15 @@
 > was declared on nested objects and never enforced, so `add_primitive` with
 > three invented key names dropped all three and returned a default 50 mm cube.
 >
+> **Opus 5 on the same suite, for comparison** (2026-09-24, $1.43 through
+> OpenRouter, baseline in `backend/data/eval-goals-opus-20260924.json`):
+> **solved 5/6, mean score 0.900, geometry 6/6, finished 4/6, mean 2.33 steps,
+> 1 failed call.** So the action space is drivable and the 0/6 below is the
+> model, not the surface. The one task Opus lost is `plate-4-holes`, where it
+> built a 180 mm plate against a 100 mm requirement and was refused — the same
+> task the fine-tune also failed, which makes it the first place to look at the
+> *task* rather than the model.
+>
 > **The goal suite has now been run once**, against a local fine-tune of Qwen3
 > 0.6B served through `backend/training/serve.py` (2026-09-24, baseline in
 > `backend/data/eval-goals-finetuned-20260924.json`): **solved 0/6, mean score

@@ -325,6 +325,99 @@ def samples_from_document(doc_id: str, goal: str, *, source: str,
     return samples
 
 
+# ------------------------------------------------------------ recovery pairs --
+
+#: How a call is made wrong. Both kinds are refused by `op_schema.validate`
+#: *before* a handler runs, which is what makes them safe to inject: the
+#: document is untouched, so the correct call that follows behaves exactly as it
+#: would have alone. A mutation that could half-apply would corrupt the very
+#: sequence the sample is teaching.
+def _without_a_required_argument(op: str, args: dict) -> Optional[dict]:
+    """Drop a required argument — a `MISSING_ARG`."""
+    from app.services import cad_operations
+
+    required = [name for name, spec in (cad_operations.OPERATIONS[op].params or {}).items()
+                if isinstance(spec, dict) and spec.get("required") and name in args]
+    if not required:
+        return None
+    return {k: v for k, v in args.items() if k != required[0]}
+
+
+def _with_an_invented_argument(op: str, args: dict) -> Optional[dict]:
+    """Add a plausible name the schema does not declare — a `BAD_ARG`.
+
+    The failure the logs show most: `add_primitive` with `width`/`depth` instead
+    of `params.size`, which used to be dropped on the floor and answered with a
+    default cube until `additionalProperties: false` was enforced.
+    """
+    invented = {"add_primitive": "width", "add_extrude": "height",
+                "add_hole": "diameter", "set_feature_params": "value"}
+    return {**args, invented.get(op, "size_mm"): 10.0}
+
+
+MUTATIONS = (_with_an_invented_argument, _without_a_required_argument)
+
+
+def recovery_samples_from_document(doc_id: str, goal: str, *, source: str,
+                                  every: int = 1, resolution: int = 48) -> List[Sample]:
+    """Turn samples where the label is the call that *recovered* from a failure.
+
+    The corpus's thinnest spot: one recovery sample in 2,004, while recovering
+    from a typed failure is most of what an agent does — and the fine-tune
+    duly stopped at the first refusal in five of six eval tasks. So a verified
+    sequence is replayed with a deliberately wrong call injected before every
+    `every`-th step. The wrong call is **really executed**, so the transcript
+    carries the real code and message, and it is never the label.
+    """
+    from app.services import cad_operations, decompiler, document_service, trajectories
+
+    report = decompiler.decompile_document(doc_id, goal=goal, resolution=resolution,
+                                           record=False)
+    if not report.get("ok") or not report.get("steps"):
+        _drop(f"{source}:not_decompilable")
+        return []
+
+    fresh = document_service.create_document(name=f"recovery {doc_id[:8]}", owner_id="dataset")
+    created: List[Optional[str]] = []
+    groups: List[Optional[str]] = []
+    injected = 0
+    with trajectories.recording(fresh.id, goal=goal, kind="recovery") as tid:
+        for index, step in enumerate(report["steps"]):
+            args = decompiler.resolve_refs(step["args"], created, groups)
+            if index % every == 0:
+                for mutate in MUTATIONS:
+                    wrong = mutate(step["op"], args)
+                    if wrong is None or wrong == args:
+                        continue
+                    env = cad_operations.execute(step["op"], fresh.id, wrong)
+                    if env["ok"]:
+                        # It was accepted, so it changed the document and the
+                        # sequence no longer describes this body. Stop rather
+                        # than teach a corrupted transcript.
+                        _drop(f"{source}:mutation_accepted")
+                        return []
+                    injected += 1
+                    break
+            env = cad_operations.execute(step["op"], fresh.id, args)
+            if not env["ok"]:
+                _drop(f"{source}:recovery_replay_failed")
+                return []
+            result = env.get("result") or {}
+            created.append(result.get("feature_id"))
+            groups.append(result.get("group_id"))
+    if not injected:
+        return []
+    record = trajectories.get(tid)
+    if record is None:
+        return []
+    record = {**record, "outcome": "done", "subject": "document"}
+    samples = samples_from_record(record, source=source, synthetic_finish=True,
+                                  profile=_PROFILE.get("value", "full"))
+    for sample in samples:
+        sample.meta.update({"source": source, "verified": True, "injected_failures": injected})
+    return samples
+
+
 # ------------------------------------------------------------------ sources --
 
 def recorded_samples(*, include_unfinished: bool = False,
@@ -344,6 +437,9 @@ def recorded_samples(*, include_unfinished: bool = False,
 #: `by_cause`: a build that silently drops two thirds of a catalog is one whose
 #: coverage nobody can see.
 DROPS: Dict[str, int] = {}
+#: The prompt profile the current build is using, for paths that are called
+#: without it being threaded through every argument list.
+_PROFILE: Dict[str, str] = {"value": "full"}
 
 
 def _drop(cause: str) -> None:
@@ -446,6 +542,43 @@ def template_samples(*, owner_id: str = "dataset", variations: int = 0,
             if not varied:
                 _drop("variation:not_decompilable")
             out.extend(varied)
+    return out
+
+
+def recovery_from_templates(limit: Optional[int] = None, *,
+                            owner_id: str = "dataset",
+                            catalog_parts: int = 60) -> List[Sample]:
+    """Recovery pairs over the starter templates and their variations.
+
+    The templates are used because their sequences are known to replay exactly,
+    so an injected refusal is the only thing that differs from the plain sample —
+    which is what makes the pair teach recovery rather than noise.
+    """
+    from app.services import cad_operations, document_service as docs
+    from app.services import templates
+
+    out: List[Sample] = []
+    for row in templates.describe()[: limit or None]:
+        doc = docs.create_document(name=f"recovery {row['key']}", owner_id=owner_id)
+        if not cad_operations.execute("apply_template", doc.id, {"template": row["key"]},
+                                      include_state=False)["ok"]:
+            _drop("recovery:template_not_applied")
+            continue
+        goal = f"{row.get('name') or row['key']}: {row.get('description') or row['key']}"
+        out.extend(recovery_samples_from_document(doc.id, goal, source="recovery"))
+
+    # The catalog too, and not for volume: its sequences are short, so a refusal
+    # lands on the *first* call, which is exactly where the fine-tune stopped in
+    # five of six eval tasks.
+    from app.services import parts_catalog, standard_parts
+
+    for entry in parts_catalog.catalog()[:catalog_parts]:
+        try:
+            doc_id = standard_parts.document_for(entry, owner_id)
+        except Exception:  # noqa: BLE001
+            continue
+        goal = f"{entry.designation} — {entry.category}, built to {entry.standard}"
+        out.extend(recovery_samples_from_document(doc_id, goal, source="recovery"))
     return out
 
 

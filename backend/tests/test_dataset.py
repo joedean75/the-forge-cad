@@ -234,3 +234,44 @@ def test_a_converted_sequence_is_kept_only_if_it_builds_the_source_s_body(tmp_pa
     wrong = {**row, "expect": {"size_mm": {"x": 120, "y": 60, "z": 10}}}
     assert external.samples_from_file(_write(tmp_path, [wrong])) == []
     assert external.DROPS.get("verify:bbox_mismatch") == 1
+
+
+# ------------------------------------------------------ recovery pairs, injected
+
+def test_an_injected_call_is_refused_before_it_can_change_anything():
+    """Both mutations have to fail *at validation*: one that half-applied would
+    corrupt the sequence the sample is meant to teach."""
+    from app.services import cad_operations
+
+    doc = document_service.create_document(name="mutation check")
+    args = {"shape": "box", "params": {"size": {"x": 0.04, "y": 0.03, "z": 0.006}}}
+    for mutate in corpus.MUTATIONS:
+        wrong = mutate("add_primitive", args)
+        if wrong is None:
+            continue
+        env = cad_operations.execute("add_primitive", doc.id, wrong, include_state=False)
+        assert not env["ok"], f"{mutate.__name__} was accepted: {wrong}"
+        assert env["error"]["code"] in ("BAD_ARG", "MISSING_ARG")
+    features = cad_operations.execute("list_features", doc.id, {}, include_state=False)
+    assert not [f for f in features["result"]["features"] if f["type"] == "BoxFeature"]
+
+
+def test_recovery_samples_label_the_call_that_recovered():
+    from app.services import cad_operations, templates
+
+    key = templates.describe()[0]["key"]
+    doc = document_service.create_document(name="recovery source", owner_id="dataset")
+    assert cad_operations.execute("apply_template", doc.id, {"template": key},
+                                 include_state=False)["ok"]
+    samples = corpus.recovery_samples_from_document(doc.id, "a starter plate",
+                                                    source="recovery")
+    assert samples, "the starter templates replay exactly, so this must produce pairs"
+    recovery = [s for s in samples if s.meta.get("recovers_failure")]
+    assert recovery, "the point of the source"
+    shown = recovery[0].messages[-2]["content"]
+    shown = shown if isinstance(shown, str) else json.dumps(shown)
+    assert "BAD_ARG" in shown or "MISSING_ARG" in shown, "the real typed code, executed"
+    label = json.loads(recovery[0].messages[-1]["tool_calls"][0]["function"]["arguments"]) \
+        if recovery[0].messages[-1].get("tool_calls") else \
+        json.loads(recovery[0].messages[-1]["content"])
+    assert label, "the label is the correct call, never the refused one"

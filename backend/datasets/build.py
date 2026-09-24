@@ -28,7 +28,7 @@ from typing import List
 # one it used, in the card.
 from datasets import corpus  # noqa: E402
 
-SOURCES = ("recorded", "catalog", "template", "library", "imported")
+SOURCES = ("recorded", "catalog", "template", "library", "recovery", "imported")
 
 
 def _gather(names: List[str], args) -> List[corpus.Sample]:
@@ -42,6 +42,8 @@ def _gather(names: List[str], args) -> List[corpus.Sample]:
         elif name == "template":
             samples += corpus.template_samples(variations=args.variations,
                                                profile=args.profile)
+        elif name == "recovery":
+            samples += corpus.recovery_from_templates(limit=args.recovery_limit)
         elif name == "library":
             samples += corpus.library_samples(args.owner, limit=args.library_limit,
                                               profile=args.profile)
@@ -72,7 +74,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", required=True, help="directory to write into")
-    parser.add_argument("--sources", default="recorded,catalog,template",
+    parser.add_argument("--sources", default="recorded,catalog,template,recovery",
                         help=f"comma-separated: {', '.join(SOURCES)}")
     parser.add_argument("--val-fraction", type=float, default=0.1,
                         help="share of *sources* held out (never of samples)")
@@ -82,6 +84,9 @@ def main(argv=None) -> int:
                              "schemas and the operation directory — for a model that "
                              "has the API in its weights, and the profile that run "
                              "must then be served with (FORGE_COPILOT_PROMPT)")
+    parser.add_argument("--recovery-limit", type=int, default=None, dest="recovery_limit",
+                        help="how many template sequences to replay with a refused call "
+                             "injected before the correct one; the corpus's thinnest spot")
     parser.add_argument("--variations", type=int, default=3,
                         help="how many re-dimensioned copies of each template to build; "
                              "each is a verified sequence with a goal stating its sizes")
@@ -93,6 +98,7 @@ def main(argv=None) -> int:
                              "a truncated run's last action is not evidence)")
     args = parser.parse_args(argv)
 
+    corpus._PROFILE["value"] = args.profile
     names = [n.strip() for n in args.sources.split(",") if n.strip()]
     print(f"building from: {', '.join(names)}", flush=True)
     samples = _gather(names, args)

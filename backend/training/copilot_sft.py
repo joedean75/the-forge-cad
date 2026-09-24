@@ -379,7 +379,10 @@ def main(argv=None) -> int:
                         help="directory containing the reasoning_from_scratch package")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--max-len", type=int, default=4096, dest="max_len")
-    parser.add_argument("--epochs", type=int, default=2)
+    # One, measured: on the first real run the validation loss went 0.463 ->
+    # 0.103 by step 1,625 and then moved ±0.003 for the remaining 2,300 steps, so
+    # the second epoch cost three hours and bought nothing.
+    parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--grad-clip", type=float, default=1.0, dest="grad_clip")
     parser.add_argument("--lora-rank", type=int, default=16, dest="lora_rank")
