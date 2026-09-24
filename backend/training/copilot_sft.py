@@ -144,7 +144,11 @@ class LoRALinear(nn.Module):
 
 #: Which projections get adapters. Attention and MLP both: adapting attention
 #: alone teaches routing without teaching the argument values a CAD call needs.
-LORA_TARGETS = ("W_query", "W_key", "W_value", "out_proj", "fc1", "fc2", "fc3")
+#: Two naming conventions, because the same list has to find them in the book's
+#: Qwen3 and in a transformers model — with the book's names only, `--hf` wrapped
+#: nothing, froze everything, and the first backward had no graph to walk.
+LORA_TARGETS = ("W_query", "W_key", "W_value", "out_proj", "fc1", "fc2", "fc3",
+                "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
 
 
 def apply_lora(model: nn.Module, rank: int, alpha: int) -> int:
@@ -224,6 +228,36 @@ def loss_of(model, row: dict, device) -> torch.Tensor:
     return F.cross_entropy(logits.reshape(-1, logits.size(-1)).float(), labels.reshape(-1))
 
 
+def loss_of_hf(model, row: dict, device) -> torch.Tensor:
+    """The same masked cross-entropy through a transformers model.
+
+    The head runs on the supervised positions only, here as in the book path,
+    because it decides whether a 2B fits at all: logits for 3,000 positions over
+    a 151k vocabulary are 0.9 GiB and their gradient another 0.9 GiB, against
+    ~1.5 GiB of headroom on a 6 GB card. `model.model` (the body) and
+    `model.lm_head` are the standard shape of a causal LM in transformers; a
+    model that does not have them falls back to the whole-sequence loss, which is
+    correct and merely heavier.
+    """
+    ids = torch.tensor(row["prompt"] + row["target"], dtype=torch.long, device=device)[None]
+    body, head = getattr(model, "model", None), getattr(model, "lm_head", None)
+    if body is None or head is None:
+        labels = ids.clone()
+        labels[:, :len(row["prompt"])] = -100      # supervise the answer only
+        return model(input_ids=ids, labels=labels).loss
+
+    hidden = body(input_ids=ids).last_hidden_state
+    start, end = len(row["prompt"]) - 1, ids.shape[1] - 1
+    logits = head(hidden[:, start:end])
+    labels = ids[:, start + 1:end + 1]
+    return F.cross_entropy(logits.reshape(-1, logits.size(-1)).float(), labels.reshape(-1))
+
+
+def step_loss(model, row: dict, device, args):
+    """Whichever loss this backend uses."""
+    return loss_of_hf(model, row, device) if args.hf else loss_of(model, row, device)
+
+
 def forward_hidden(model, ids: torch.Tensor) -> torch.Tensor:
     """The transformer body, with each block gradient-checkpointed."""
     from torch.utils.checkpoint import checkpoint
@@ -244,24 +278,66 @@ def forward_hidden(model, ids: torch.Tensor) -> torch.Tensor:
 
 # ------------------------------------------------------------------ the loop --
 
-def train(args) -> int:
+def _load_book_model(args, device):
+    """Qwen3 0.6B from the book's own `.pth` and tokenizer."""
     sys.path.insert(0, str(Path(args.package).resolve()))
     from reasoning_from_scratch.qwen3 import (QWEN_CONFIG_06_B, Qwen3Model,
                                              Qwen3Tokenizer)
 
-    device = torch.device(args.device if args.device != "auto" else
-                          ("cuda" if torch.cuda.is_available() else "cpu"))
-    print(f"device: {device}", flush=True)
     patch_attention()
-
     tokenizer = Qwen3Tokenizer(tokenizer_file_path=str(Path(args.weights).parent /
                                                        "tokenizer-base.json"))
     config = dict(QWEN_CONFIG_06_B)
     config["dtype"] = torch.bfloat16 if device.type == "cuda" else torch.float32
     model = Qwen3Model(config)
-    state = torch.load(args.weights, map_location="cpu", weights_only=True)
-    model.load_state_dict(state)
+    model.load_state_dict(torch.load(args.weights, map_location="cpu", weights_only=True))
+    return model, tokenizer
+
+
+def _load_hf_model(args, device):
+    """Any Hugging Face causal LM — how a base larger than 0.6B is reached.
+
+    The book's package ships 0.6B and nothing else, so `--hf` is the door to
+    Qwen3.5-2B (measured elsewhere at ~5 GB for bf16 LoRA, which fits this card)
+    and to 4B/9B on a bigger one. `LoRALinear` wraps `nn.Linear` whatever built
+    it, so the adapters, the merge and the checkpoints are unchanged; what
+    differs is that attention comes from transformers (already memory-efficient,
+    so no patch) and the tokenizer from the model's own files.
+    """
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(args.hf)
+    model = AutoModelForCausalLM.from_pretrained(
+        args.hf, dtype=torch.bfloat16 if device.type == "cuda" else torch.float32,
+        attn_implementation="sdpa", low_cpu_mem_usage=True)
+    model.config.use_cache = False
+    # **Checkpointing needs the model training and the inputs requiring grad.**
+    # Measured without this, Qwen3.5-2B peaked at 15.5 GiB for a 1,536-token
+    # sample — every activation kept — which on a 6 GiB card meant Windows
+    # spilling to host memory at 62 s/step against 4.8 s for the 0.6B. With a
+    # frozen base under LoRA, the embedding output is the first tensor that has
+    # to carry grad, or every block's recompute is skipped as pointless.
+    if hasattr(model, "enable_input_require_grads"):
+        model.enable_input_require_grads()
+    if hasattr(model, "gradient_checkpointing_enable"):
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False})
+    model.train()
+    return model, tokenizer
+
+
+def train(args) -> int:
+    device = torch.device(args.device if args.device != "auto" else
+                          ("cuda" if torch.cuda.is_available() else "cpu"))
+    print(f"device: {device}", flush=True)
+
+    model, tokenizer = (_load_hf_model(args, device) if args.hf
+                        else _load_book_model(args, device))
     trainable = apply_lora(model, args.lora_rank, args.lora_alpha)
+    if not trainable:
+        print("no LoRA adapters were attached: this model's linear layers are named "
+              f"none of {LORA_TARGETS}", file=sys.stderr)
+        return 2
     model.to(device)
     print(f"trainable parameters: {trainable:,} (LoRA rank {args.lora_rank})", flush=True)
 
@@ -294,7 +370,7 @@ def train(args) -> int:
         # out-of-memory failure happens in the first seconds rather than at hour
         # three, and the cap steps down instead of the run dying.
         try:
-            probe = loss_of(model, rows[0], device)
+            probe = step_loss(model, rows[0], device, args)
             probe.backward()
             optimizer.zero_grad(set_to_none=True)
             print(f"max_len {max_len}: longest sample {rows[0]['length']} tokens fits "
@@ -326,25 +402,35 @@ def train(args) -> int:
           flush=True)
 
     started = time.time()
+    pending = 0
     for epoch in range(1, args.epochs + 1):
         for row in training:
             if args.max_steps and step >= args.max_steps:
                 break
             model.train()
-            loss = loss_of(model, row, device)
+            # **Accumulated, not batched.** Measured on a 6 GB card at 3,072
+            # tokens: one sample peaks at 2.01 GiB and four accumulated at 2.05,
+            # because the graph is freed after each backward — a real batch of
+            # four would multiply the activations instead. So the effective batch
+            # costs nothing here, and a step per sample (what this did first) is
+            # a needlessly noisy gradient.
+            loss = step_loss(model, row, device, args) / args.accumulate
             loss.backward()
-            torch.nn.utils.clip_grad_norm_([p for p in model.parameters()
-                                            if p.requires_grad], args.grad_clip)
-            optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
+            pending += 1
+            if pending >= args.accumulate:
+                torch.nn.utils.clip_grad_norm_([p for p in model.parameters()
+                                                if p.requires_grad], args.grad_clip)
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                pending = 0
             step += 1
 
             if step % args.log_every == 0:
                 model.eval()
                 with torch.no_grad():
-                    val = (sum(loss_of(model, r, device).item() for r in validation)
+                    val = (sum(step_loss(model, r, device, args).item() for r in validation)
                            / max(len(validation), 1)) if validation else float("nan")
-                writer.writerow([step, epoch, round(loss.item(), 6), round(val, 6),
+                writer.writerow([step, epoch, round(loss.item() * args.accumulate, 6), round(val, 6),
                                  max_len, round(time.time() - started, 1)])
                 metrics.flush()
                 print(f"[epoch {epoch} step {step}] train {loss.item():.4f} val {val:.4f}",
@@ -374,9 +460,11 @@ def main(argv=None) -> int:
     parser.add_argument("--train", required=True, help="train.jsonl from datasets.build")
     parser.add_argument("--val", default=None, help="val.jsonl from datasets.build")
     parser.add_argument("--out", required=True, help="directory for checkpoints and metrics")
-    parser.add_argument("--weights", required=True, help="qwen3-0.6B-base.pth")
-    parser.add_argument("--package", required=True,
+    parser.add_argument("--weights", help="qwen3-0.6B-base.pth (the book's backend)")
+    parser.add_argument("--package",
                         help="directory containing the reasoning_from_scratch package")
+    parser.add_argument("--hf", help="a Hugging Face model id or path to train instead "
+                                     "of the book's 0.6B, e.g. Qwen/Qwen3.5-2B")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--max-len", type=int, default=4096, dest="max_len")
     # One, measured: on the first real run the validation loss went 0.463 ->
@@ -384,6 +472,10 @@ def main(argv=None) -> int:
     # the second epoch cost three hours and bought nothing.
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--accumulate", type=int, default=8,
+                        help="samples per optimizer step. Free in memory (the graph is "
+                             "freed after each backward), so this is how to get an "
+                             "effective batch on a small card")
     parser.add_argument("--grad-clip", type=float, default=1.0, dest="grad_clip")
     parser.add_argument("--lora-rank", type=int, default=16, dest="lora_rank")
     parser.add_argument("--lora-alpha", type=int, default=32, dest="lora_alpha")
@@ -394,7 +486,10 @@ def main(argv=None) -> int:
                         help="stop after this many steps (0 = the full run)")
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--resume", action="store_true")
-    return train(parser.parse_args(argv))
+    args = parser.parse_args(argv)
+    if not args.hf and not (args.weights and args.package):
+        parser.error("give --hf <model>, or --weights and --package for the book's 0.6B")
+    return train(args)
 
 
 if __name__ == "__main__":

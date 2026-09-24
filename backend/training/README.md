@@ -59,6 +59,37 @@ FORGE_COPILOT_PROMPT=finetuned
 Then `evals/agent.py` scores it against the same reward function every other run
 is scored by, and `GET /api/llm/config` lists it like any other model.
 
+## What fits on 6 GB, measured
+
+`probe_memory.py` runs one forward/backward and reports the peak, which is the
+only honest way to answer "will this base train here". On an RTX 3050 6 GB
+(5.94 GiB free), rank-16 LoRA, gradient checkpointing, head on the supervised
+positions:
+
+| base | weights | peak @3,072 tok | s/sample | verdict |
+|---|---|---|---|---|
+| Qwen3-0.6B (book `.pth`) | 1.48 GiB | 2.01 GiB | 4.8 | comfortable |
+| Qwen3.5-2B (`--hf`) | 3.55 GiB | 5.19 GiB | 13.2 | fits at a 3,072 cap |
+| Qwen3.5-2B @4,096 | 3.55 GiB | 6.23 GiB | 23.9 | spills to host RAM |
+| Qwen3.5-4B | ~7.5 GiB | — | — | weights alone exceed the card |
+| Qwen3.5-9B | ~17 GiB | — | — | no |
+
+Three things that decide those numbers, each of which was wrong first:
+
+* **Accumulate, never batch.** Four samples accumulated peak at 2.05 GiB against
+  2.01 for one, because the graph is freed after each backward — a real batch of
+  four multiplies the activations. `--accumulate` is therefore how to get an
+  effective batch here, and it is free.
+* **Checkpointing needs `model.train()` and `enable_input_require_grads()`.**
+  Without them the 2B kept every activation: 15.5 GiB for a *1,536*-token sample,
+  which the driver served by spilling to system memory at 62 s/step against
+  4.8 s for the 0.6B. That 13x is what "use a CPU/GPU combination" actually buys.
+* **4-bit is the only route to 4B on this card** (weights ~2.4 GiB), and it needs
+  `bitsandbytes`, which is not installed — and Unsloth advises against QLoRA for
+  Qwen3.5 specifically, so a 4-bit run wants a base like Qwen3-4B or Gemma-3-4B.
+  For 4B or 9B in bf16, an hour on a rented 24 GB GPU costs a dollar or two and
+  the dataset is only ~7 M tokens an epoch.
+
 ## What is measured, and what is not
 
 * The wrapper works: consecutive completions return the OpenAI shape with usage,
