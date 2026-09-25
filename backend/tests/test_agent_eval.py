@@ -8,7 +8,10 @@ and the numbers it defends are the ones A2 moved.
 The suite's headline is not a pass rate. It is **caught**: of the calls that
 should have been rejected or flagged, how many were. Before the surface was
 tightened that number was 0 of 5, and each of the five returned ``ok: true``
-with a body nobody asked for.
+with a body nobody asked for. It is 7 of 7 now: widening the *goal* suite turned
+up two more, both of the same kind — a `params` key that belongs to a different
+shape is declared, so it validates, and then the handler defaults the dimension
+it was actually given.
 """
 
 import pytest
@@ -29,7 +32,12 @@ def test_every_known_mistake_is_caught(adversarial):
     missed = [r["task_id"] for r in adversarial["results"]
               if r["expect"] in ("refuse", "warn") and not (r["refused"] or r["warnings"])]
     assert not missed, f"passed silently: {missed}"
-    assert len(caught) == adversarial["expected_flags"] == 5
+    # The literal is deliberate: it is edited when a mistake is *added* to the
+    # suite, which is a moment worth noticing, and it fails if one is quietly
+    # dropped. 5 when the surface was tightened; 7 with the two that found the
+    # per-shape `params` hole — `radius` on a cone and on a shell are declared
+    # keys belonging to another shape, so they passed validation and defaulted.
+    assert len(caught) == adversarial["expected_flags"] == 7
 
 
 def test_the_controls_still_build_the_part(adversarial):

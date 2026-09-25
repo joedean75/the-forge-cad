@@ -215,8 +215,54 @@ def _one_of(args: Dict[str, Any], names: List[str], *, op: str, what: str) -> No
 
 # ── node builders ──
 
+#: Which `params` keys each shape and modifier actually reads.
+#:
+#: The schema declares the **union** of them with `additionalProperties: false`,
+#: which is right for a constrained decoder — it names the vocabulary — and is
+#: why `radius` passes validation on a `cone`. The handler then read
+#: `base_radius`, found nothing, and built the *default* 30 mm cone while
+#: honouring the height it was given: `ok: true`, no warning, a body 50% wider
+#: than the one asked for, and half the call obeyed so it looks right. That is
+#: the same failure `_check_nested` was written for — "a default is the answer a
+#: caller would have chosen; anything else is an invention reported as a
+#: success" — surviving in the one place a static schema cannot reach, because
+#: which keys are valid depends on the *value* of `shape`. So it is checked
+#: here, like `_one_of`.
+#:
+#: Dimensional defaults stay: a cone with no `base_radius` is still a cone. What
+#: is refused is a key belonging to a different shape, which is never a default
+#: anyone chose.
+_PRIMITIVE_KEYS = {
+    "box": ("size", "center"),
+    "sphere": ("radius", "center"),
+    "cylinder": ("radius", "height", "center", "axis"),
+    "cone": ("base_radius", "height", "center", "axis"),
+}
+
+_MODIFIER_KEYS = {
+    "shell": ("thickness",),
+    "hole": ("radius", "depth", "center", "axis", "hole_type", "recess_radius",
+             "recess_depth", "countersink_angle", "tip_angle", "through", "thread"),
+    "pattern": ("kind", "count", "spacing", "axis", "center", "path", "transforms"),
+    "transform": ("translate", "rotate", "scale"),
+}
+
+
+def _applicable(name: str, params: Dict[str, Any] | None,
+                allowed: tuple[str, ...]) -> None:
+    extra = sorted(k for k in (params or {}) if k not in allowed)
+    if extra:
+        raise BadArgument(
+            f"{name} does not read {', '.join(extra)} — it takes "
+            f"{', '.join(allowed)}. The declared `params` keys are the union of "
+            f"every shape's, so a key valid elsewhere is silently ignored here "
+            f"unless it is refused.", arg="params")
+
+
 def _make_primitive(shape: str, params: Dict[str, Any] | None) -> Dict[str, Any]:
     p = params or {}
+    if shape in _PRIMITIVE_KEYS:
+        _applicable(shape, p, _PRIMITIVE_KEYS[shape])
     center = p.get("center", {"x": 0, "y": 0, "z": 0})
     axis = p.get("axis", {"x": 0, "y": 0, "z": 1})
     if shape == "box":
@@ -265,6 +311,7 @@ def _make_modifier(kind: str, params: Dict[str, Any] | None) -> Dict[str, Any]:
     }
     if kind not in table:
         raise BadArgument(f"unknown modifier: {kind}", arg="modifier")
+    _applicable(kind, p, _MODIFIER_KEYS[kind])
     typ, mp = table[kind]
     return {"type": typ, "name": kind.capitalize(), "params": mp}
 
