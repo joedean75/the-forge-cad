@@ -355,6 +355,12 @@ def train(args) -> int:
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # `summary.json` means "a run finished here", and `serve_when_trained.ps1`
+    # reads it as exactly that. Left in place from a previous run it is a lie the
+    # moment this one starts: a crash would leave the watcher serving the *old*
+    # adapter and scoring it as the new result — measuring the wrong model and
+    # reporting it confidently, which is worse than measuring nothing.
+    (out_dir / "summary.json").unlink(missing_ok=True)
     metrics_path = out_dir / "metrics.csv"
     new_file = not metrics_path.exists()
     metrics = metrics_path.open("a", newline="")
