@@ -355,3 +355,37 @@ def test_the_coverage_source_labels_the_operations_nothing_else_does():
     assert counts.get("list_faces", 0) >= 15
     # `BRIEF_RULE` was taught by prose alone: two `set_spec` labels in 6,173.
     assert counts.get("set_spec", 0) >= 100
+
+
+def test_the_library_source_skips_the_builders_own_documents():
+    """`library` means documents somebody built, not the ones this builder made.
+
+    `catalog`, `template`, `recovery` and `coverage` each create scratch documents
+    and leave them in the datastore, so a later build's library pass decompiled
+    them a second time — with the document's *name* as the goal, which is how
+    "template plate x1.5" became a goal a model was taught to build. Measured on
+    the build database: 714 of 1,234 documents were the builder's own, and library
+    went 1,020 -> 4,789 samples between two builds of the same corpus purely by
+    accumulation. Deduplication could not see it, because the goals differ.
+    """
+    from app.services import cad_operations, document_service
+    from datasets import corpus
+
+    MM = 0.001
+    made = {}
+    for owner, name in ((corpus.BUILDER_OWNER, "template scratch"), ("someone", "Bracket")):
+        doc = document_service.create_document(name=name, owner_id=owner)
+        cad_operations.execute("add_primitive", doc.id, {
+            "shape": "box", "params": {"size": {"x": 40 * MM, "y": 30 * MM, "z": 6 * MM},
+                                       "center": {"x": 0.0, "y": 0.0, "z": 0.0}}})
+        made[owner] = doc.id
+
+    # The library source's goal *is* the document name (or its prompt), which is
+    # the whole problem with reading back the builder's own scratch parts.
+    goals = " ".join(str(m.get("content") or "")
+                     for sample in corpus.library_samples()
+                     for m in sample.messages if m.get("role") == "user")
+    assert "Bracket" in goals, "a document somebody built was skipped"
+    assert "template scratch" not in goals, (
+        "the builder's own scratch document was decompiled as if it were a "
+        "library part, with its scratch name as the goal")

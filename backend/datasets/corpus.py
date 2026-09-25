@@ -377,7 +377,8 @@ def recovery_samples_from_document(doc_id: str, goal: str, *, source: str,
         _drop(f"{source}:not_decompilable")
         return []
 
-    fresh = document_service.create_document(name=f"recovery {doc_id[:8]}", owner_id="dataset")
+    fresh = document_service.create_document(name=f"recovery {doc_id[:8]}",
+                                              owner_id=BUILDER_OWNER)
     created: List[Optional[str]] = []
     groups: List[Optional[str]] = []
     injected = 0
@@ -419,6 +420,11 @@ def recovery_samples_from_document(doc_id: str, goal: str, *, source: str,
 
 
 # ----------------------------------------------------------------- coverage --
+
+#: The owner every scratch document this builder creates belongs to. Named so the
+#: `library` source can tell the builder's own output from documents somebody
+#: built, which is what that source is for.
+BUILDER_OWNER = "dataset"
 
 MM = 0.001
 
@@ -660,7 +666,7 @@ def coverage_rows():
             + _cov_material_rows() + _cov_combined_rows())
 
 
-def coverage_samples(*, owner_id: str = "dataset", profile: str = "full") -> List[Sample]:
+def coverage_samples(*, owner_id: str = BUILDER_OWNER, profile: str = "full") -> List[Sample]:
     """Turn samples for the operations nothing else in the corpus demonstrates.
 
     Authored rather than recovered, so the verification is different in kind and
@@ -737,7 +743,7 @@ def _drop(cause: str) -> None:
     DROPS[cause] = DROPS.get(cause, 0) + 1
 
 
-def catalog_samples(limit: Optional[int] = None, *, owner_id: str = "dataset",
+def catalog_samples(limit: Optional[int] = None, *, owner_id: str = BUILDER_OWNER,
                     profile: str = "full") -> List[Sample]:
     """Every generated purchased part, as (designation -> operations).
 
@@ -776,7 +782,7 @@ def _variation_goal(name: str, parameters: Sequence[dict]) -> str:
     return f"{name} with {said}" if said else name
 
 
-def template_samples(*, owner_id: str = "dataset", variations: int = 0,
+def template_samples(*, owner_id: str = BUILDER_OWNER, variations: int = 0,
                      factors: Sequence[float] = (0.6, 1.5, 2.2),
                      profile: str = "full") -> List[Sample]:
     """The starter parts, each as its own sequence.
@@ -881,10 +887,26 @@ def library_samples(owner_id: Optional[str] = None, limit: Optional[int] = None,
     otherwise — a name is a weak goal, which is why `by_cause` in the card
     matters more here than anywhere else.
     """
-    from app.services import document_service as docs
+    from app.services import document_service as docs, persistence
+
+    # **Skip the documents this builder made.** `catalog`, `template`,
+    # `recovery` and `coverage` each create scratch documents under
+    # `BUILDER_OWNER` and leave them in the datastore, so a later build's
+    # library pass read them back and decompiled them a *second* time — with the
+    # document's *name* as the goal, which is how "template plate x1.5" and
+    # "coverage fillet_edges-40x40x20-3" became goals a model was taught to
+    # build. Measured on the build database: 714 of 1,234 documents were the
+    # builder's own, and library went 1,020 -> 4,789 samples between two builds
+    # of the same corpus purely by accumulation. Dedup could not see it because
+    # the goals differ.
+    #
+    # `list_document_summaries` carries `owner_id` in the one SQL pass it already
+    # makes, which is why this costs nothing.
+    mine = {row["id"] for row in persistence.list_document_summaries()
+            if (row.get("owner_id") or "") == BUILDER_OWNER}
 
     out: List[Sample] = []
-    for summary in docs.list_documents(owner_id)[: limit or None]:
+    for summary in [d for d in docs.list_documents(owner_id) if d.id not in mine][: limit or None]:
         goal = getattr(summary, "source_prompt", None) or getattr(summary, "name", "") or ""
         if not goal:
             _drop("library:no_goal")
