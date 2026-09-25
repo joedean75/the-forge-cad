@@ -371,27 +371,6 @@ def train(args) -> int:
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
                                   lr=args.lr, weight_decay=0.0)
 
-    # **Why a schedule is an option at all.** The first 2B run was measured twice:
-    # at 2,800 of 4,155 samples it scored 0.900 on the goal suite, and finishing
-    # the epoch took it to 0.867 with the finishing turns halved and every task
-    # taking two steps more — while validation loss *fell* 0.025 -> 0.0094 and
-    # train loss reached 3.8e-05. What degrades at a constant rate once the loss
-    # is that low is knowing when to stop. Decaying the rate is the standard
-    # answer and it is untested here, so it is a flag rather than the default:
-    # one variable, against a baseline that exists.
-    planned = args.max_steps or (len(training) * args.epochs)
-    updates = max(1, planned // max(1, args.accumulate))
-
-    def lr_at(update: int) -> float:
-        if args.lr_schedule == "constant":
-            return args.lr
-        warm = max(1, int(0.03 * updates))
-        if update < warm:
-            return args.lr * (update + 1) / warm
-        progress = min(1.0, (update - warm) / max(1, updates - warm))
-        # To a tenth rather than to zero: the last samples should still teach.
-        return args.lr * (0.1 + 0.9 * 0.5 * (1.0 + math.cos(math.pi * progress)))
-
     updates_done = 0
     step = 0
     if args.resume and (out_dir / "latest.pt").exists():
@@ -468,6 +447,27 @@ def train(args) -> int:
     # while the step counter climbed and the log looked like progress. The order
     # is `seed`-shuffled and therefore the same on both runs, so an offset is all
     # it takes.
+    # **Why a schedule is an option at all.** The first 2B run was measured twice:
+    # at 2,800 of 4,155 samples it scored 0.900 on the goal suite, and finishing
+    # the epoch took it to 0.867 with the finishing turns halved and every task
+    # taking two steps more — while validation loss *fell* 0.025 -> 0.0094 and
+    # train loss reached 3.8e-05. What degrades at a constant rate once the loss
+    # is that low is knowing when to stop. Decaying the rate is the standard
+    # answer and it is untested here, so it is a flag rather than the default:
+    # one variable, against a baseline that exists.
+    planned = args.max_steps or (len(training) * args.epochs)
+    updates = max(1, planned // max(1, args.accumulate))
+
+    def lr_at(update: int) -> float:
+        if args.lr_schedule == "constant":
+            return args.lr
+        warm = max(1, int(0.03 * updates))
+        if update < warm:
+            return args.lr * (update + 1) / warm
+        progress = min(1.0, (update - warm) / max(1, updates - warm))
+        # To a tenth rather than to zero: the last samples should still teach.
+        return args.lr * (0.1 + 0.9 * 0.5 * (1.0 + math.cos(math.pi * progress)))
+
     resume_at = step % len(training) if step else 0
     if resume_at:
         print(f"resuming {resume_at} samples into the shuffled order", flush=True)

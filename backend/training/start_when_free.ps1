@@ -20,6 +20,10 @@ param(
   [int]   $Epochs     = 2,
   [int]   $Accumulate = 8,
   [double]$Lr         = 1e-4,
+  # `cosine` was added because the first 2B run lost half its finishing turns in
+  # the last third of an epoch at a constant rate. `constant` is what every
+  # measured baseline used, so it stays the default here too.
+  [string]$LrSchedule = "constant",
   [int]   $LogEvery   = 25,
   [int]   $ValSize    = 32,
   [int]   $CheckpointEvery = 100,
@@ -74,6 +78,7 @@ $args = @(
   "--val","$Copilot\$Dataset\val.jsonl",
   "--out","$Copilot\$Out",
   "--max-len","$MaxLen","--epochs","$Epochs","--lr","$Lr",
+  "--lr-schedule","$LrSchedule",
   "--accumulate","$Accumulate",
   "--log-every","$LogEvery","--val-size","$ValSize",
   "--checkpoint-every","$CheckpointEvery"
