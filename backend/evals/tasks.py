@@ -298,6 +298,39 @@ ADVERSARIAL: Sequence[Task] = (
         tags=("schema",),
     ),
     Task(
+        id="adv:incomplete-vector",
+        expect="refuse",
+        goal="A plate 100 mm by 60 mm by 8 mm.",
+        requirements=_cube_spec(),
+        # A 3-vector with a component left out. On a position that was harmless;
+        # on an *extent* it built a box 0.0 mm thick and returned `ok: true`, and
+        # on a modifier it surfaced as `evaluation failed: 'y'` — a bare KeyError
+        # from `modifiers._vec`, naming neither the parameter nor the operation.
+        # The goal suite's rib and bolt-circle tasks are what turned it up: they
+        # are the first that make a planner write vectors by hand.
+        script=[{"op": "add_primitive",
+                 "args": {"shape": "box", "params": {"size": {"x": 0.1, "z": 0.008}}}}],
+        max_steps=2,
+        tags=("schema",),
+    ),
+    Task(
+        id="adv:zero-extent",
+        expect="refuse",
+        goal="A plate 100 mm by 60 mm by 8 mm.",
+        requirements=_cube_spec(),
+        # Explicitly zero rather than omitted. `exclusiveMinimum: 0` is published
+        # on every length and the runtime validator does not enforce it — it
+        # checks `enum` and `type` — so a schema-constrained caller could not
+        # send this and a prose one could, which is the fine-tune driving this
+        # catalog. It reached the kernel and came back as "SDF marching cubes
+        # failed: Surface level must be within volume data range".
+        script=[{"op": "add_primitive",
+                 "args": {"shape": "box",
+                          "params": {"size": {"x": 0.1, "y": 0.0, "z": 0.008}}}}],
+        max_steps=2,
+        tags=("schema",),
+    ),
+    Task(
         id="adv:wrong-nested-type",
         expect="refuse",
         goal="A plate 100 mm by 60 mm by 8 mm.",

@@ -36,6 +36,39 @@
 > **solved `plate-4-holes`**, which both the 0.6B and Opus 5 had failed — so that
 > task was neither impossible nor mis-specified.
 >
+> **Eighteen tasks, and the failures are one sentence** (2026-09-25, step 2,800
+> serving): **mean score 0.767, solved 6/18, geometry valid 17/18, finished 5/18,
+> 25 failed calls.** The original six scored 0.900 within this run — identical to
+> their own baseline — so the widening is consistent rather than a new ruler; it
+> adds twelve signals to a number one task used to move by 0.167.
+>
+> What it says, which six tasks could not: **the model uses the five operations
+> it was trained on and almost nothing else.** Four tasks fail *only* their
+> feature requirement, with the right bounding box built — 0 × EdgeChamferFeature,
+> 0 × FaceShellFeature, 0 × RibFeature, 0 × EdgeFilletFeature — and all three
+> material tasks fail with the material unset. Those five operations
+> (`chamfer_edges`, `shell_faces`, `add_rib`, `fillet_edges`, `set_material`) have
+> **zero labels between them** in a corpus where `add_primitive`,
+> `set_feature_params`, `finish_task`, `add_modifier` and `set_parameters` are 97%
+> of 6,173. The remaining losses are the not-stopping pattern again: 11 holes
+> where 6 were asked for, 1 counterbore where 4 were.
+>
+> So "cover the catalog in the labels" stops being a guess. It is 7 of 18 tasks,
+> worth up to 0.14 of the headline, and it needs no new capability — every one of
+> those operations works and is tested.
+>
+> **The suite found three holes in the surface on its way in**, all the same
+> family and all previously `ok: true`: a `params` key belonging to a *different*
+> shape (`radius` on a cone — declared, because the schema lists the union, then
+> silently defaulted to 30 mm while honouring the height), a 3-vector missing a
+> component (`size` with no `y` built a 0.0 mm body; a modifier's vector raised a
+> bare `KeyError` that reached the caller as `evaluation failed: 'y'`), and an
+> extent given as zero (`exclusiveMinimum: 0` is *published* on every length and
+> the runtime validator enforces only `enum` and `type`, so a constrained decoder
+> could not send it and the prose fine-tune could). The adversarial suite is 9 of
+> 9 caught. The `cone` task scoring 1.00 in this run is the fix working: the model
+> tried `radius`, was told the shape reads `base_radius`, and corrected.
+>
 > **Finishing the epoch made it worse, and the loss curve said otherwise**
 > (2026-09-25). The run above stopped at 2,800 of 4,155 samples; resumed to the
 > end, validation loss fell 0.025 -> 0.0094 and the suite went **0.900 -> 0.867,

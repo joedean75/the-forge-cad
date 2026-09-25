@@ -50,7 +50,25 @@ class Operation:
     subject: str = "document"
 
 
-_VEC = {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"}}}
+#: A 3-vector, and **all three components are required**.
+#:
+#: They were optional, which read as "omit what you do not need" and meant two
+#: different things. On a position it was harmless — a missing component became
+#: zero, which is what the caller meant. On an *extent* it was a body: `size`
+#: with no `y` built a box 0.0 mm thick and returned `ok: true` with no warning,
+#: a degenerate solid that cannot be what anyone asked for. And on a modifier it
+#: was a crash — `modifiers._vec` reads `d["y"]` directly, so a partial vector
+#: surfaced as `evaluation failed: 'y'`, a bare KeyError with neither the
+#: parameter nor the operation named, which is the shape `op_errors.require`
+#: exists to prevent. Found by the widened goal suite: its rib and bolt-circle
+#: tasks are the first that make a planner write vectors by hand.
+#:
+#: Requiring all three refuses the ambiguity instead of guessing at it. Omitting
+#: the whole key still takes the documented default, which is the real way to say
+#: "centred at the origin".
+_VEC = {"type": "object", "properties": {"x": {"type": "number", "required": True},
+                                         "y": {"type": "number", "required": True},
+                                         "z": {"type": "number", "required": True}}}
 _REQ_VEC = {**_VEC, "required": True}
 _AXIS = {**_VEC, "description": "direction to cut along; +Z by default"}
 # Listed rather than derived from `parts_catalog` at import: the enum reaches
@@ -259,10 +277,42 @@ def _applicable(name: str, params: Dict[str, Any] | None,
             f"unless it is refused.", arg="params")
 
 
+#: The keys of a primitive whose value is an *extent*, so zero is not a body.
+#:
+#: `exclusiveMinimum: 0` is published on every length — `op_schema` adds it when
+#: it builds the JSON Schema a constrained decoder reads — and the runtime
+#: validator does not enforce it: `_check_value` checks `enum` and `type`. So a
+#: schema-constrained caller cannot send a zero radius and a prose one can, which
+#: is exactly the fine-tuned model this catalog is driven by. A cylinder of
+#: radius 0 reached the kernel and came back as "SDF marching cubes failed:
+#: Surface level must be within volume data range".
+#:
+#: Enforcing the published bound on *every* length was considered and rejected:
+#: `recess_depth: 0` means "no counterbore" and `tip_angle: 0` means "flat
+#: bottom", so a blanket rule would refuse real work — the reason the magnitude
+#: band is a warning. These are the ones where zero is never a body.
+_PRIMITIVE_EXTENTS = ("radius", "base_radius", "height")
+
+
+def _positive_extents(shape: str, params: Dict[str, Any]) -> None:
+    bad = [(k, params[k]) for k in _PRIMITIVE_EXTENTS
+           if isinstance(params.get(k), (int, float)) and params[k] <= 0]
+    size = params.get("size")
+    if isinstance(size, dict):
+        bad += [(f"size.{a}", size[a]) for a in ("x", "y", "z")
+                if isinstance(size.get(a), (int, float)) and size[a] <= 0]
+    if bad:
+        raise BadArgument(
+            f"a {shape} needs a positive "
+            + ", ".join(f"{k} (got {v:g})" for k, v in bad)
+            + " — a zero or negative extent is not a body", arg="params")
+
+
 def _make_primitive(shape: str, params: Dict[str, Any] | None) -> Dict[str, Any]:
     p = params or {}
     if shape in _PRIMITIVE_KEYS:
         _applicable(shape, p, _PRIMITIVE_KEYS[shape])
+    _positive_extents(shape, p)
     center = p.get("center", {"x": 0, "y": 0, "z": 0})
     axis = p.get("axis", {"x": 0, "y": 0, "z": 1})
     if shape == "box":
