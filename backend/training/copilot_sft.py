@@ -432,8 +432,18 @@ def train(args) -> int:
 
     started = time.time()
     pending = 0
+    # **A resumed run continues where it stopped, it does not start again.**
+    # `step` counts samples, so a run cut short by `--max-steps` and then resumed
+    # with a higher one iterated `training` from row 0 again: it would re-train
+    # the 2,800 samples it had already seen and never reach the 1,355 it had not,
+    # while the step counter climbed and the log looked like progress. The order
+    # is `seed`-shuffled and therefore the same on both runs, so an offset is all
+    # it takes.
+    resume_at = step % len(training) if step else 0
+    if resume_at:
+        print(f"resuming {resume_at} samples into the shuffled order", flush=True)
     for epoch in range(1, args.epochs + 1):
-        for row in training:
+        for row in training[resume_at:]:
             if args.max_steps and step >= args.max_steps:
                 break
             model.train()
@@ -470,6 +480,7 @@ def train(args) -> int:
                             "config": vars(args)}, out_dir / "latest.pt")
                 torch.save({"lora": lora_state(model), "step": step},
                            out_dir / f"lora-step{step:06d}.pt")
+        resume_at = 0            # only the epoch that was interrupted is offset
         if args.max_steps and step >= args.max_steps:
             break
 

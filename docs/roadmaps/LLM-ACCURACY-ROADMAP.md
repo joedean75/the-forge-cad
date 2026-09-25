@@ -32,10 +32,24 @@
 > rank-16 LoRA, 2,800 samples in 8.25 h on a 6 GB laptop 3050, baseline in
 > `backend/data/eval-goals-2b-20260925-0134.json`): **solved 4/6, mean score
 > 0.900, geometry 6/6, finished 4/6, mean 3.33 steps, 7 failed calls.** Against
-> Opus 5's 5/6 and 0.900 on the same pinned conditions, and against the same
-> corpus's 0.6B at 0/6 and 0.533. It also **solved `plate-4-holes`**, which both
-> the 0.6B and Opus 5 had failed — so that task was neither impossible nor
-> mis-specified.
+> Opus 5's 5/6 and 0.900, and the same corpus's 0.6B at 0/6 and 0.533. It also
+> **solved `plate-4-holes`**, which both the 0.6B and Opus 5 had failed — so that
+> task was neither impossible nor mis-specified.
+>
+> **What is shared and what is not**: the same six tasks, the same reward
+> function (`verify_against_spec` on the built body) and the same pinned
+> resolution 96 — but each model runs the prompt it is built for, Opus on `full`
+> with tool schemas and the fine-tunes on `finetuned` prose with no schemas at
+> all. That is the right comparison and not a like-for-like prompt, and the
+> baselines could not previously say which was which: `model`,
+> `prompt_profile` and `tool_calling` are now recorded in the artifact beside
+> `resolution`, because three numbers were being compared on conditions that
+> lived only in whoever ran them.
+>
+> **Level on the score is not level on reliability.** Opus reached it in 2.33
+> steps with 1 failed call; the 2B took 3.33 with 7 (`BAD_ARG` 5,
+> `MISSING_ARG` 2). The mean score is the reward function, and on that they tie;
+> the failed-call count is what a user would feel.
 >
 > Two things made the difference and only one of them is the parameter count. The
 > corpus was rebuilt with the trimmed `finetuned` prompt (406 tokens out), which

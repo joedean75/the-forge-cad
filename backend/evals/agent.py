@@ -224,6 +224,16 @@ def report(results: Sequence[TaskResult], *, resolution: int = DEFAULT_RESOLUTIO
     return {
         "tasks": len(results),
         "resolution": resolution,
+        # **What produced this number, recorded beside it.** Three baselines were
+        # compared as though they shared their conditions, and the artifacts could
+        # not say: resolution was pinned and written down, while the model and the
+        # prompt profile — the two things that differ most between a fine-tune and
+        # a frontier model — were in the environment and then gone. A benchmark
+        # whose output cannot name its subject is one whose comparisons rest on
+        # whoever remembers how it was run.
+        "model": _llm_model(),
+        "prompt_profile": _prompt_profile(),
+        "tool_calling": _supports_tools(),
         # The adversarial half's headline: of the calls that *should* have been
         # rejected, how many were. Every one that was not returned `ok: true`
         # and a body nobody asked for.
@@ -243,6 +253,42 @@ def report(results: Sequence[TaskResult], *, resolution: int = DEFAULT_RESOLUTIO
         "seconds": round(sum(r.seconds for r in results), 2),
         "results": [asdict(r) for r in results],
     }
+
+
+def _llm_model() -> Optional[str]:
+    """The model the suite actually talked to, or None when nothing configured one."""
+    try:
+        from app.services import llm_client
+        # `pinned_model` is the context manager that *sets* the pin, not a getter:
+        # calling it here returned a `_GeneratorContextManager` into the artifact.
+        pin = (llm_client.CALL_CONTEXT.get() or {}).get("model")
+        return pin or llm_client.LLM_MODEL or None
+    except Exception:                       # a run with no provider configured
+        return None
+
+
+def _supports_tools() -> Optional[bool]:
+    """Whether this run *sent* tools, not whether the provider accepts them.
+
+    The `finetuned` profile returns `tools=None` however capable the provider is,
+    so reporting the provider's capability here would label a prose run as
+    schema-constrained — the one distinction `_via` exists to keep.
+    """
+    try:
+        from app.services import copilot, llm_client
+        if copilot.PROMPT_PROFILE == "finetuned":
+            return False
+        return bool(llm_client.supports_tools())
+    except Exception:
+        return None
+
+
+def _prompt_profile() -> Optional[str]:
+    try:
+        from app.services import copilot
+        return copilot.PROMPT_PROFILE
+    except Exception:
+        return None
 
 
 def format_report(data: Dict[str, Any]) -> str:

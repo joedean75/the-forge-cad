@@ -37,9 +37,18 @@ if ! curl -fsS --max-time 5 "${BASE_URL}/models" >/dev/null 2>&1; then
 fi
 echo "endpoint up: $(curl -fsS --max-time 5 "${BASE_URL}/models")" | tee -a "$LOG"
 
-# Caged: a suite that OOMs the distro takes the terminal with it (see
-# docs and the WSL note in CLAUDE.md's rollout section).
-systemd-run --user --scope -p MemoryMax=8G -- env \
+# Caged: a suite that OOMs the distro takes the terminal with it (see the WSL
+# note in MEMORY and CLAUDE.md's rollout section). **But the cage must not be
+# able to skip the suite**: launched from the Windows task the distro may have no
+# systemd user session, where `systemd-run --user` fails to connect to the bus —
+# and the run would end there, silently, with nothing written. Verified working
+# through that path; the fallback is for when it is not.
+CAGE=(systemd-run --user --scope -p MemoryMax=8G --)
+if ! systemd-run --user --scope -- true >/dev/null 2>&1; then
+  echo "systemd-run --user unavailable; running uncaged" | tee -a "$LOG"
+  CAGE=()
+fi
+"${CAGE[@]}" env \
   DATABASE_URL="sqlite:///${DB}" \
   FORGE_RATE_LIMIT=0 \
   FORGE_COPILOT_PROMPT=finetuned \
@@ -52,7 +61,7 @@ systemd-run --user --scope -p MemoryMax=8G -- env \
 status=$?
 
 echo "--- movement against the 0.6B baseline ---" >>"$LOG"
-systemd-run --user --scope -p MemoryMax=2G -- env \
+"${CAGE[@]}" env \
   DATABASE_URL="sqlite:///${DB}" PYTHONPATH=. .venv/bin/python - <<'PY' >>"$LOG" 2>&1
 import json, pathlib
 here = pathlib.Path("data")
