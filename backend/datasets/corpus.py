@@ -418,6 +418,297 @@ def recovery_samples_from_document(doc_id: str, goal: str, *, source: str,
     return samples
 
 
+# ----------------------------------------------------------------- coverage --
+
+MM = 0.001
+
+
+def _c_run(doc: str, op: str, **args) -> dict:
+    from app.services import cad_operations
+
+    env = cad_operations.execute(op, doc, args, include_state=False)
+    if not env["ok"]:
+        raise _CoverageFailed(f"{op}: {(env.get('error') or {}).get('message')}")
+    return env.get("result") or {}
+
+
+class _CoverageFailed(RuntimeError):
+    pass
+
+
+def _box(doc, x, y, z, **kw):
+    return _c_run(doc, "add_primitive", shape="box",
+                  params={"size": {"x": x * MM, "y": y * MM, "z": z * MM},
+                          "center": {"x": 0.0, "y": 0.0, "z": 0.0}}, **kw)
+
+
+#: Sequences for the operations no other source produces a label for.
+#:
+#: Measured on the 18-task goal suite: four tasks failed *only* their feature
+#: requirement with the right bounding box built — 0 × EdgeFilletFeature,
+#: 0 × EdgeChamferFeature, 0 × FaceShellFeature, 0 × RibFeature — and all three
+#: material tasks failed with the material unset. Those five operations have zero
+#: labels between them in 6,173, while five others are 97% of the corpus. A model
+#: does not choose an operation it has never seen chosen, however plainly the
+#: prompt lists its name, and none of this is missing capability: every one works
+#: and is tested.
+#:
+#: The other sources cannot supply them. `decompiler` *does* emit `fillet_edges`,
+#: `chamfer_edges`, `shell_faces` and `add_rib` — no library document or template
+#: happens to contain those features, which is the whole reason. And
+#: `set_material` is document metadata rather than a tree node, so decompiling a
+#: body can never produce it at all.
+#:
+#: Three things each sequence does deliberately:
+#:
+#: * **`set_spec` first.** `BRIEF_RULE` tells the planner to record the
+#:   measurable requirements before its first edit, and the corpus carried two
+#:   `set_spec` labels — the rule was taught by prose alone.
+#: * **`list_faces` before `shell_faces`.** The id comes from the read, so this
+#:   is a turn whose argument is a value the previous turn returned, which is
+#:   most of what driving this catalog is and almost none of what the corpus
+#:   shows.
+#: * **Dimensions differ per row**, so what is learned is the operation and not
+#:   one memorised literal.
+#: The rows are **generated**, because a handful of labels does not move a model.
+#: The first version wrote twelve sequences by hand and produced 3 `fillet_edges`
+#: labels against 2,533 `add_primitive` — present in the corpus and invisible in
+#: it. Enumerating shapes against dimensions against the operation's *own*
+#: parameter gives ~40-60 labels each with genuine variety, which is the
+#: difference between showing an operation and showing one memorised call.
+#:
+#: Deterministic: no sampling, so two builds of this corpus are the same corpus.
+
+#: (x, y, z) in mm. Spread so the numbers in the labels are not one plate.
+_COV_BLOCKS = ((40, 40, 20), (90, 50, 10), (30, 30, 30), (120, 25, 12),
+               (70, 45, 8), (60, 60, 25))
+#: (radius, height) in mm.
+_COV_ROUNDS = ((25, 8), (15, 40), (30, 12))
+#: Grades, with the phrase a request would use for each.
+_COV_GRADES = (("steel-1018", "1018 steel"), ("al-6061", "6061 aluminium"),
+               ("ti-6al4v", "Ti-6Al-4V titanium"), ("al-7075", "7075 aluminium"),
+               ("ss-316l", "316L stainless"), ("steel-4140", "4140 chromoly"),
+               ("al-5052", "5052 aluminium"), ("steel-a36", "A36 structural steel"))
+
+
+def _cyl(doc, r, h, **kw):
+    return _c_run(doc, "add_primitive", shape="cylinder",
+                  params={"radius": r * MM, "height": h * MM,
+                          "center": {"x": 0.0, "y": 0.0, "z": 0.0}}, **kw)
+
+
+def _bbox_req(axis, value, tolerance=1.0):
+    return {"kind": "bounding_box", "axis": axis, "value": value, "tolerance": tolerance}
+
+
+def _block_reqs(x, y, z):
+    return [_bbox_req("x", x), _bbox_req("y", y), _bbox_req("z", z)]
+
+
+def _round_reqs(r, h):
+    return [_bbox_req("x", 2 * r), _bbox_req("y", 2 * r), _bbox_req("z", h)]
+
+
+def _cov_edge_rows(op: str, key: str, values, word: str, feature: str):
+    """`fillet_edges` and `chamfer_edges` over every shape and every size."""
+    rows = []
+    for index, (x, y, z) in enumerate(_COV_BLOCKS):
+        for value in values:
+            if value * 2 >= min(x, y, z):
+                continue                     # would consume the part
+            rows.append({
+                "id": f"{op}-{x}x{y}x{z}-{value:g}",
+                "goal": f"A {x:g} x {y:g} x {z:g} mm block with every edge "
+                        f"{word} by {value:g} mm.",
+                "requirements": _block_reqs(x, y, z) + [{"kind": "feature", "value": feature}],
+                "build": (lambda x=x, y=y, z=z, value=value:
+                          lambda doc: (_box(doc, x, y, z),
+                                       _c_run(doc, op, edges="all", **{key: value * MM})))(),
+            })
+    for r, h in _COV_ROUNDS:
+        for value in values:
+            if value * 2 >= min(2 * r, h):
+                continue
+            rows.append({
+                "id": f"{op}-d{2*r:g}x{h:g}-{value:g}",
+                "goal": f"A {2*r:g} mm diameter, {h:g} mm long cylinder with both "
+                        f"ends {word} by {value:g} mm.",
+                "requirements": _round_reqs(r, h) + [{"kind": "feature", "value": feature}],
+                "build": (lambda r=r, h=h, value=value:
+                          lambda doc: (_cyl(doc, r, h),
+                                       _c_run(doc, op, edges="all", **{key: value * MM})))(),
+            })
+    return rows
+
+
+def _shell(doc, x, y, z, wall):
+    """The id comes from the read, which is the turn shape the corpus lacks."""
+    _box(doc, x, y, z)
+    faces = _c_run(doc, "list_faces")["faces"]
+    top = max((f for f in faces if f.get("kind") == "plane"),
+              key=lambda f: f.get("position_mm", {}).get("z", -1e9))
+    _c_run(doc, "shell_faces", faces=[top["id"]], thickness=wall * MM)
+
+
+def _cov_shell_rows():
+    rows = []
+    for x, y, z in _COV_BLOCKS:
+        for wall in (1.5, 2, 3):
+            if wall * 3 >= min(x, y, z):
+                continue
+            rows.append({
+                "id": f"shell-{x}x{y}x{z}-{wall:g}",
+                "goal": f"A {x:g} x {y:g} x {z:g} mm box hollowed out to a "
+                        f"{wall:g} mm wall, open at the top.",
+                "requirements": _block_reqs(x, y, z)
+                                + [{"kind": "feature", "value": "FaceShellFeature"}],
+                "build": (lambda x=x, y=y, z=z, wall=wall:
+                          lambda doc: _shell(doc, x, y, z, wall))(),
+            })
+    return rows
+
+
+def _rib(doc, x, y, z, thickness, height):
+    _box(doc, x, y, z)
+    _c_run(doc, "add_rib", start={"x": -(x / 2 - 5) * MM, "y": 0.0, "z": z / 2 * MM},
+           end={"x": (x / 2 - 5) * MM, "y": 0.0, "z": z / 2 * MM},
+           thickness=thickness * MM, height=height * MM)
+
+
+#: A rib belongs on a plate, and the block table is mostly not plates — filtering
+#: it left 9 labels where the other families have 20-30.
+_COV_PLATES = ((80, 40, 5), (60, 60, 6), (120, 25, 8), (90, 50, 10), (100, 40, 6),
+               (70, 45, 8), (50, 50, 4))
+
+
+def _cov_rib_rows():
+    rows = []
+    for x, y, z in _COV_PLATES:
+        for thickness, height in ((3, 10), (4, 14), (2.5, 8)):
+            rows.append({
+                "id": f"rib-{x}x{y}x{z}-{thickness:g}x{height:g}",
+                "goal": f"An {x:g} x {y:g} x {z:g} mm plate with a rib along its "
+                        f"centreline, {thickness:g} mm thick at the tip and "
+                        f"{height:g} mm tall.",
+                # The rib's centreline sits on the top face at +z/2 and grows
+                # `height` from there, so the extent is `z + height` — not
+                # `z/2 + height`, which is the top *coordinate*. Every rib row
+                # was dropped until this was right, which is what the per-row
+                # spec check is for: the same arithmetic slip put two of the
+                # eval tasks out by a bend allowance and a radius name.
+                "requirements": _block_reqs(x, y, z + height)
+                                + [{"kind": "feature", "value": "RibFeature"}],
+                "build": (lambda x=x, y=y, z=z, t=thickness, h=height:
+                          lambda doc: _rib(doc, x, y, z, t, h))(),
+            })
+    return rows
+
+
+def _cov_material_rows():
+    """`set_material` cannot come from any other source: it is not a tree node,
+    so decompiling a body never produces it however many bodies are decompiled."""
+    rows = []
+    for index, (grade, phrase) in enumerate(_COV_GRADES):
+        x, y, z = _COV_BLOCKS[index % len(_COV_BLOCKS)]
+        rows.append({
+            "id": f"material-{grade}-block",
+            "goal": f"A {x:g} x {y:g} x {z:g} mm plate in {phrase}.",
+            "requirements": _block_reqs(x, y, z) + [{"kind": "material", "value": grade}],
+            "build": (lambda x=x, y=y, z=z, grade=grade:
+                      lambda doc: (_box(doc, x, y, z),
+                                   _c_run(doc, "set_material", material_id=grade)))(),
+        })
+        r, h = _COV_ROUNDS[index % len(_COV_ROUNDS)]
+        rows.append({
+            "id": f"material-{grade}-round",
+            "goal": f"A {2*r:g} mm diameter, {h:g} mm long shaft in {phrase}.",
+            "requirements": _round_reqs(r, h) + [{"kind": "material", "value": grade}],
+            "build": (lambda r=r, h=h, grade=grade:
+                      lambda doc: (_cyl(doc, r, h),
+                                   _c_run(doc, "set_material", material_id=grade)))(),
+        })
+    return rows
+
+
+def _cov_combined_rows():
+    """Two of the missing operations in one part, which is how a request arrives."""
+    rows = []
+    for (x, y, z), (grade, phrase), radius in zip(
+            _COV_BLOCKS, _COV_GRADES, (2, 3, 1.5, 2, 2.5, 3)):
+        rows.append({
+            "id": f"combined-{grade}-{x}x{y}x{z}",
+            "goal": f"A {x:g} x {y:g} x {z:g} mm bracket in {phrase}, with every "
+                    f"edge rounded by {radius:g} mm.",
+            "requirements": _block_reqs(x, y, z)
+                            + [{"kind": "feature", "value": "EdgeFilletFeature"},
+                               {"kind": "material", "value": grade}],
+            "build": (lambda x=x, y=y, z=z, grade=grade, radius=radius:
+                      lambda doc: (_box(doc, x, y, z),
+                                   _c_run(doc, "fillet_edges", edges="all",
+                                          radius=radius * MM),
+                                   _c_run(doc, "set_material", material_id=grade)))(),
+        })
+    return rows
+
+
+def coverage_rows():
+    return (_cov_edge_rows("fillet_edges", "radius", (1.5, 2, 3), "rounded",
+                           "EdgeFilletFeature")
+            + _cov_edge_rows("chamfer_edges", "distance", (1, 1.5, 2), "chamfered",
+                             "EdgeChamferFeature")
+            + _cov_shell_rows() + _cov_rib_rows()
+            + _cov_material_rows() + _cov_combined_rows())
+
+
+def coverage_samples(*, owner_id: str = "dataset", profile: str = "full") -> List[Sample]:
+    """Turn samples for the operations nothing else in the corpus demonstrates.
+
+    Authored rather than recovered, so the verification is different in kind and
+    not weaker: the other sources replay a recovered sequence and compare mesh
+    hashes against the source body, while here the sequence *is* the ground truth
+    and what has to be checked is that it builds what its goal says. So each row
+    carries the measurable requirements, they are recorded with `set_spec` as the
+    first turn, and a row whose body does not score 1.0 is dropped rather than
+    taught — the same rule, against a spec instead of a hash.
+    """
+    from app.services import cad_operations, document_service as docs, trajectories
+
+    out: List[Sample] = []
+    for row in coverage_rows():
+        doc = docs.create_document(name=f"coverage {row['id']}", owner_id=owner_id)
+        try:
+            with trajectories.recording(doc.id, goal=row["goal"], kind="coverage") as tid:
+                _c_run(doc.id, "set_spec", requirements=list(row["requirements"]))
+                row["build"](doc.id)
+        except _CoverageFailed as exc:
+            _drop(f"coverage:{row['id']}:{exc}"[:80])
+            continue
+        # Outside the recording: the done gate scores the spec itself, and a turn
+        # spent calling `verify_against_spec` before finishing is one the playbook
+        # tells the planner not to take.
+        report = cad_operations.execute("verify_against_spec", doc.id, {},
+                                        include_state=False).get("result") or {}
+        if float(report.get("score") or 0.0) < 1.0:
+            unmet = [c.get("detail") for c in report.get("checks", [])
+                     if c.get("status") != "pass"]
+            _drop(f"coverage:{row['id']}:unmet:{'; '.join(str(u) for u in unmet)[:60]}")
+            continue
+        record = trajectories.get(tid)
+        if record is None:
+            _drop(f"coverage:{row['id']}:not_recorded")
+            continue
+        record = {**record, "outcome": "done", "subject": "document", "history": ""}
+        samples = samples_from_record(record, source="coverage", synthetic_finish=True,
+                                      profile=profile)
+        for sample in samples:
+            sample.meta.update({"source": "coverage", "license": "internal",
+                                "verified": True, "coverage_id": row["id"]})
+        if not samples:
+            _drop(f"coverage:{row['id']}:no_samples")
+        out.extend(samples)
+    return out
+
+
 # ------------------------------------------------------------------ sources --
 
 def recorded_samples(*, include_unfinished: bool = False,

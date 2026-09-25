@@ -321,3 +321,37 @@ def test_the_full_profile_keeps_the_planning_rules():
     assert "discover_operations" in full and "update_work_plan" in full
     assert copilot_context.CONTROL_RULES not in copilot_context.control_rules(
         "document", planning=False)
+
+
+def test_the_coverage_source_labels_the_operations_nothing_else_does():
+    """The five the 18-task suite showed missing, and why no other source has them.
+
+    Four tasks failed *only* their feature requirement with the right bounding box
+    built, and all three material tasks failed with the material unset — because
+    `fillet_edges`, `chamfer_edges`, `shell_faces`, `add_rib` and `set_material`
+    had zero labels between them in 6,173. `decompiler` emits the first four
+    happily; no library document or template contains those features. And
+    `set_material` is document metadata rather than a tree node, so decompiling
+    any number of bodies can never produce it.
+    """
+    from datasets import corpus
+
+    corpus.DROPS.clear()
+    samples = corpus.coverage_samples(profile="finetuned")
+    counts: dict = {}
+    for sample in samples:
+        op = sample.meta.get("op")
+        counts[op] = counts.get(op, 0) + 1
+
+    assert not corpus.DROPS, f"a coverage sequence did not build what it claims: {corpus.DROPS}"
+    for op in ("fillet_edges", "chamfer_edges", "shell_faces", "add_rib", "set_material"):
+        assert counts.get(op, 0) >= 15, (
+            f"{op} has {counts.get(op, 0)} labels; a handful in six thousand is "
+            f"present in the corpus and invisible in it — the first version of "
+            f"this source wrote twelve sequences by hand and produced three")
+    # The read-then-act turn: `shell_faces` takes a face id that only the
+    # previous turn's result can supply, which is most of what driving this
+    # catalog is and almost none of what the corpus showed.
+    assert counts.get("list_faces", 0) >= 15
+    # `BRIEF_RULE` was taught by prose alone: two `set_spec` labels in 6,173.
+    assert counts.get("set_spec", 0) >= 100

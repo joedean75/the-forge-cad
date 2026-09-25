@@ -28,7 +28,8 @@ from typing import List
 # one it used, in the card.
 from datasets import corpus  # noqa: E402
 
-SOURCES = ("recorded", "catalog", "template", "library", "recovery", "imported")
+SOURCES = ("recorded", "catalog", "template", "library", "recovery",
+           "coverage", "imported")
 
 
 def _gather(names: List[str], args) -> List[corpus.Sample]:
@@ -44,6 +45,8 @@ def _gather(names: List[str], args) -> List[corpus.Sample]:
                                                profile=args.profile)
         elif name == "recovery":
             samples += corpus.recovery_from_templates(limit=args.recovery_limit)
+        elif name == "coverage":
+            samples += corpus.coverage_samples(profile=args.profile)
         elif name == "library":
             samples += corpus.library_samples(args.owner, limit=args.library_limit,
                                               profile=args.profile)
