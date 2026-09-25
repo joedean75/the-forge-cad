@@ -74,6 +74,34 @@ def verify(doc_id: str, expect: Optional[dict] = None,
     return True, "matches_source"
 
 
+def verify_sketch(doc_id: str) -> Tuple[bool, str]:
+    """The solver's own verdict, where there is no body to measure.
+
+    A converted sketch builds no solid, so `verify`'s first question — is this a
+    valid solid — has nothing to answer and would fail every sketch. The real
+    check is stronger than a volume comparison anyway: the solver reports whether
+    the constraints *fight* (`conflicting`), which is exactly what a mis-mapped
+    constraint produces. `under_constrained` is kept, because it is the normal
+    state of a real user's sketch and refusing it would drop most of the dataset
+    for being what it is.
+    """
+    from app.services import cad_operations
+
+    listed = cad_operations.execute("list_features", doc_id, {}, include_state=False)
+    features = (listed.get("result") or {}).get("features") or []
+    sketch = next((f for f in features if str(f.get("type")) == "SketchFeature"), None)
+    if sketch is None:
+        return False, "no_sketch_feature"
+    env = cad_operations.execute("check_sketch", doc_id,
+                                {"feature_id": sketch.get("id")}, include_state=False)
+    if not env["ok"]:
+        return False, "check_sketch_failed"
+    status = str((env.get("result") or {}).get("status") or "")
+    if status == "conflicting":
+        return False, "conflicting"
+    return True, status or "solved"
+
+
 def samples_from_file(path: str, *, limit: Optional[int] = None) -> List:
     """Verified turn samples from a converted dataset file.
 
@@ -111,7 +139,15 @@ def samples_from_file(path: str, *, limit: Optional[int] = None) -> List:
             if not envelopes or not all(e.get("ok") for e in envelopes):
                 _drop("replay:failed")
                 continue
-            ok, why = verify(doc.id, row.get("expect"))
+            # **The row says which check applies.** A sketch has no body, and a
+            # geometry check pointed at one fails for a reason that has nothing
+            # to do with the conversion — the same reason
+            # `observation.summarize_assembly` states its `kind` rather than
+            # leaving a caller to infer it from which keys are present.
+            if str(row.get("verify") or "") == "sketch":
+                ok, why = verify_sketch(doc.id)
+            else:
+                ok, why = verify(doc.id, row.get("expect"))
             if not ok:
                 _drop(f"verify:{why}")
                 continue
@@ -275,3 +311,230 @@ def convert_cadquery(source: str, *, goal: str = "",
                        for k, v in list(values.items())[:8])
     return {"goal": goal or (f"{name}: {stated}" if stated else name),
             "ops": ops, "source": "zero-to-cad", "license": "Apache-2.0"}
+
+
+# --------------------------------------------------------- SketchGraphs --
+
+#: SketchGraphs constraint types this converter maps, and what they become here.
+#:
+#: 15M constrained sketches from Onshape public documents, against the one part of
+#: this catalog with no synthetic source at all: `create_sketch` and the solver's
+#: 18 constraint types have **zero labels** in the corpus. The licence reads
+#: clearly — Onshape's Terms of Use §1.g.ii grant anyone accessing a public
+#: document the right to use, copy and modify its contents — which is the reading
+#: `docs/CAD-DATASET-SOURCING.md` sets out and the reason this one is implemented
+#: where Fusion 360 Gallery is declined.
+#:
+#: **What is mapped is what means the same thing.** `Length` on a line is our
+#: `distance` between its two endpoints, and `Diameter` is our `radius` halved —
+#: both are the same constraint under another name. `Equal` is *two* of ours
+#: depending on what it joins, so it is resolved by the referenced entities'
+#: kinds rather than assumed. Everything else is dropped by cause: `Mirror` needs
+#: a mirror line this export does not carry, `Pierce` is a 3D relation, and the
+#: pattern and projection types have no equivalent here at all. A partial
+#: conversion would be a sketch that means something the source did not.
+SKETCHGRAPHS_CONSTRAINTS = {
+    "Coincident": "coincident",
+    "Distance": "distance",
+    "Length": "distance",
+    "Horizontal": "horizontal",
+    "Vertical": "vertical",
+    "Parallel": "parallel",
+    "Perpendicular": "perpendicular",
+    "Tangent": "tangent",
+    "Midpoint": "midpoint",
+    "Concentric": "concentric",
+    "Radius": "radius",
+    "Diameter": "radius",
+    "Angle": "angle",
+    "Fix": "fixed",
+    "Equal": "equal",          # resolved per referenced kind: length or radius
+}
+
+
+def _sg_entities(record: dict):
+    """The export's entities as our `points` / `lines` / `arcs` / `circles`.
+
+    Every endpoint becomes a named point (`l0.start`), because that is what the
+    constraint graph refers to and what the solver indexes. Coincident points are
+    *not* merged: joining them is what the `Coincident` constraints are for, and
+    merging here would silently discard the relation the dataset exists to carry.
+    """
+    points: dict = {}
+    lines, arcs, circles = [], [], []
+
+    def at(pid, spot):
+        points[pid] = {"id": pid, "x": float(spot.get("x", 0.0)),
+                       "y": float(spot.get("y", 0.0))}
+        return pid
+
+    for entity in record.get("entities") or []:
+        kind = str(entity.get("kind") or "").lower()
+        eid = entity.get("id")
+        if not eid:
+            return None, "entity_without_id"
+        construction = bool(entity.get("construction"))
+        if kind == "point":
+            at(eid, entity)
+        elif kind == "line":
+            lines.append({"id": eid,
+                          "a": at(f"{eid}.start", entity.get("start") or {}),
+                          "b": at(f"{eid}.end", entity.get("end") or {}),
+                          "construction": construction})
+        elif kind == "circle":
+            circles.append({"id": eid,
+                            "center": at(f"{eid}.center", entity.get("center") or {}),
+                            "radius": float(entity.get("radius") or 0.0),
+                            "construction": construction})
+        elif kind == "arc":
+            arcs.append({"id": eid,
+                         "center": at(f"{eid}.center", entity.get("center") or {}),
+                         "a": at(f"{eid}.start", entity.get("start") or {}),
+                         "b": at(f"{eid}.end", entity.get("end") or {}),
+                         "construction": construction})
+        else:
+            # Splines and ellipses are real SketchGraphs entities and this kernel
+            # has neither, so the sketch is dropped rather than approximated.
+            return None, f"entity:{kind or 'unknown'}"
+    if not lines and not arcs and not circles:
+        return None, "no_curves"
+    return {"points": list(points.values()), "lines": lines,
+            "arcs": arcs, "circles": circles, "constraints": []}, ""
+
+
+def _sg_kind_of(spec: dict, ref: str):
+    """Whether a reference names a line, a circle, an arc, or a point."""
+    base = str(ref).split(".")[0]
+    for key, kind in (("lines", "line"), ("circles", "circle"), ("arcs", "arc")):
+        if any(e["id"] == base for e in spec[key]):
+            return kind, base
+    if any(p["id"] == str(ref) for p in spec["points"]):
+        return "point", str(ref)
+    return "", base
+
+
+def _sg_constraint(spec: dict, raw: dict):
+    """One SketchGraphs constraint as one of ours, or `(None, cause)`."""
+    name = str(raw.get("type") or "")
+    mapped = SKETCHGRAPHS_CONSTRAINTS.get(name)
+    if mapped is None:
+        return None, f"constraint:{name or 'unnamed'}"
+    refs = [str(r) for r in (raw.get("refs") or [])]
+    value = raw.get("value")
+    kinds = [_sg_kind_of(spec, r) for r in refs]
+
+    def is_point(index):
+        return index < len(refs) and _sg_kind_of(spec, refs[index])[0] == "point" \
+            or (index < len(refs) and "." in refs[index])
+
+    if mapped == "coincident" and len(refs) >= 2:
+        return {"type": "coincident", "a": refs[0], "b": refs[1]}, ""
+    if mapped == "distance" and name == "Length" and len(refs) >= 1 and value is not None:
+        kind, base = kinds[0]
+        if kind != "line":
+            return None, "constraint:Length:not_a_line"
+        return {"type": "distance", "a": f"{base}.start", "b": f"{base}.end",
+                "value": float(value)}, ""
+    if mapped == "distance" and len(refs) >= 2 and value is not None:
+        return {"type": "distance", "a": refs[0], "b": refs[1],
+                "value": float(value)}, ""
+    if mapped in ("horizontal", "vertical") and refs:
+        kind, base = kinds[0]
+        if kind != "line":
+            return None, f"constraint:{name}:not_a_line"
+        return {"type": mapped, "line": base}, ""
+    if mapped in ("parallel", "perpendicular", "angle") and len(refs) >= 2:
+        if kinds[0][0] != "line" or kinds[1][0] != "line":
+            return None, f"constraint:{name}:not_two_lines"
+        row = {"type": mapped, "line1": kinds[0][1], "line2": kinds[1][1]}
+        if mapped == "angle":
+            if value is None:
+                return None, "constraint:Angle:no_value"
+            row["value"] = float(value)
+        return row, ""
+    if mapped == "midpoint" and len(refs) >= 2:
+        line = next((b for k, b in kinds if k == "line"), None)
+        pnt = next((r for r, (k, _) in zip(refs, kinds) if k != "line"), None)
+        if not line or not pnt:
+            return None, "constraint:Midpoint:needs_a_point_and_a_line"
+        return {"type": "midpoint", "line": line, "point": pnt}, ""
+    if mapped == "concentric" and len(refs) >= 2:
+        if kinds[0][0] not in ("circle", "arc") or kinds[1][0] not in ("circle", "arc"):
+            return None, "constraint:Concentric:not_two_round_entities"
+        return {"type": "concentric", "a": kinds[0][1], "b": kinds[1][1]}, ""
+    if mapped == "radius" and refs and value is not None:
+        kind, base = kinds[0]
+        # A diameter is a radius under another name; halving it is not a guess.
+        measure = float(value) / 2.0 if name == "Diameter" else float(value)
+        if kind == "circle":
+            return {"type": "radius", "circle": base, "value": measure}, ""
+        if kind == "arc":
+            return {"type": "arc_radius", "arc": base, "value": measure}, ""
+        return None, f"constraint:{name}:not_round"
+    if mapped == "tangent" and len(refs) >= 2:
+        return {"type": "tangent", "a": kinds[0][1], "b": kinds[1][1]}, ""
+    if mapped == "fixed" and refs:
+        # **Both coordinates, explicitly.** `fixed` emits one row per axis given,
+        # and a missing axis used to default to the point's live coordinate — a
+        # residual identically zero with a zero derivative, which pins nothing
+        # while still counting as an equation.
+        pid = refs[0]
+        home = next((p for p in spec["points"] if p["id"] == pid), None)
+        if home is None:
+            return None, "constraint:Fix:unknown_point"
+        return {"type": "fixed", "point": pid, "x": home["x"], "y": home["y"]}, ""
+    if mapped == "equal" and len(refs) >= 2:
+        first, second = kinds[0], kinds[1]
+        if first[0] == "line" and second[0] == "line":
+            return {"type": "equal_length", "line1": first[1], "line2": second[1]}, ""
+        if first[0] in ("circle", "arc") and second[0] in ("circle", "arc"):
+            return {"type": "equal_radius", "a": first[1], "b": second[1]}, ""
+        return None, "constraint:Equal:mixed_kinds"
+    return None, f"constraint:{name}:unmapped_shape"
+
+
+def convert_sketchgraphs(record: dict, *, goal: str = ""):
+    """One exported SketchGraphs sketch as a `{"goal", "ops"}` row.
+
+    Reads the JSONL contract `docs/CAD-DATASET-SOURCING.md` documents rather than
+    their binary sequence format: their own library resolves a `Line`'s
+    parametric form (`pntX`, `dirX`, `startParam`) into endpoints, so the export
+    script does that where the library is installed, and nothing here guesses at
+    a format it cannot test. That is the same rule `samples_from_file` follows —
+    the user brings a local file — and the reason this converter has fixtures.
+
+    Unsupported entities and constraints are dropped **by cause**, and a sketch
+    losing any constraint is dropped whole: a sketch missing one relation solves
+    to a different shape, and unlike a solid there is no volume to catch it.
+    """
+    spec, why = _sg_entities(record)
+    if spec is None:
+        _drop(f"sketchgraphs:{why}")
+        return None
+
+    for raw in record.get("constraints") or []:
+        row, cause = _sg_constraint(spec, raw)
+        if row is None:
+            _drop(f"sketchgraphs:{cause}")
+            return None
+        spec["constraints"].append(row)
+
+    from app.services import sketch_solver
+    work = len(spec["points"]) * max(1, len(spec["constraints"]))
+    if work > sketch_solver.MAX_SOLVE_WORK:
+        _drop("sketchgraphs:too_large_to_solve")
+        return None
+
+    counts = [(len(spec["lines"]), "line"), (len(spec["arcs"]), "arc"),
+              (len(spec["circles"]), "circle")]
+    parts = [f"{n} {word}{'s' if n != 1 else ''}" for n, word in counts if n]
+    said = ", ".join(parts)
+    return {
+        "goal": goal or (f"A sketch of {said}, held by "
+                         f"{len(spec['constraints'])} constraints."),
+        "ops": [{"op": "create_sketch", "args": {"sketch": spec, "plane": "xy"}}],
+        # A sketch builds no body, so the geometry check has nothing to measure.
+        "verify": "sketch",
+        "source": "sketchgraphs",
+        "license": "Onshape ToU 1.g.ii",
+    }

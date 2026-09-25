@@ -389,3 +389,94 @@ def test_the_library_source_skips_the_builders_own_documents():
     assert "template scratch" not in goals, (
         "the builder's own scratch document was decompiled as if it were a "
         "library part, with its scratch name as the goal")
+
+
+#: One exported SketchGraphs sketch in the contract `docs/CAD-DATASET-SOURCING.md`
+#: documents: a constrained rectangle with a bored circle, which is most of what
+#: that dataset contains.
+SG_SQUARE = {
+    "id": "sg-1",
+    "entities": [
+        {"kind": "line", "id": "l0", "start": {"x": 0, "y": 0}, "end": {"x": 50, "y": 0}},
+        {"kind": "line", "id": "l1", "start": {"x": 50, "y": 0}, "end": {"x": 50, "y": 30}},
+        {"kind": "line", "id": "l2", "start": {"x": 50, "y": 30}, "end": {"x": 0, "y": 30}},
+        {"kind": "line", "id": "l3", "start": {"x": 0, "y": 30}, "end": {"x": 0, "y": 0}},
+        {"kind": "circle", "id": "c0", "center": {"x": 25, "y": 15}, "radius": 6},
+    ],
+    "constraints": [
+        {"type": "Coincident", "refs": ["l0.end", "l1.start"]},
+        {"type": "Coincident", "refs": ["l1.end", "l2.start"]},
+        {"type": "Coincident", "refs": ["l2.end", "l3.start"]},
+        {"type": "Coincident", "refs": ["l3.end", "l0.start"]},
+        {"type": "Horizontal", "refs": ["l0"]},
+        {"type": "Vertical", "refs": ["l1"]},
+        {"type": "Length", "refs": ["l0"], "value": 50},
+        {"type": "Fix", "refs": ["l0.start"]},
+        {"type": "Diameter", "refs": ["c0"], "value": 12},
+        {"type": "Parallel", "refs": ["l0", "l2"]},
+        {"type": "Perpendicular", "refs": ["l0", "l1"]},
+    ],
+}
+
+
+def test_a_sketchgraphs_sketch_converts_to_this_solver_s_constraints():
+    """15M constrained sketches against `create_sketch`, which has no other source.
+
+    Three mappings are the substance rather than renaming: `Length` on a line is
+    a `distance` between its own endpoints, `Diameter` is a `radius` halved, and
+    `Fix` must carry *both* coordinates — `fixed` emits one row per axis given,
+    and a missing axis used to default to the point's live value, a residual
+    identically zero that pins nothing while still counting as an equation.
+    """
+    from datasets import external
+
+    row = external.convert_sketchgraphs(SG_SQUARE)
+    assert row is not None
+    spec = row["ops"][0]["args"]["sketch"]
+    assert row["ops"][0]["op"] == "create_sketch"
+    assert row["verify"] == "sketch", "a sketch has no body for a geometry check"
+    assert row["license"] == "Onshape ToU 1.g.ii"
+
+    kinds = {c["type"] for c in spec["constraints"]}
+    assert {"coincident", "horizontal", "vertical", "distance", "radius",
+            "fixed", "parallel", "perpendicular"} <= kinds
+
+    assert {"type": "radius", "circle": "c0", "value": 6.0} in spec["constraints"], \
+        "a diameter is a radius under another name"
+    assert {"type": "distance", "a": "l0.start", "b": "l0.end",
+            "value": 50.0} in spec["constraints"]
+    assert {"type": "fixed", "point": "l0.start", "x": 0.0,
+            "y": 0.0} in spec["constraints"]
+    # Endpoints are named points and coincident ones are *not* merged: joining
+    # them is what the Coincident constraints are for, and merging here would
+    # discard the relation the dataset exists to carry.
+    assert len(spec["points"]) == 9 and len(spec["lines"]) == 4
+
+
+@pytest.mark.parametrize("record, cause", [
+    ({"entities": [{"kind": "spline", "id": "s0"}], "constraints": []},
+     "sketchgraphs:entity:spline"),
+    ({"entities": [{"kind": "line", "id": "l0", "start": {"x": 0, "y": 0},
+                    "end": {"x": 5, "y": 0}}],
+      "constraints": [{"type": "Mirror", "refs": ["l0", "l0"]}]},
+     "sketchgraphs:constraint:Mirror"),
+])
+def test_a_sketch_this_solver_cannot_express_is_dropped_by_cause(record, cause):
+    """Whole, not partially. A sketch missing one relation solves to a different
+    shape, and unlike a solid there is no volume to catch it afterwards."""
+    from datasets import external
+
+    external.DROPS.clear()
+    assert external.convert_sketchgraphs(record) is None
+    assert cause in external.DROPS
+
+
+def test_a_converted_sketch_is_verified_by_the_solver_not_by_geometry(tmp_path):
+    from datasets import external
+
+    path = tmp_path / "sg.jsonl"
+    path.write_text(json.dumps(external.convert_sketchgraphs(SG_SQUARE)) + "\n")
+    external.DROPS.clear()
+    samples = external.samples_from_file(str(path))
+    assert not external.DROPS, external.DROPS
+    assert [s.meta.get("op") for s in samples] == ["create_sketch", "finish_task"]
