@@ -370,6 +370,29 @@ def train(args) -> int:
 
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
                                   lr=args.lr, weight_decay=0.0)
+
+    # **Why a schedule is an option at all.** The first 2B run was measured twice:
+    # at 2,800 of 4,155 samples it scored 0.900 on the goal suite, and finishing
+    # the epoch took it to 0.867 with the finishing turns halved and every task
+    # taking two steps more — while validation loss *fell* 0.025 -> 0.0094 and
+    # train loss reached 3.8e-05. What degrades at a constant rate once the loss
+    # is that low is knowing when to stop. Decaying the rate is the standard
+    # answer and it is untested here, so it is a flag rather than the default:
+    # one variable, against a baseline that exists.
+    planned = args.max_steps or (len(training) * args.epochs)
+    updates = max(1, planned // max(1, args.accumulate))
+
+    def lr_at(update: int) -> float:
+        if args.lr_schedule == "constant":
+            return args.lr
+        warm = max(1, int(0.03 * updates))
+        if update < warm:
+            return args.lr * (update + 1) / warm
+        progress = min(1.0, (update - warm) / max(1, updates - warm))
+        # To a tenth rather than to zero: the last samples should still teach.
+        return args.lr * (0.1 + 0.9 * 0.5 * (1.0 + math.cos(math.pi * progress)))
+
+    updates_done = 0
     step = 0
     if args.resume and (out_dir / "latest.pt").exists():
         saved = torch.load(out_dir / "latest.pt", map_location="cpu", weights_only=True)
@@ -465,7 +488,11 @@ def train(args) -> int:
             if pending >= args.accumulate:
                 torch.nn.utils.clip_grad_norm_([p for p in model.parameters()
                                                 if p.requires_grad], args.grad_clip)
+                rate = lr_at(updates_done)
+                for group in optimizer.param_groups:
+                    group["lr"] = rate
                 optimizer.step()
+                updates_done += 1
                 optimizer.zero_grad(set_to_none=True)
                 pending = 0
             step += 1
@@ -491,7 +518,8 @@ def train(args) -> int:
             break
 
     torch.save({"lora": lora_state(model), "step": step}, out_dir / "lora-final.pt")
-    summary = {"steps": step, "max_len_used": max_len, "dropped_for_length": dropped,
+    summary = {"steps": step, "max_len_used": max_len,
+               "lr_schedule": args.lr_schedule, "optimizer_updates": updates_done, "dropped_for_length": dropped,
                "train_samples": len(training), "val_samples": len(validation),
                "trainable_parameters": trainable, "seconds": round(time.time() - started, 1)}
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
@@ -518,6 +546,10 @@ def main(argv=None) -> int:
     # the second epoch cost three hours and bought nothing.
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--lr-schedule", default="constant",
+                        choices=("constant", "cosine"), dest="lr_schedule",
+                        help="cosine warms up 3%% of updates then decays to a "
+                             "tenth of --lr; constant is what the measured runs used")
     parser.add_argument("--accumulate", type=int, default=8,
                         help="samples per optimizer step. Free in memory (the graph is "
                              "freed after each backward), so this is how to get an "
