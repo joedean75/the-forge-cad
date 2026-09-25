@@ -36,6 +36,46 @@
 > **solved `plate-4-holes`**, which both the 0.6B and Opus 5 had failed — so that
 > task was neither impossible nor mis-specified.
 >
+> **Finishing the epoch made it worse, and the loss curve said otherwise**
+> (2026-09-25). The run above stopped at 2,800 of 4,155 samples; resumed to the
+> end, validation loss fell 0.025 -> 0.0094 and the suite went **0.900 -> 0.867,
+> solved 4 -> 3, finished 4 -> 2, mean steps 3.33 -> 5.33**. Every task took more
+> steps, and both regressions are the same failure: `plate-4-holes` cut **8 holes
+> where 4 were required**, and `boss-on-plate` spent 7 steps without reaching the
+> boss. What degraded is knowing when to stop — while the metric being watched
+> improved. Train loss at the end was 3.8e-05, which is the tell: with a constant
+> learning rate and no decay the last third of the epoch was memorising.
+>
+> **The checkpoint is reproducible; the ranking between checkpoints is not.** The
+> planner runs at temperature 0.2, so the suite is not deterministic and a 0.033
+> gap on six tasks could be noise. Re-running step 2,800 independently gave
+> **0.900, solved 4, finished 4, 3.17 steps, identical error codes** — so
+> within-checkpoint variance is small and that regression is real. But per-task
+> outcomes move between checkpoints in a way the aggregate hides:
+>
+> | task | s2800 A | s2800 B | s3400 | s4155 |
+> |---|---|---|---|---|
+> | plate | 1.00 | 1.00 | 1.00 | 1.00 |
+> | plate-4-holes | 1.00 | 1.00 | 1.00 | 0.80 |
+> | boss-on-plate | 1.00 | 1.00 | **0.00** | 0.80 |
+> | bushing | 1.00 | 1.00 | 1.00 | 1.00 |
+> | steel-plate | 0.60 | 0.60 | **1.00** | 0.60 |
+> | filleted-block | 0.80 | 0.80 | 0.80 | **1.00** |
+> | **mean** | 0.900 | 0.900 | 0.800 | 0.867 |
+>
+> `steel-plate` is met only at 3,400 and `filleted-block` only at 4,155 — the two
+> requirements with **zero labels in the corpus** are the two that flip, which
+> says those operations are reachable but unreliable rather than absent. And
+> `boss-on-plate` at 3,400 is not a low score but an *invalid solid*, a worse
+> failure than any number here.
+>
+> So the honest conclusion is narrower than "2,800 is the best checkpoint": it is
+> the best of the three measured and the only one measured twice, and **six tasks
+> cannot rank checkpoints** — each task is one Bernoulli draw, and picking a
+> checkpoint on this suite is tuning on noise. That is A1 reasserting itself: the
+> next investment is more tasks, not more training, and until there are more the
+> suite's job is telling 0.533 from 0.900, not 0.900 from 0.867.
+>
 > **What is shared and what is not**: the same six tasks, the same reward
 > function (`verify_against_spec` on the built body) and the same pinned
 > resolution 96 — but each model runs the prompt it is built for, Opus on `full`
