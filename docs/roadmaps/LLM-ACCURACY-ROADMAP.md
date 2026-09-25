@@ -28,7 +28,36 @@
 > task the fine-tune also failed, which makes it the first place to look at the
 > *task* rather than the model.
 >
-> **The goal suite has now been run once**, against a local fine-tune of Qwen3
+> **A 2B fine-tune matches Opus 5 on the score** (2026-09-25, Qwen3.5-2B,
+> rank-16 LoRA, 2,800 samples in 8.25 h on a 6 GB laptop 3050, baseline in
+> `backend/data/eval-goals-2b-20260925-0134.json`): **solved 4/6, mean score
+> 0.900, geometry 6/6, finished 4/6, mean 3.33 steps, 7 failed calls.** Against
+> Opus 5's 5/6 and 0.900 on the same pinned conditions, and against the same
+> corpus's 0.6B at 0/6 and 0.533. It also **solved `plate-4-holes`**, which both
+> the 0.6B and Opus 5 had failed — so that task was neither impossible nor
+> mis-specified.
+>
+> Two things made the difference and only one of them is the parameter count. The
+> corpus was rebuilt with the trimmed `finetuned` prompt (406 tokens out), which
+> at the 3,072-token cap this card imposes took the surviving set from 48% to 67%
+> — and, the part that matters, the finishing turns from 32% to 54% and the
+> recovery turns from 31% to 40%. The 0.6B run's defining failure was that no run
+> ever called `finish_task`; it had been trained on a set where two thirds of the
+> finishing turns did not fit.
+>
+> **Both remaining misses are corpus gaps, and they are countable.** `steel-plate`
+> scored 0.60 on two unmet requirements that are really one missed call — the
+> material is unset, so the mass came out 67.5 g against a required 191.75–201.75
+> — and `set_material` appears **0 times in the 6,173 labels**. `filleted-block`
+> scored 0.80 on `0 × EdgeFilletFeature`; `fillet_edges` is also 0, and the only
+> route in the corpus is `add_modifier` (645). A model will not call an operation
+> it has never seen chosen, however clearly the prompt lists its name — which
+> makes "cover the catalog in the labels" a more specific next step than more
+> data. The distribution is five ops doing 97% of the work: `add_primitive`
+> 2,533, `set_feature_params` 1,466, `finish_task` 995, `add_modifier` 645,
+> `set_parameters` 402.
+>
+> **The previous run, for the record** — against a local fine-tune of Qwen3
 > 0.6B served through `backend/training/serve.py` (2026-09-24, baseline in
 > `backend/data/eval-goals-finetuned-20260924.json`): **solved 0/6, mean score
 > 0.533, geometry valid 5/6, finished 0/6, mean 3.5 steps, 9 failed calls all
