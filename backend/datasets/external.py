@@ -102,7 +102,8 @@ def verify_sketch(doc_id: str) -> Tuple[bool, str]:
     return True, status or "solved"
 
 
-def samples_from_file(path: str, *, limit: Optional[int] = None) -> List:
+def samples_from_file(path: str, *, limit: Optional[int] = None,
+                     profile: str = "full") -> List:
     """Verified turn samples from a converted dataset file.
 
     Each line's operations are replayed into a fresh document inside a recording,
@@ -167,8 +168,19 @@ def samples_from_file(path: str, *, limit: Optional[int] = None) -> List:
                     _drop("record:missing")
                     continue
                 record = {**record, "outcome": "done", "subject": "document"}
+                # **The profile has to be threaded, not defaulted.** It was not,
+                # so a corpus built `--profile finetuned --sources imported` got
+                # `full` samples for that source alone: tool schemas, the prose
+                # rules and a `tool_calls` label, against the short prompt and
+                # JSON reply every other source in the same file used. Two
+                # protocols in one corpus is the mistake three action-space
+                # generators made — a model taught to drive an API that is not
+                # the one it is served. It also made every sample far too long to
+                # train: measured, a median 5,490 tokens against a 3,072 cap,
+                # 3,092 of which were the directory this profile does not send.
                 samples = corpus.samples_from_record(record, source=row.get("source") or "imported",
-                                                     synthetic_finish=True)
+                                                     synthetic_finish=True,
+                                                     profile=profile)
                 for sample in samples:
                     sample.meta.update({"source": row.get("source") or "imported",
                                         "license": row.get("license") or "unknown",

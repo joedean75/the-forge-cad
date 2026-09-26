@@ -51,14 +51,14 @@ def _gather(names: List[str], args) -> List[corpus.Sample]:
             samples += corpus.library_samples(args.owner, limit=args.library_limit,
                                               profile=args.profile)
         elif name == "imported":
-            samples += _imported(args.imported)
+            samples += _imported(args.imported, args.profile)
         else:
             raise SystemExit(f"unknown source {name!r}; one of {', '.join(SOURCES)}")
         print(f"  {name:10} -> {len(samples):6,} samples so far", flush=True)
     return samples
 
 
-def _imported(path: str) -> List[corpus.Sample]:
+def _imported(path: str, profile: str = "full") -> List[corpus.Sample]:
     """Samples from an external dataset already converted to operation sequences.
 
     The converter is `datasets/external.py`, which reads a local copy the user
@@ -70,7 +70,7 @@ def _imported(path: str) -> List[corpus.Sample]:
         raise SystemExit("--sources imported needs --imported <file.jsonl>")
     from datasets import external
 
-    return external.samples_from_file(path)
+    return external.samples_from_file(path, profile=profile)
 
 
 def main(argv=None) -> int:

@@ -54,15 +54,15 @@ def _slice(rows_path: str, start: int, count: int) -> List[str]:
     return out
 
 
-def _run_chunk(rows_path: str, start: int, count: int,
-               timeout: int) -> Tuple[bool, List[dict], Dict[str, int], str]:
+def _run_chunk(rows_path: str, start: int, count: int, timeout: int,
+               profile: str) -> Tuple[bool, List[dict], Dict[str, int], str]:
     """One child process over `rows[start:start+count]`."""
     with tempfile.TemporaryDirectory() as scratch:
         emit = os.path.join(scratch, "samples.jsonl")
         proc = subprocess.run(
             [sys.executable, "-m", "datasets.ingest", "--worker",
              "--rows", rows_path, "--start", str(start), "--count", str(count),
-             "--emit", emit],
+             "--emit", emit, "--profile", profile],
             capture_output=True, text=True, timeout=None if timeout <= 0 else timeout,
             check=False, env=os.environ.copy())
         if proc.returncode != 0 or not os.path.exists(emit):
@@ -81,7 +81,7 @@ def _run_chunk(rows_path: str, start: int, count: int,
 
 
 def ingest(rows_path: str, *, chunk: int = CHUNK, timeout: int = TIMEOUT,
-           limit: int = 0) -> Tuple[List[dict], Dict[str, int]]:
+           limit: int = 0, profile: str = "finetuned") -> Tuple[List[dict], Dict[str, int]]:
     total = sum(1 for line in open(rows_path) if line.strip())
     if limit:
         total = min(total, limit)
@@ -94,7 +94,8 @@ def ingest(rows_path: str, *, chunk: int = CHUNK, timeout: int = TIMEOUT,
     def attempt(start: int, count: int) -> None:
         """Run a span, halving it when the child dies rather than losing it all."""
         try:
-            ok, rows, chunk_drops, why = _run_chunk(rows_path, start, count, timeout)
+            ok, rows, chunk_drops, why = _run_chunk(rows_path, start, count,
+                                                    timeout, profile)
         except subprocess.TimeoutExpired:
             ok, rows, chunk_drops, why = False, [], {}, "timeout"
         if ok:
@@ -132,7 +133,7 @@ def _worker(args) -> int:
         slice_path = handle.name
     external.DROPS.clear()
     try:
-        samples = external.samples_from_file(slice_path)
+        samples = external.samples_from_file(slice_path, profile=args.profile)
     finally:
         os.unlink(slice_path)
     with open(args.emit, "w") as out:
@@ -151,6 +152,9 @@ def main(argv=None) -> int:
     parser.add_argument("--timeout", type=int, default=TIMEOUT)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--val-fraction", type=float, default=0.1, dest="val_fraction")
+    parser.add_argument("--profile", default="finetuned", choices=("full", "finetuned"),
+                        help="the prompt profile these samples are built for; it "
+                             "must match what the model will be served")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--start", type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument("--count", type=int, default=0, help=argparse.SUPPRESS)
@@ -166,7 +170,7 @@ def main(argv=None) -> int:
     from datasets import corpus
 
     records, drops = ingest(args.rows, chunk=args.chunk, timeout=args.timeout,
-                            limit=args.limit)
+                            limit=args.limit, profile=args.profile)
     if not records:
         print("no samples; nothing written", file=sys.stderr)
         return 1
@@ -183,7 +187,7 @@ def main(argv=None) -> int:
         with open(os.path.join(args.out, f"{name}.meta.jsonl"), "w") as fh:
             for sample in rows:
                 fh.write(json.dumps(sample.meta) + "\n")
-    report = {"profile": "finetuned", "figures": figures,
+    report = {"profile": args.profile, "figures": figures,
               "duplicates_dropped": built["duplicates_dropped"],
               "dropped_sources": dict(sorted(drops.items())),
               "sources": ["imported"], "val_fraction": args.val_fraction,

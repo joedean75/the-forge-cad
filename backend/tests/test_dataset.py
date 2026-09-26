@@ -561,3 +561,37 @@ def test_the_yield_report_separates_what_blocks_from_what_would_unblock(tmp_path
     assert report["ops_emitted"].get("add_hole") == 1
     # The CLI is the way this is used, so it has to run.
     assert yield_report.main([str(path), "--json"]) == 0
+
+
+def test_an_imported_sample_is_built_for_the_profile_that_was_asked_for(tmp_path):
+    """The profile was not threaded into the imported source, so a corpus built
+    `--profile finetuned` got `full` samples for that source alone: tool schemas,
+    the prose rules and a `tool_calls` label, against the short prompt and JSON
+    reply every other source in the same file used.
+
+    Two protocols in one corpus is the mistake three action-space generators made,
+    and here it also made the samples untrainable — a median 5,490 tokens against
+    a 3,072 cap, 3,092 of them the operation directory this profile does not send.
+    """
+    from datasets import external
+
+    path = tmp_path / "rows.jsonl"
+    path.write_text(json.dumps({
+        "goal": "a 40 x 30 x 6 mm plate",
+        "ops": [{"op": "add_primitive",
+                 "args": {"shape": "box",
+                          "params": {"size": {"x": 0.04, "y": 0.03, "z": 0.006},
+                                     "center": {"x": 0.0, "y": 0.0, "z": 0.0}}}}],
+        "source": "test", "license": "internal"}) + "\n")
+
+    lean = external.samples_from_file(str(path), profile="finetuned")
+    assert lean, external.DROPS
+    assert all(s.tools is None for s in lean), "the finetuned profile sends no schemas"
+    assert any((s.messages[-1].get("content") or "").strip() for s in lean), \
+        "the finetuned label is JSON in the content, not a tool call"
+
+    full = external.samples_from_file(str(path), profile="full")
+    assert any(s.tools for s in full), "the full profile does send schemas"
+    lean_size = len(json.dumps([s.messages for s in lean]))
+    full_size = len(json.dumps([s.messages for s in full]))
+    assert lean_size < full_size, (lean_size, full_size)
