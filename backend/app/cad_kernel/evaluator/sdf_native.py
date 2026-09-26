@@ -10,7 +10,10 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+import logging
 import numpy as np
+
+_LOGGER = logging.getLogger(__name__)
 
 from app.cad_kernel.core.topology import Solid
 from app.cad_kernel.evaluator.sdf import (
@@ -155,12 +158,32 @@ def compile_feature(feature) -> Optional[dict]:
         return {"op": "boolean", "operation": "union", "children": copies}
     if isinstance(feature, ExtrudeFeature):
         from app.cad_kernel.evaluator.sdf import _PLANE_NORMAL
+        # **The Rust sampler knows three profile shapes and `loops` is not one.**
+        # Everything else here declines by returning None, which is the numpy
+        # fallback; an unknown profile instead reached the crate and came back as
+        # `unknown variant 'loops', expected one of 'rect', 'circle', 'polygon'`
+        # — serde's complaint, raised rather than returned, so the document
+        # failed to evaluate at all. `loops` is what `sketch_to_loops` emits, so
+        # on a deployment without OCP *every sketch-derived extrude* was a dead
+        # document, against the promise that everything still works through the
+        # SDF. The numpy sampler has built `loops` since sketches became curves.
+        if str((feature.profile or {}).get("type", "")) not in NATIVE_PROFILES:
+            return None
         return {
             "op": "extrude", "profile": feature.profile,
             "normal": _PLANE_NORMAL.get(feature.plane, "z"),
             "offset": float(feature.offset), "depth": float(feature.depth),
         }
     return None  # OptimizeFeature (GridSDF) and anything else -> numpy fallback
+
+
+#: The profile shapes the Rust crate can deserialize. Kept here as the gate
+#: rather than discovered at the boundary, because the crate answers an unknown
+#: one by raising, and this module's whole contract is that it returns None when
+#: it cannot help. `tests/test_sdf_native_parity.py` compares mesh hashes across
+#: the trees it *does* take; a shape it does not take has to reach numpy to be
+#: compared at all.
+NATIVE_PROFILES = ("rect", "circle", "polygon")
 
 
 def evaluate_feature_native(feature, resolution: int = 128, margin: float = 0.05, level: float = 0.0) -> Optional[Solid]:
@@ -173,11 +196,19 @@ def evaluate_feature_native(feature, resolution: int = 128, margin: float = 0.05
 
     bounds = sdf_from_feature(feature).bounds().expanded(margin)
     min_b, max_b, size, nx, ny, nz = grid_dims(bounds, resolution)
-    flat = _native.sample_grid(
-        json.dumps(program),
-        [float(min_b[0]), float(min_b[1]), float(min_b[2])],
-        [float(max_b[0]), float(max_b[1]), float(max_b[2])],
-        (nx, ny, nz),
-    )
+    try:
+        flat = _native.sample_grid(
+            json.dumps(program),
+            [float(min_b[0]), float(min_b[1]), float(min_b[2])],
+            [float(max_b[0]), float(max_b[1]), float(max_b[2])],
+            (nx, ny, nz),
+        )
+    except Exception as exc:  # noqa: BLE001 — the crate refusing is not a failure
+        # Belt and braces behind `NATIVE_PROFILES`: whatever the crate declines,
+        # numpy is the reference implementation and the parity test exists to say
+        # they agree. Failing the document instead would make a *speedup* into a
+        # correctness hazard, which is the one thing two evaluators must not be.
+        _LOGGER.debug("native sampler declined, falling back to numpy: %s", exc)
+        return None
     values = np.asarray(flat).reshape(nx, ny, nz)
     return mesh_from_field(values, min_b, size, nx, ny, nz, level)
