@@ -181,22 +181,44 @@ column the converter reads out of a 349 GB repo (`datasets/yield_report.py`):
 | one call away | `shell` **30 programs**, `pushPoints` 25, `cutBlind` 14 |
 | mentioned, unsupported | `union` 58.6%, `center` 56.2%, `cutBlind` 40.2% |
 
-**This contradicts the reason this dataset was made the top priority, so the
-reason is withdrawn.** Its card lists `fillet`, `chamfer` and `shell`, and those
+**The blockers are this converter, not this catalog**, and that is the first thing
+to be clear about. Ranked by the programs each appears unsupported in: `union`
+58.6% (`add_primitive operation=union`), `center` 56.2% (every builder takes a
+centre), `cutBlind`/`cut` 40/37% (`subtract`), `pushPoints` 39% (`PatternFeature`
+kind `table`, which exists for exactly this), `translate`/`rotate` 37/13%
+(`add_modifier transform`), `lineTo`/`polyline`/`threePointArc` 24/15/8%
+(`create_sketch` lines and arcs), `revolve` 18% (`add_revolve`), `shell` 15%
+(`shell_faces`), `rarray`/`polarArray` 15/8% (pattern `linear`/`circular`). Every
+one of those has an equivalent here. What is genuinely absent — splines, ellipses,
+2D offset — is in the 623-call tail rather than the top.
+
+What stops the converter is its shape: `_chain` reads a program as one linear run
+of method calls and takes the longest, so it has no variable holding a solid, no
+placement state and no sketch accumulated across calls. These programs assign
+intermediate solids, union them, and build a profile over five chained calls.
+`radians`/`sin` at 7.9% are the same problem in another form — program arithmetic
+needing evaluation rather than an operation to map onto.
+
+**So the priority's stated reason was wrong, but narrowly.** Its card lists `fillet`, `chamfer` and `shell`, and those
 are the operations the goal suite found missing — but the programs that *convert*
 are overwhelmingly plain extrudes, and only **7 of 945** emitted a fillet or
 chamfer at all. That is a selection effect rather than a surprise: a program
-simple enough to survive this converter is a program with few operations in it.
-Zero-To-CAD will not fill the fillet/chamfer/shell gap that
-`corpus.coverage_rows` was written for.
+simple enough to survive this converter is a program with few operations in it —
+which also means the measurement says nothing about what the *other* 90% contains.
+Zero-To-CAD will not fill the fillet/chamfer/shell gap **with this converter**;
+whether it would with a better one is untested, and the bias cuts the way that
+suggests it might.
 
 **Widening it one call at a time is also withdrawn.** That was the plan, and the
 two-column measurement is what killed it: the best single call to add wins
 **30 programs in 10,000**, because `union` appears unsupported in 58.6% of them
 and `center` in 56.2% — most programs need several of the missing calls, not one.
-Reaching them means a CadQuery-subset interpreter with placement tracking
-(`union`, `center`, `cutBlind`, `translate`, `edges`, `pushPoints` and sketch
-construction), which is a project rather than an afternoon.
+Reaching them means a CadQuery-subset interpreter: workplane and placement state,
+sketch entities accumulated across calls, several solid variables, folded
+booleans. A project rather than an afternoon — and every operation it would emit
+already exists, so it is parser work with no kernel work behind it.
+`yield_report` makes each increment measurable, which is what makes it worth
+starting: 9.4% is a baseline, not a verdict.
 
 **What it is still worth, and it is a lot.** 9.4% of the 979,633-row train split
 is roughly **92,000 verified sequences**, against a v5 corpus of 2,574 — and they
