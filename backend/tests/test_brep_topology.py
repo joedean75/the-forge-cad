@@ -360,3 +360,58 @@ def test_a_face_id_that_is_not_a_position_name_still_fails_loudly():
     ops.dispatch("add_primitive", doc.id, {"shape": "box", "params": {"size": V(.06, .04, .03)}})
     env = ops.execute("shell_faces", doc.id, {"faces": "upwards", "thickness": .002})
     assert not env["ok"] and env["error"]["code"] == "BAD_ARG"
+
+
+def _emptied():
+    """A document whose material a subtract removed entirely — two operations."""
+    doc = docs.create_document(name="Gone", resolution=48, owner_id=None)
+    ops.dispatch("add_primitive", doc.id, {"shape": "box", "params": {"size": V(.02, .02, .02)}})
+    ops.execute("add_primitive", doc.id, {"shape": "box", "params": {"size": V(.05, .05, .05)},
+                                         "operation": "subtract"})
+    return doc
+
+
+def test_an_emptied_body_says_so_rather_than_naming_a_bounding_box():
+    """`Bnd_Box.Get` raises about *itself* on a void box, and that message reached
+    the caller as the whole explanation of a document that had just been emptied:
+    `Standard_ConstructionError: Bnd_Box is void`, naming neither the body nor the
+    operation. It is a warning rather than a failure, which is the documented
+    contract for a tree that does not evaluate."""
+    doc = _emptied()
+    env = ops.execute("add_primitive", doc.id, {"shape": "box",
+                                                "params": {"size": V(.05, .05, .05)},
+                                                "operation": "subtract"})
+    text = " ".join(str(w.get("message")) for w in (env.get("warnings") or []))
+    assert "empty" in text and "Bnd_Box" not in text, text
+
+
+@pytest.mark.parametrize("op, args", [
+    ("fillet_edges", {"edges": "all", "radius": .001}),
+    ("chamfer_edges", {"edges": "all", "distance": .001}),
+    ("shell_faces", {"faces": "top", "thickness": .001}),
+    ("add_modifier", {"modifier": "fillet", "params": {"radius": .001}}),
+])
+def test_selecting_topology_on_an_emptied_body_is_a_precondition(op, args):
+    """`PRECONDITION`, because the fix is an earlier step — put material back —
+    and not a different argument. It arrived as `INTERNAL`, which the copilot
+    playbook reads as "not the arguments at all": true, and useless, because
+    nothing in the message said the body was gone."""
+    env = ops.execute(op, _emptied().id, args)
+    assert not env["ok"]
+    assert env["error"]["code"] == "PRECONDITION", env["error"]
+
+
+def test_the_handler_that_swallows_a_nameless_body_can_actually_run():
+    """`tessellate_owned`'s `except` says "a nameless body is not a failure" and
+    then raised `NameError: _LOGGER`, because the module never defined one — so
+    the graceful path for an empty body *was* the failure, and it surfaced as
+    `evaluation failed: name '_LOGGER' is not defined`. The same shape as the CSP
+    that refused `index.html`'s own error handler: the safety net was dead."""
+    from app.cad_kernel.evaluator import brep
+
+    assert hasattr(brep, "_LOGGER"), "the module logs from an except clause"
+    text = " ".join(str(w.get("message")) for w in
+                    (ops.execute("add_primitive", _emptied().id,
+                                 {"shape": "box", "params": {"size": V(.05, .05, .05)},
+                                  "operation": "subtract"}).get("warnings") or []))
+    assert "_LOGGER" not in text

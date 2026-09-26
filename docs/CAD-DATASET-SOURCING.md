@@ -168,6 +168,31 @@ dataset. The export script is a dozen lines over
    which dropped type is worth adding next. Expect `Mirror` to lead — it is the
    one common constraint declined for a missing argument rather than for having no
    equivalent, and carrying the mirror line in the export would fix it.
+### What actually limits the ingest (2026-09-26)
+
+Not conversion and not licence — **training hours**. Measured: 0.36 s to replay
+and geometry-check one converted program, 64% surviving both, and ~2.4 samples per
+survivor. So a thousand programs is six minutes of build and about 2,400 samples,
+and the corpus grows cheaply. Then:
+
+| corpus | samples | one epoch at 10.5 s/sample |
+|---|---|---|
+| v5 (trained, scored 0.879 on the goal suite) | 2,574 | 5.9 h |
+| v6 = v5 + 3,381 programs' worth | ~5,400 | ~14 h |
+| v5 + 30,000 programs' worth | ~27,500 | 80 h |
+
+34.5% of the 979,633-row train split is ~338,000 programs, which is years of
+epochs on this card. So "ingest what the interpreter can read" is bounded by what
+can be *trained on*, and the number to choose is a number of hours.
+
+The trade to watch is **dilution**, and it is arithmetic rather than a worry.
+`coverage` is 17% of v5 and it is what took the goal suite from 0.764 to 0.879 by
+supplying the five operations with no other source. Ten times as much Zero-To-CAD
+at the same step budget makes coverage 1.6% of what the model sees, which is
+below where it was when those tasks were failing. Adding depth and keeping the
+mixture are the same decision, so the ratio is worth stating in the card rather
+than discovering in the score.
+
 ### The interpreter, and what it moved (2026-09-26)
 
 `datasets/cadquery_interp.py` executes the program instead of pattern-matching a

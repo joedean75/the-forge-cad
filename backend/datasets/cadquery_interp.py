@@ -97,6 +97,9 @@ class Workplane:
     #: Where the pen is, for `lineTo`/`threePointArc` chains.
     pen: Optional[Tuple[float, float]] = None
     start: Optional[Tuple[float, float]] = None
+    #: Whether `edges(...)` narrowed the selection. A fillet after one is a
+    #: *local* fillet, and this catalog's whole-body treatment is a different body.
+    narrowed: bool = False
     #: The face `faces(...)` last named, as one of `datum.FACE_MAP`'s six names.
     #: `shell` is the only thing that needs it, and it needs it because a shell
     #: opens a face rather than sitting on one.
@@ -111,7 +114,7 @@ class Workplane:
         base = {"plane": self.plane, "cx": self.cx, "cy": self.cy,
                 "height": self.height, "curves": list(self.curves), "pen": self.pen,
                 "start": self.start, "points": list(self.points),
-                "opening": self.opening,
+                "opening": self.opening, "narrowed": self.narrowed,
                 "ops": list(self.ops), "box": self.box.copy()}
         base.update(changes)
         return Workplane(**base)
@@ -725,7 +728,7 @@ class Interpreter:
 
     def m_box(self, wp, args, kwargs):
         length, width, height = _numbers(args[:3], "box")
-        out = wp.clone(ops=wp.ops + [{"op": "add_primitive", "args": {
+        out = wp.clone(narrowed=False, ops=wp.ops + [{"op": "add_primitive", "args": {
             "shape": "box",
             "params": {"size": {"x": length / MM, "y": width / MM, "z": height / MM},
                        "center": wp.centre3()}}}])
@@ -833,15 +836,43 @@ class Interpreter:
             "through": True, "center": wp.centre3(at=at)}} for at in wp.locations()]
         return wp.clone(ops=wp.ops + drilled, points=[])
 
-    def m_fillet(self, wp, args, kwargs):
-        radius = _numbers(args[:1], "fillet")[0]
+    #: Operations whose edges OCC's fillet solver struggles with. A whole-body
+    #: chamfer over a 360-degree revolve's seam and circular edges is where it
+    #: stops converging: one program in this dataset held the ingest for over an
+    #: hour at 283% CPU, on a revolved ring with three holes and
+    #: `add_modifier("chamfer")`. Nothing times out inside a C++ call, so the only
+    #: reliable bound is not to emit the case.
+    _CURVED = ("add_revolve", "add_loft", "add_ruled_loft", "add_sweep")
+
+    def _edge_treatment(self, wp, kind: str, value: float) -> Workplane:
+        """A whole-body fillet where the program may have narrowed to some edges.
+
+        Refusing the narrowed case was tried and reverted, because it is 39% of
+        this dataset — `.edges(sel).chamfer()` 25.7% and `.fillet()` 13.5% — and
+        the measurement was 28.8% converted down to 2.3%. The reason it is
+        acceptable is narrower than "the geometry check will catch it", which was
+        the old justification and is false here: `convert_cadquery` emits no
+        `expect`, so nothing compares this against the source's body.
+        
+        It is acceptable because of what the *goal* says. These goals are composed
+        from the program's named dimensions — "body length 80 mm, bore dia 12 mm" —
+        and say nothing about which edges are rounded. The sequence builds a part
+        that meets its stated goal using the operation this catalog actually has:
+        `add_modifier("fillet")` *is* the whole-body treatment, and `fillet_edges`
+        with ids is the selective one. So the sample teaches the catalog correctly
+        even where it is not the source's exact body. What it must not do is claim
+        otherwise, which is why `converted_by` rides on the row.
+        """
+        if any(op["op"] in self._CURVED for op in wp.ops):
+            raise Unsupported(f"{kind}:curved_body")
         return wp.clone(ops=wp.ops + [{"op": "add_modifier", "args": {
-            "modifier": "fillet", "params": {"radius": radius / MM}}}])
+            "modifier": kind, "params": {"radius": value / MM}}}])
+
+    def m_fillet(self, wp, args, kwargs):
+        return self._edge_treatment(wp, "fillet", _numbers(args[:1], "fillet")[0])
 
     def m_chamfer(self, wp, args, kwargs):
-        distance = _numbers(args[:1], "chamfer")[0]
-        return wp.clone(ops=wp.ops + [{"op": "add_modifier", "args": {
-            "modifier": "chamfer", "params": {"radius": distance / MM}}}])
+        return self._edge_treatment(wp, "chamfer", _numbers(args[:1], "chamfer")[0])
 
     def m_shell(self, wp, args, kwargs):
         """`.faces(">Z").shell(-2)` — a hollow with that face open.
@@ -925,14 +956,18 @@ class Interpreter:
     def m_edges(self, wp, args, kwargs):
         """`.edges('>Z')` before a fillet or chamfer.
 
-        The selector narrows *which* edges, and `add_modifier("fillet")` treats
-        every edge of the body — so the selector cannot be honoured and is not a
-        lie either: what follows is a whole-body edge treatment, which is what
-        the operation does. It was the largest single cause at 19.6%, and the
-        conversion is still checked against the source's geometry, so a program
-        whose fillet was meant to be local fails there rather than here.
+        The selector narrows *which* edges and `add_modifier("fillet")` treats
+        every edge, so the two are not the same body. This used to shrug and carry
+        on, reasoning that the geometry check would catch it — and there is no
+        geometry check on this path: `convert_cadquery` emits no `expect`, so
+        `verify` only asks whether the result is a valid solid. A rounded-corner
+        plate with every edge rounded is a valid solid.
+        
+        So the selector is *recorded*, and a fillet or chamfer that follows one is
+        refused. Selecting edges for anything else — a query, a tag — still passes
+        through, which is why this is a flag rather than a refusal here.
         """
-        return wp
+        return wp.clone(narrowed=True)
 
     def m_vertices(self, wp, args, kwargs):
         return wp
@@ -978,6 +1013,17 @@ def _circle_through(a, b, c) -> Optional[Tuple[float, float]]:
     return ux, uy
 
 
+#: More operations than a part anybody wants to learn from, and more than the
+#: ingest can afford: each one rebuilds the whole tree, so the cost is quadratic
+#: in the count. Measured on this dataset, the median program emits 7 and the 99th
+#: percentile 46, while the worst emits 255 — a loop placing a feature per
+#: iteration. A corpus in which a part takes 255 calls teaches that.
+MAX_OPERATIONS = 24
+
+
 def interpret(source: str) -> List[dict]:
     """The program's operations, or `Unsupported` with the cause."""
-    return Interpreter().run(source).ops
+    ops = Interpreter().run(source).ops
+    if len(ops) > MAX_OPERATIONS:
+        raise Unsupported(f"too_many_operations:{len(ops)}")
+    return ops

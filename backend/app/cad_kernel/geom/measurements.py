@@ -31,6 +31,15 @@ def exact_bounds(shape):
     if not faces:
         box = Bnd_Box()
         BRepBndLib.AddOptimal_s(shape, box, False, False)
+        if box.IsVoid():
+            # A shape with no faces is a body with nothing in it — a subtract
+            # that removed everything. `Bnd_Box.Get` raises about *itself*
+            # there, and that message reached the caller as the whole
+            # explanation: "Bnd_Box is void", naming neither the body nor what
+            # emptied it.
+            raise naming.EmptyBody(
+                "this body is empty — nothing is left to measure. An operation "
+                "removed all of the material; undo it or add some back")
         return box.Get()
 
     loose = []

@@ -1934,8 +1934,18 @@ def _selected(doc_id, ids, kind: str) -> List[Dict[str, Any]]:
 
     body = _exact_body(doc_id)
     shape, entities = body.shape, body.entities
-    table = (naming.face_table(shape, entities) if kind == "face"
-             else naming.edge_table(shape, entities))
+    try:
+        table = (naming.face_table(shape, entities) if kind == "face"
+                 else naming.edge_table(shape, entities))
+    except naming.EmptyBody as exc:
+        # `PRECONDITION`, because the fix is an earlier step — put some material
+        # back — and not a different argument. It arrived as
+        # `INTERNAL: Standard_ConstructionError: Bnd_Box is void`, and `INTERNAL`
+        # tells a planner the arguments are not the problem, which is true and
+        # useless: nothing in the message says the body is gone.
+        raise PreconditionFailed(
+            f"{exc} — a previous operation removed all of it. Undo that or add "
+            f"material before selecting a {kind}.") from exc
     by_id = {d["id"]: d for d in table}
 
     if isinstance(ids, str) and ids.strip().lower() == "all":

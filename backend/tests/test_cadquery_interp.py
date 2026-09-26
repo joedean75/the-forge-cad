@@ -281,3 +281,43 @@ import cadquery as cq
 result = cq.Workplane("XY").circle(20).extrude(10).shell(-2)
 """)
     assert caught.value.cause == "shell:no_face_selected"
+
+
+def test_a_whole_body_edge_treatment_on_a_curved_body_is_refused():
+    """One program held the ingest for over an hour at 283% CPU: a 360-degree
+    revolve with three holes, then `add_modifier("chamfer")` — a whole-body
+    chamfer over a seam edge and several circular ones, which is where OCC's
+    fillet solver stops converging. Nothing times out inside a C++ call, so the
+    only reliable bound is not to emit the case."""
+    with pytest.raises(ci.Unsupported) as caught:
+        _ops("""
+import cadquery as cq
+ring = cq.Workplane("XZ").moveTo(20, 0).lineTo(40, 0).lineTo(40, 5).lineTo(20, 5).close().revolve()
+result = ring.chamfer(1)
+""")
+    assert caught.value.cause == "chamfer:curved_body"
+
+
+def test_a_whole_body_fillet_on_a_prismatic_body_is_still_emitted():
+    """The guard is about curved edges, not about fillets: refusing every
+    whole-body treatment took the yield from 28.8% to 2.3% when tried."""
+    ops = _ops("""
+import cadquery as cq
+result = cq.Workplane("XY").box(40, 30, 6).edges(">Z").fillet(2)
+""")
+    assert ops[-1]["op"] == "add_modifier"
+    assert ops[-1]["args"]["modifier"] == "fillet"
+
+
+def test_a_program_emitting_hundreds_of_operations_is_refused():
+    """Each operation rebuilds the whole tree, so the ingest cost is quadratic in
+    the count — and a corpus where a part takes 255 calls teaches that. Measured
+    on this dataset the median program emits 7 and the worst 255."""
+    with pytest.raises(ci.Unsupported) as caught:
+        _ops("""
+import cadquery as cq
+result = cq.Workplane("XY").box(200, 200, 6)
+for i in range(40):
+    result = result.faces(">Z").center(i * 2 - 40, 0).hole(1)
+""")
+    assert caught.value.cause.startswith("too_many_operations")

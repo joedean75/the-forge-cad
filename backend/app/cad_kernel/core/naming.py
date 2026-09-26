@@ -77,6 +77,14 @@ def _name(prefix: str, payload: str) -> str:
 
 # ------------------------------------------------------------------ faces --
 
+class EmptyBody(ValueError):
+    """No topology to name, because there is no body.
+
+    A `ValueError` so the routers' existing handlers keep working, in the same
+    shape `op_errors` uses.
+    """
+
+
 def body_bounds(shape) -> Tuple[List[float], List[float]]:
     """(centre, half-extent) of the body, for normalising positions."""
     from OCP.Bnd import Bnd_Box
@@ -84,6 +92,14 @@ def body_bounds(shape) -> Tuple[List[float], List[float]]:
 
     box = Bnd_Box()
     BRepBndLib.Add_s(shape, box)
+    # **An empty body has no bounds, and `Bnd_Box.Get` raises about itself.** A
+    # subtract that removes everything leaves a shape with nothing in it, and
+    # every descriptor here is normalised to these bounds — so the whole naming
+    # scheme arrives at `Standard_ConstructionError: Bnd_Box is void`, which
+    # names neither the body nor the operation that asked. Reachable in three
+    # calls: a box, a bigger box subtracted, then a fillet.
+    if box.IsVoid():
+        raise EmptyBody("this body is empty — there is no topology to name")
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
     centre = [(xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2]
     half = [max((xmax - xmin) / 2, 1e-9), max((ymax - ymin) / 2, 1e-9),

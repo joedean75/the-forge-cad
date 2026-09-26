@@ -53,6 +53,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import math
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -60,6 +61,14 @@ from contextvars import ContextVar
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+#: **The handler that swallows a nameless body used this and it was not defined.**
+#: `tessellate_owned`'s `except` says "a nameless body is not a failure" and then
+#: raised `NameError: _LOGGER` instead of returning None — so the graceful path
+#: for an empty body was itself the failure, and it surfaced as `evaluation
+#: failed: name '_LOGGER' is not defined`. The same shape as the CSP that refused
+#: `index.html`'s own error handler: the safety net was dead.
+_LOGGER = logging.getLogger(__name__)
 
 from app.cad_kernel.core import history
 
@@ -2226,6 +2235,18 @@ def _tessellate(shape, resolution: int = 128,
 
     bounds = Bnd_Box()
     BRepBndLib.Add_s(shape, bounds)
+    if bounds.IsVoid():
+        # **The deflection is a fraction of the diagonal, and an empty body has
+        # none.** A subtract that removes all the material leaves a shape to
+        # mesh with nothing in it, and `Bnd_Box.Get` then raises about *itself*:
+        # `Standard_ConstructionError: Bnd_Box is void` reached the caller as the
+        # entire explanation of a document that had just been emptied. Reachable
+        # in two operations — a box, then a bigger box subtracted.
+        from app.cad_kernel.core.naming import EmptyBody
+
+        raise EmptyBody("this body is empty — an operation removed all of the "
+                        "material, so there is nothing to mesh. Undo it or add "
+                        "material back")
     xmin, ymin, zmin, xmax, ymax, zmax = bounds.Get()
     diagonal = math.sqrt((xmax - xmin) ** 2 + (ymax - ymin) ** 2 + (zmax - zmin) ** 2)
     deflection = max(diagonal / max(int(resolution), 8), 1e-9)
