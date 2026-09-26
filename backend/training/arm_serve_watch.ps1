@@ -8,7 +8,7 @@ Unregister-ScheduledTask -TaskName $Name -Confirm:$false -ErrorAction SilentlyCo
 
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument (
   '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ' +
-  "`"$Copilot\serve_when_trained.ps1`" -Out `"runs\sft-2b-v5`" " +
+  "`"$Copilot\serve_when_trained.ps1`" -Out `"runs\sft-2b-v6`" " +
   '-Base "Qwen/Qwen3.5-2B" -Port 8099 -Eval')
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) `
   -RepetitionInterval (New-TimeSpan -Minutes 10) `
