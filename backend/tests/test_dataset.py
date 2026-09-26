@@ -480,3 +480,41 @@ def test_a_converted_sketch_is_verified_by_the_solver_not_by_geometry(tmp_path):
     samples = external.samples_from_file(str(path))
     assert not external.DROPS, external.DROPS
     assert [s.meta.get("op") for s in samples] == ["create_sketch", "finish_task"]
+
+
+def test_the_yield_report_separates_what_blocks_from_what_would_unblock(tmp_path):
+    """A drop histogram names the *first* refusal, which is not the same question.
+
+    `convert_cadquery` stops at the first call it cannot express, so causes rank
+    by which call is met earliest. Measured on Zero-To-CAD's 10,000 test programs,
+    that put `center` at 28.9% — while the best call to actually *add* wins 30
+    programs, because `union` is unsupported in 58.6% of them and most need
+    several. `unblocks` counts only programs whose whole unsupported set is one
+    call: those are the ones supporting it would win. Same distinction as
+    `decompiler.corpus_report`'s `blocking`.
+    """
+    from datasets import yield_report
+
+    rows = [
+        # Converts: box + hole are both expressible.
+        {"uuid": "a", "program": "import cadquery as cq\n"
+                                 "r = cq.Workplane('XY').box(40, 30, 6).faces('>Z')"
+                                 ".hole(5)\n"},
+        # One call away — `shell` alone stands between this and a conversion.
+        {"uuid": "b", "program": "import cadquery as cq\n"
+                                 "r = cq.Workplane('XY').box(40, 30, 6).shell(2)\n"},
+        # Two missing calls, so adding either one wins nothing here.
+        {"uuid": "c", "program": "import cadquery as cq\n"
+                                 "r = cq.Workplane('XY').box(9, 9, 9).shell(1).revolve(90)\n"},
+    ]
+    path = tmp_path / "rows.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in rows))
+
+    report = yield_report.cadquery_yield(rows)
+    assert report["rows"] == 3 and report["converted"] == 1
+    assert report["unblocks"] == {"shell": 1}, report["unblocks"]
+    assert report["blocked_by"]["shell"] == 2, "both rows mention it"
+    assert report["blocked_by"]["revolve"] == 1
+    assert report["ops_emitted"].get("add_hole") == 1
+    # The CLI is the way this is used, so it has to run.
+    assert yield_report.main([str(path), "--json"]) == 0

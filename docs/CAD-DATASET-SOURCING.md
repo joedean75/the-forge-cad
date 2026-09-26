@@ -168,24 +168,53 @@ dataset. The export script is a dozen lines over
    which dropped type is worth adding next. Expect `Mirror` to lead — it is the
    one common constraint declined for a missing argument rather than for having no
    equivalent, and carrying the mirror line in the export would fix it.
-2. **Zero-To-CAD coverage — now the top priority, because of what it contains.**
-   Its dataset card lists the vocabulary: `rect`, `circle`, `polygon`, `arc`,
-   `spline`, `slot`, `extrude`, `cut`, `revolve`, `loft`, `sweep`, **`fillet`,
-   `chamfer`, `shell`**, `offset`, the booleans, and linear/polar/mirror patterns —
-   999,633 samples, Apache-2.0, commercial use permitted. Those are *exactly* the
-   operations the 18-task suite found missing from the corpus and that
-   `corpus.coverage_rows` currently synthesises 114 sequences for. Real data at
-   that scale is strictly better than generated variety, and the converter is
-   already written; what it needs is the subset widened past
-   box/cylinder/extrude/hole/fillet/chamfer.
+### Measured, on the real files (2026-09-26)
 
-   **Download first, widen second**, and that order is the point: the subset should
-   grow by whichever unsupported call actually dominates `DROPS`, not by whichever
-   looks easiest from the card. `shell` is the one to watch — CadQuery spells it
-   `.faces(">Z").shell(-2)`, and this converter skips selectors, so a faithful
-   mapping needs the selector or it needs declining. Guessing at that now, with no
-   file to measure against, is how a converter comes to build a different part
-   from the one the source shipped.
+The test split's 10,000 programs, fetched as **58 MB** by projecting the one
+column the converter reads out of a 349 GB repo (`datasets/yield_report.py`):
+
+| | |
+|---|---|
+| converted | **945 of 10,000 — 9.4%** |
+| emitted | `add_extrude` 813, `add_primitive` 150, `add_hole` 35, `add_modifier` **7** |
+| first refusal | `center` 28.9%, `translate` 11.3%, `edges` 9.1%, `polyline` 4.6% |
+| one call away | `shell` **30 programs**, `pushPoints` 25, `cutBlind` 14 |
+| mentioned, unsupported | `union` 58.6%, `center` 56.2%, `cutBlind` 40.2% |
+
+**This contradicts the reason this dataset was made the top priority, so the
+reason is withdrawn.** Its card lists `fillet`, `chamfer` and `shell`, and those
+are the operations the goal suite found missing — but the programs that *convert*
+are overwhelmingly plain extrudes, and only **7 of 945** emitted a fillet or
+chamfer at all. That is a selection effect rather than a surprise: a program
+simple enough to survive this converter is a program with few operations in it.
+Zero-To-CAD will not fill the fillet/chamfer/shell gap that
+`corpus.coverage_rows` was written for.
+
+**Widening it one call at a time is also withdrawn.** That was the plan, and the
+two-column measurement is what killed it: the best single call to add wins
+**30 programs in 10,000**, because `union` appears unsupported in 58.6% of them
+and `center` in 56.2% — most programs need several of the missing calls, not one.
+Reaching them means a CadQuery-subset interpreter with placement tracking
+(`union`, `center`, `cutBlind`, `translate`, `edges`, `pushPoints` and sketch
+construction), which is a project rather than an afternoon.
+
+**What it is still worth, and it is a lot.** 9.4% of the 979,633-row train split
+is roughly **92,000 verified sequences**, against a v5 corpus of 2,574 — and they
+are `add_extrude`, which this corpus has 43 labels of. Sketch-and-extrude depth is
+real value even though it is not the value advertised. The limit then stops being
+conversion and becomes build time: every sample is replayed and geometry-checked.
+
+2. **Zero-To-CAD — deepen `add_extrude`, do not widen the converter.**
+   Pull the train split's program column the same way and ingest what already
+   converts: ~92,000 sequences, Apache-2.0. Two things to settle first, and
+   neither is the converter. **Verification**: `convert_cadquery` emits no
+   `expect`, so `verify` only asks "is this a valid solid" — and this converter
+   skips selectors, so a valid solid can be the wrong one. The row carries
+   `num_faces`, which is a cheap invariant to compare against the built body, and
+   `pip install cadquery` would give the real one by running the source program
+   (we already ship OCP, the bulk of that dependency). **Cost**: 92,000 replays
+   with a geometry check each, which is where the hours go, so measure one
+   thousand before queueing all of them.
 3. **FllumaOne**, if it is published: written descriptions plus kernel-validated
    histories is the shape this corpus most lacks.
 4. **Ask DeepCAD's authors for a data licence.** One sentence from them would
