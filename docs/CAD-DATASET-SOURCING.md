@@ -178,8 +178,10 @@ chain. Measured on the same 10,000, each step by `yield_report`:
 | chain reader (`external.convert_cadquery`'s original path) | 9.4% |
 | interpreter, first pass | **0.8%** |
 | + the extent bug, `.edges()`, `translate` after material, default pen | 5.6% |
-| + `for` loops, `translate` of an extrusion, `cq.Vector` | **10.6%** |
-| **both paths, which is what runs** | **18.7%** |
+| + `for` loops, `translate` of an extrusion, `cq.Vector` | 10.6% |
+| + `pushPoints`/`rarray`/`polarArray` and comprehensions | **27.7%** |
+| + `shell` through a named face | **28.8%** |
+| **both paths, which is what runs** | **34.5%** |
 
 The first pass being *worse* than the thing it replaces is the shape to expect and
 the reason to measure each step: the interpreter must execute the whole program,
@@ -204,13 +206,37 @@ where the yield came from:
   after an extrude report `no_body_yet` — 15% of the dataset, and the second
   largest cause in the first measurement.
 
-**Ranked, what remains** (share of the 10,000, after the above):
-`pushPoints` 11.9% + `rarray` 5.6% + `polarArray` 3.6% — all three are
-`PatternFeature` kinds (`table`, `linear`, `circular`) and together the largest
-remaining block; `shell` 10.0%, **declined on purpose** because CadQuery's opens a
-face and `add_modifier("shell")` hollows uniformly, which is a different body;
+**The arrays were one idea, not three.** `pushPoints`, `rarray` and `polarArray`
+all say "the next feature goes at each of these places", so they are kept as
+locations on the workplane and what follows decides the shape: a drawn outline
+becomes *one* profile with a loop per location, because even-odd parity reads
+several circles as several holes, while a `hole` is a placed operation and becomes
+one each. With comprehensions — which is how a bolt circle is written when it is
+not written as `polarArray` — that block was worth 17 points.
+
+**`shell` needed no new operation, which was the surprise.** `shell_faces` has
+hollowed-and-opened since it was written; it could not be *told* which face,
+because a face id is a hash of that face's measurements and naming one requires an
+evaluated body. It now takes a position instead — `top`, `bottom`, `left`,
+`right`, `front`, `back`, read from `datum.FACE_MAP` rather than restated, since
+sketch-on-face already means exactly this by "top". A CadQuery `.faces(">Z")`
+becomes `"top"`, and an agent shelling a box no longer needs a `list_faces` round
+trip either.
+
+**The closed hollow is the part that genuinely has no equivalent**, and it is what
+the remaining `shell:no_face_selected` 8.8% asks for — `result.shell(-2)` with
+nothing selected. `add_modifier("shell")` is `abs(d) - t/2`, so its outer surface
+sits half a wall *outside* the body; and `BRepOffsetAPI_MakeThickSolid` with an
+empty face list does not hollow at all — measured on a 60 x 40 x 30 box at 3 mm it
+returns 44,064 mm³, the inner 54 x 34 x 24 solid, rather than the 27,936 mm³ wall.
+That is an inward *offset*. Which is also the route, if a closed hollow is ever
+wanted: subtract that offset from the body, behind an offset-solid feature this
+catalog does not have. A capability to add deliberately, not to approximate.
+
+**Ranked, what remains** (share of the 10,000): the closed hollow 8.8%;
 `ClassDef` 7.5% + `Measures` 6.3% + `FunctionDef` 5.1%, one template family's
-Python structure rather than any CAD; `rotate` 5.6%; `ListComp` 4.3%.
+Python structure rather than any CAD; `rotate` 6.4%, which needs a tool's built
+operations re-aimed rather than a new call; `cq` attributes 3.9%; `polygon` 2.3%.
 
 ### Measured, on the real files (2026-09-26)
 

@@ -316,3 +316,47 @@ def test_a_shelled_body_can_be_sectioned():
                                                  "sections": [{"plane": "xz", "label": "A-A"}]})
     # Cutting through a hollow box gives two walls, not one solid block.
     assert out["sections"][0]["contours"] >= 1
+
+
+def test_a_face_is_selectable_by_position_without_listing_them_first():
+    """The same shell as above, told which face by name rather than by id.
+
+    A face id is a hash of that face's current measurements, so naming one
+    requires an evaluated body to measure — which is right for a person clicking
+    a list and wrong for everything that has to say which face *before* there is
+    one. A CadQuery program says `.faces(">Z").shell(2)` and `shell_faces` could
+    express that and had no way to be told; `_top_face` above is the round trip
+    this removes. The six names are `datum.FACE_MAP`'s, read from that table
+    rather than restated, because sketch-on-face already means exactly this by
+    "top" and two spellings of one naming rule disagree the day after.
+    """
+    doc = docs.create_document(name="Box", resolution=48, owner_id=None)
+    ops.dispatch("add_primitive", doc.id, {"shape": "box", "params": {"size": V(.06, .04, .03)}})
+
+    env = ops.execute("shell_faces", doc.id, {"faces": "top", "thickness": .002})
+    assert env["ok"], env.get("error")
+    assert env["result"]["faces"] == _top_face(doc.id) or len(env["result"]["faces"]) == 1
+    assert _volume_mm3(doc.id) == pytest.approx(60 * 40 * 30 - 56 * 36 * 28, rel=0.01)
+
+
+def test_the_position_names_are_the_datum_scheme_s_own():
+    """Not a second table: a name this does not know must be a name that one
+    does not either, or the two have started to drift."""
+    from app.services import datum
+
+    doc = docs.create_document(name="Box", resolution=48, owner_id=None)
+    ops.dispatch("add_primitive", doc.id, {"shape": "box", "params": {"size": V(.06, .04, .03)}})
+    for name in datum.FACES:
+        env = ops.execute("shell_faces", doc.id, {"faces": name, "thickness": .002})
+        # Either it shells or OCC refuses that particular opening — what must not
+        # happen is the name being rejected as unknown.
+        assert "no such face" not in str((env.get("error") or {}).get("message", "")), name
+        if env["ok"]:
+            ops.execute("undo", doc.id, {})
+
+
+def test_a_face_id_that_is_not_a_position_name_still_fails_loudly():
+    doc = docs.create_document(name="Box", resolution=48, owner_id=None)
+    ops.dispatch("add_primitive", doc.id, {"shape": "box", "params": {"size": V(.06, .04, .03)}})
+    env = ops.execute("shell_faces", doc.id, {"faces": "upwards", "thickness": .002})
+    assert not env["ok"] and env["error"]["code"] == "BAD_ARG"

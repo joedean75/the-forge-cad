@@ -97,20 +97,43 @@ class Workplane:
     #: Where the pen is, for `lineTo`/`threePointArc` chains.
     pen: Optional[Tuple[float, float]] = None
     start: Optional[Tuple[float, float]] = None
+    #: The face `faces(...)` last named, as one of `datum.FACE_MAP`'s six names.
+    #: `shell` is the only thing that needs it, and it needs it because a shell
+    #: opens a face rather than sitting on one.
+    opening: Optional[str] = None
+    #: `pushPoints`/`rarray`/`polarArray` locations, absolute and in-plane (mm).
+    #: Empty means the single location the plane's own centre gives.
+    points: List[Tuple[float, float]] = field(default_factory=list)
     ops: List[dict] = field(default_factory=list)
     box: Box = field(default_factory=Box)
 
     def clone(self, **changes) -> "Workplane":
         base = {"plane": self.plane, "cx": self.cx, "cy": self.cy,
                 "height": self.height, "curves": list(self.curves), "pen": self.pen,
-                "start": self.start, "ops": list(self.ops), "box": self.box.copy()}
+                "start": self.start, "points": list(self.points),
+                "opening": self.opening,
+                "ops": list(self.ops), "box": self.box.copy()}
         base.update(changes)
         return Workplane(**base)
 
     # -- placement ---------------------------------------------------------
-    def centre3(self, along: float = 0.0) -> Dict[str, float]:
+    def locations(self) -> List[Tuple[float, float]]:
+        """Every in-plane location the next feature goes at."""
+        return list(self.points) or [(self.cx, self.cy)]
+
+    def centre3(self, along: float = 0.0,
+                at: Optional[Tuple[float, float]] = None) -> Dict[str, float]:
         """The in-plane offset and height as a centre in metres."""
         height = self.height + along
+        cx, cy = at if at is not None else (self.cx, self.cy)
+        self_cx, self_cy = self.cx, self.cy
+        self.cx, self.cy = cx, cy
+        try:
+            return self._centre3_inner(height)
+        finally:
+            self.cx, self.cy = self_cx, self_cy
+
+    def _centre3_inner(self, height: float) -> Dict[str, float]:
         if self.plane == "xy":
             triple = (self.cx, self.cy, height)
         elif self.plane == "xz":
@@ -300,9 +323,42 @@ class Interpreter:
                 if node.attr in _MATH:
                     return _MATH[node.attr]
             raise Unsupported(f"attribute:{node.attr}")
+        if isinstance(node, (ast.ListComp, ast.GeneratorExp)):
+            return self.comprehension(node)
         if isinstance(node, ast.Call):
             return self.call(node)
         raise Unsupported(f"expression:{type(node).__name__}")
+
+    def comprehension(self, node) -> tuple:
+        """`[(r * cos(a), r * sin(a)) for a in angles]` — how a bolt circle is
+        written when it is not written as `polarArray`. One generator, no
+        condition: anything else is refused rather than run differently."""
+        if len(node.generators) != 1:
+            raise Unsupported("comprehension:nested")
+        gen = node.generators[0]
+        if gen.ifs or getattr(gen, "is_async", 0):
+            raise Unsupported("comprehension:conditional")
+        if not isinstance(gen.target, ast.Name):
+            raise Unsupported("comprehension:target_not_a_name")
+        sequence = self._range(gen.iter) if self._is_range(gen.iter) \
+            else self.eval(gen.iter)
+        if not isinstance(sequence, (tuple, list, range)):
+            raise Unsupported("comprehension:not_iterable")
+        items = list(sequence)
+        if len(items) > self.MAX_ITERATIONS:
+            raise Unsupported("comprehension:too_many")
+        saved = self.env.get(gen.target.id)
+        out = []
+        try:
+            for item in items:
+                self.env[gen.target.id] = item
+                out.append(self.eval(node.elt))
+        finally:
+            if saved is None:
+                self.env.pop(gen.target.id, None)
+            else:
+                self.env[gen.target.id] = saved
+        return tuple(out)
 
     def call(self, node: ast.Call) -> Any:
         func = node.func
@@ -371,7 +427,8 @@ class Interpreter:
         index = "xyz".index(axis)
         height = wp.box.hi[index] if selector[0] == ">" else wp.box.lo[index]
         return wp.clone(plane=_PLANE_FOR_NORMAL[axis], height=height,
-                        cx=0.0, cy=0.0, curves=[], pen=None, start=None)
+                        cx=0.0, cy=0.0, curves=[], pen=None, start=None,
+                        opening=_face_name(axis, selector[0] == ">"))
 
     def m_workplane(self, wp, args, kwargs):
         offset = kwargs.get("offset")
@@ -459,6 +516,72 @@ class Interpreter:
             out.box.hi[axis] += vector[axis]
         return out
 
+    # arrays ---------------------------------------------------------------
+    #
+    # `pushPoints` 11.9%, `rarray` 5.6% and `polarArray` 3.6% are the largest
+    # remaining block, and they are one idea: the next feature is placed at each
+    # of several locations. Kept as locations on the workplane rather than turned
+    # into a `PatternFeature`, because what follows decides the right shape —
+    # a drawn outline becomes *one* profile with a loop per location (even-odd
+    # parity makes several circles several holes), while a `hole` is a placed
+    # operation and becomes one per location.
+    def m_pushPoints(self, wp, args, kwargs):
+        if not args or not isinstance(args[0], tuple):
+            raise Unsupported("pushPoints:not_a_list")
+        points = []
+        for item in args[0]:
+            if not isinstance(item, tuple) or len(item) < 2:
+                raise Unsupported("pushPoints:not_points")
+            x, y = _numbers(list(item[:2]), "pushPoints")
+            points.append((wp.cx + x, wp.cy + y))
+        if len(points) > self.MAX_ITERATIONS:
+            raise Unsupported("pushPoints:too_many")
+        return wp.clone(points=points)
+
+    def m_rarray(self, wp, args, kwargs):
+        """A rectangular grid. CadQuery centres it on the current point."""
+        values = _numbers(args[:4], "rarray") if len(args) >= 4 else None
+        if values is None:
+            raise Unsupported("rarray:needs_four_arguments")
+        x_spacing, y_spacing, x_count, y_count = values
+        nx, ny = int(x_count), int(y_count)
+        if nx < 1 or ny < 1:
+            raise Unsupported("rarray:empty")
+        if nx * ny > self.MAX_ITERATIONS:
+            raise Unsupported("rarray:too_many")
+        points = []
+        for ix in range(nx):
+            for iy in range(ny):
+                points.append((wp.cx + (ix - (nx - 1) / 2) * x_spacing,
+                               wp.cy + (iy - (ny - 1) / 2) * y_spacing))
+        return wp.clone(points=points)
+
+    def m_polarArray(self, wp, args, kwargs):
+        """`polarArray(radius, startAngle, angle, count)` — a bolt circle.
+
+        `angle` is the span CadQuery distributes over, and a full 360 puts the
+        last instance on top of the first, so the step divides by `count` there
+        and by `count - 1` over a partial span. Getting that backwards doubles one
+        hole and loses another, which no geometry check would call an error.
+        """
+        values = _numbers(args[:4], "polarArray") if len(args) >= 4 else None
+        if values is None:
+            raise Unsupported("polarArray:needs_four_arguments")
+        radius, start, span, count_f = values
+        count = int(count_f)
+        if count < 1:
+            raise Unsupported("polarArray:empty")
+        if count > self.MAX_ITERATIONS:
+            raise Unsupported("polarArray:too_many")
+        full = abs(abs(span) - 360.0) < 1e-9
+        step = (span / count) if full or count == 1 else (span / (count - 1))
+        points = []
+        for index in range(count):
+            angle = math.radians(start + step * index)
+            points.append((wp.cx + radius * math.cos(angle),
+                           wp.cy + radius * math.sin(angle)))
+        return wp.clone(points=points)
+
     # sketching ------------------------------------------------------------
     def _close_loop(self, wp: Workplane) -> List[dict]:
         curves = list(wp.curves)
@@ -536,18 +659,21 @@ class Interpreter:
 
     def m_rect(self, wp, args, kwargs):
         width, height = _numbers(args[:2], "rect")
-        x, y = wp.cx, wp.cy
-        corners = [(x - width / 2, y - height / 2), (x + width / 2, y - height / 2),
-                   (x + width / 2, y + height / 2), (x - width / 2, y + height / 2)]
-        curves = [{"kind": "line", "a": list(a), "b": list(b)}
-                  for a, b in zip(corners, corners[1:] + corners[:1])]
-        return wp.clone(curves=wp.curves + curves, pen=None, start=None)
+        curves = list(wp.curves)
+        for x, y in wp.locations():
+            corners = [(x - width / 2, y - height / 2), (x + width / 2, y - height / 2),
+                       (x + width / 2, y + height / 2), (x - width / 2, y + height / 2)]
+            curves += [{"kind": "line", "a": list(a), "b": list(b)}
+                       for a, b in zip(corners, corners[1:] + corners[:1])]
+        return wp.clone(curves=curves, pen=None, start=None, points=[])
 
     def m_circle(self, wp, args, kwargs):
         radius = _numbers(args[:1], "circle")[0]
-        return wp.clone(curves=wp.curves + [{"kind": "circle",
-                                             "center": [wp.cx, wp.cy], "r": radius}],
-                        pen=None, start=None)
+        # One loop per location: even-odd parity reads several circles inside an
+        # outline as several holes, which is what a pushPoints-and-circle draws.
+        curves = wp.curves + [{"kind": "circle", "center": [x, y], "r": radius}
+                              for x, y in wp.locations()]
+        return wp.clone(curves=curves, pen=None, start=None, points=[])
 
     # solids ---------------------------------------------------------------
     def _profile(self, wp: Workplane, method: str) -> dict:
@@ -684,24 +810,28 @@ class Interpreter:
 
     def m_hole(self, wp, args, kwargs):
         diameter = _numbers(args[:1], "hole")[0]
-        return wp.clone(ops=wp.ops + [{"op": "add_hole", "args": {
-            "radius": diameter / 2 / MM, "through": True,
-            "center": wp.centre3()}}])
+        drilled = [{"op": "add_hole", "args": {"radius": diameter / 2 / MM,
+                                               "through": True,
+                                               "center": wp.centre3(at=at)}}
+                   for at in wp.locations()]
+        return wp.clone(ops=wp.ops + drilled, points=[])
 
     def m_cboreHole(self, wp, args, kwargs):
         diameter, recess, depth = _numbers(args[:3], "cboreHole")
-        return wp.clone(ops=wp.ops + [{"op": "add_hole", "args": {
+        drilled = [{"op": "add_hole", "args": {
             "radius": diameter / 2 / MM, "hole_type": "counterbore",
             "recess_radius": recess / 2 / MM, "recess_depth": depth / MM,
-            "through": True, "center": wp.centre3()}}])
+            "through": True, "center": wp.centre3(at=at)}} for at in wp.locations()]
+        return wp.clone(ops=wp.ops + drilled, points=[])
 
     def m_cskHole(self, wp, args, kwargs):
         diameter, recess = _numbers(args[:2], "cskHole")[:2]
         angle = _numbers(args[2:3], "cskHole")[0] if len(args) > 2 else 82.0
-        return wp.clone(ops=wp.ops + [{"op": "add_hole", "args": {
+        drilled = [{"op": "add_hole", "args": {
             "radius": diameter / 2 / MM, "hole_type": "countersink",
             "recess_radius": recess / 2 / MM, "countersink_angle": float(angle),
-            "through": True, "center": wp.centre3()}}])
+            "through": True, "center": wp.centre3(at=at)}} for at in wp.locations()]
+        return wp.clone(ops=wp.ops + drilled, points=[])
 
     def m_fillet(self, wp, args, kwargs):
         radius = _numbers(args[:1], "fillet")[0]
@@ -712,6 +842,44 @@ class Interpreter:
         distance = _numbers(args[:1], "chamfer")[0]
         return wp.clone(ops=wp.ops + [{"op": "add_modifier", "args": {
             "modifier": "chamfer", "params": {"radius": distance / MM}}}])
+
+    def m_shell(self, wp, args, kwargs):
+        """`.faces(">Z").shell(-2)` — a hollow with that face open.
+
+        Declined until `shell_faces` could be told which face without an
+        evaluated body to measure ids on, which was 10.3% of the dataset and the
+        largest remaining cause. It is *not* `add_modifier("shell")`: that one
+        hollows uniformly and opens nothing, so mapping it here would emit a
+        different body than the source shipped.
+
+        A negative thickness is CadQuery's way of saying inward, which is the only
+        direction `FaceShellFeature` offsets, so the sign carries no information
+        here and the magnitude is what is passed.
+
+        **A `.shell()` with no face selected is a different shape and is declined**
+        — 8.8% of the dataset, and the largest remaining cause. It asks for a
+        *closed* hollow, which nothing here builds exactly: `add_modifier("shell")`
+        is `abs(d) - t/2`, so its outer surface sits half a wall *outside* the
+        original body, and `BRepOffsetAPI_MakeThickSolid` with an empty face list
+        does not hollow at all — measured on a 60 x 40 x 30 box at 3 mm, it returns
+        44,064 mm³, which is the inner 54 x 34 x 24 solid rather than the
+        27,936 mm³ wall. That is an inward *offset*, not a shell.
+
+        Which is also the route a closed hollow would take if it were wanted:
+        subtract that inward offset from the body. It needs an offset-solid
+        feature this catalog does not have, so it is a capability to add
+        deliberately rather than something to approximate here.
+        """
+        if wp.opening is None:
+            raise Unsupported("shell:no_face_selected")
+        thickness = _numbers(args[:1], "shell")[0] if args else None
+        if thickness is None:
+            thickness = kwargs.get("thickness")
+        if not isinstance(thickness, (int, float)) or thickness == 0:
+            raise Unsupported("shell:no_thickness")
+        return wp.clone(ops=wp.ops + [{"op": "shell_faces", "args": {
+            "faces": wp.opening, "thickness": abs(float(thickness)) / MM}}],
+            opening=None)
 
     # booleans -------------------------------------------------------------
     def _combine(self, wp: Workplane, other: Any, operation: str,
@@ -780,6 +948,21 @@ class Interpreter:
 
     def m_tag(self, wp, args, kwargs):
         return wp
+
+
+def _face_name(axis: str, at_max: bool) -> Optional[str]:
+    """`('z', True)` -> `"top"`, read from `datum.FACE_MAP` rather than restated.
+
+    The sketch-on-face path already means exactly this by "top", and two
+    spellings of one naming rule disagree the day after they are written.
+    """
+    from app.services import datum
+
+    index = "xyz".index(axis)
+    for name, (_, face_axis, take_max) in datum.FACE_MAP.items():
+        if face_axis == index and take_max == at_max:
+            return name
+    return None
 
 
 def _circle_through(a, b, c) -> Optional[Tuple[float, float]]:

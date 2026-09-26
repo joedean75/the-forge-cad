@@ -214,9 +214,13 @@ def test_a_program_the_converter_cannot_read_is_dropped_by_cause():
     kernel could always have built it, and the interpreter now does. The
     distinction is the whole reason the interpreter was written.
 
-    So the case here is one that genuinely has no equivalent: CadQuery's `.shell`
-    opens a face, and `add_modifier("shell")` hollows uniformly — a different
-    body, which is why it is declined rather than mapped.
+    So the case here is one that genuinely has no equivalent — and it is no longer
+    a *selected-face* shell, because `shell_faces` can now be told a face by
+    position and the interpreter converts that. What remains is the **closed**
+    hollow: `add_modifier("shell")` is `abs(d) - t/2`, so its outer surface sits
+    half a wall outside the body, and `MakeThickSolid` with no removed faces
+    returns the inner solid rather than the wall — measured, 44,064 mm³ against a
+    27,936 mm³ wall on a 60 x 40 x 30 box at 3 mm.
     """
     from datasets import external
 
@@ -224,9 +228,25 @@ def test_a_program_the_converter_cannot_read_is_dropped_by_cause():
     assert external.convert_cadquery("""
 import cadquery as cq
 t = 2.0
-body = cq.Workplane('XY').box(20, 20, 20).faces('>Z').shell(t)
+body = cq.Workplane('XY').box(20, 20, 20).shell(t)
 """) is None
     assert external.DROPS, "a silent drop is a yield nobody can see"
+
+
+def test_a_shell_through_a_named_face_is_expressible_after_all():
+    """The case the test above used to use. `shell_faces` always hollowed *and*
+    opened; what it lacked was a way to be told which face without an evaluated
+    body to measure ids on."""
+    from datasets import external
+
+    row = external.convert_cadquery("""
+import cadquery as cq
+t = 2.0
+body = cq.Workplane('XY').box(20, 20, 20).faces('>Z').shell(t)
+""")
+    assert row is not None
+    assert row["ops"][-1]["op"] == "shell_faces"
+    assert row["ops"][-1]["args"]["faces"] == "top"
 
 
 def test_the_interpreter_reads_what_the_chain_reader_could_not():

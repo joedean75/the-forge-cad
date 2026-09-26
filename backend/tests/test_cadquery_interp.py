@@ -189,13 +189,95 @@ result = (cq.Workplane("XY").moveTo(0, 0).lineTo(5, 0)
     ("class Measures:\n    a = 1\n", "statement:ClassDef"),
     ("def f():\n    return 1\n", "statement:FunctionDef"),
     ("import cadquery as cq\nr = cq.Workplane('XY').box(9,9,9).shell(1)\n",
-     "unsupported:shell"),
+     "shell:no_face_selected"),
 ])
 def test_what_it_cannot_run_is_named_rather_than_approximated(source, cause):
     """The cause is the measurement `yield_report` ranks, so it has to be specific:
-    `unsupported:shell` is a decision (CadQuery's shell opens a face and
-    `add_modifier('shell')` hollows uniformly — a different body), while
-    `statement:ClassDef` is work not done."""
+    `shell:no_face_selected` is a decision (a closed hollow is a body nothing
+    here builds exactly), while `statement:ClassDef` is work not done."""
     with pytest.raises(ci.Unsupported) as caught:
         _ops(source)
     assert caught.value.cause == cause
+
+
+def test_an_array_of_holes_becomes_one_operation_each():
+    """`pushPoints` 11.9%, `rarray` 5.6% and `polarArray` 3.6% are one idea, and
+    together they were the largest remaining block after the first two passes."""
+    ops = _ops("""
+import cadquery as cq
+result = (cq.Workplane("XY").box(80, 80, 6).faces(">Z")
+          .rarray(40, 40, 2, 2).hole(5))
+""")
+    holes = [o for o in ops if o["op"] == "add_hole"]
+    assert len(holes) == 4
+    corners = sorted((round(h["args"]["center"]["x"], 4),
+                      round(h["args"]["center"]["y"], 4)) for h in holes)
+    assert corners == [(-0.02, -0.02), (-0.02, 0.02), (0.02, -0.02), (0.02, 0.02)]
+
+
+def test_a_drawn_shape_at_several_points_is_one_profile_with_a_loop_each():
+    """Even-odd parity reads several circles as several holes, so a
+    pushPoints-and-circle is one operation rather than four."""
+    ops = _ops("""
+import cadquery as cq
+result = (cq.Workplane("XY").rect(60, 60).extrude(5).faces(">Z")
+          .pushPoints([(-20, 0), (20, 0)]).circle(4).cutBlind(-5))
+""")
+    cut = [o for o in ops if o["args"].get("operation") == "subtract"]
+    assert len(cut) == 1
+    circles = [c for c in cut[0]["args"]["profile"]["loops"][0]["curves"]
+               if c["kind"] == "circle"]
+    assert len(circles) == 2
+    assert sorted(round(c["center"][0], 4) for c in circles) == [-0.02, 0.02]
+
+
+def test_a_full_polar_array_does_not_double_its_first_instance():
+    """A 360-degree span divides by `count`; a partial span by `count - 1`.
+    Backwards, that doubles one hole and loses another — which no geometry check
+    would call an error."""
+    ops = _ops("""
+import cadquery as cq
+result = (cq.Workplane("XY").box(80, 80, 6).faces(">Z")
+          .polarArray(30, 0, 360, 4).hole(4))
+""")
+    holes = [o for o in ops if o["op"] == "add_hole"]
+    assert len(holes) == 4
+    places = sorted((round(h["args"]["center"]["x"], 4),
+                     round(h["args"]["center"]["y"], 4)) for h in holes)
+    assert places == [(-0.03, 0.0), (0.0, -0.03), (0.0, 0.03), (0.03, 0.0)]
+
+
+def test_a_comprehension_is_how_a_bolt_circle_is_usually_written():
+    ops = _ops("""
+import cadquery as cq
+import math
+holes = [(25 * math.cos(math.radians(a)), 25 * math.sin(math.radians(a)))
+         for a in [0, 90, 180, 270]]
+result = cq.Workplane("XY").box(70, 70, 5).faces(">Z").pushPoints(holes).hole(3)
+""")
+    assert len([o for o in ops if o["op"] == "add_hole"]) == 4
+
+
+def test_a_selected_face_shell_becomes_shell_faces_by_position():
+    """`shell_faces` could always open a face; it could not be *told* which one
+    without an evaluated body to measure ids on."""
+    ops = _ops("""
+import cadquery as cq
+result = cq.Workplane("XY").box(60, 40, 30).faces(">Z").shell(-3)
+""")
+    assert ops[-1]["op"] == "shell_faces"
+    assert ops[-1]["args"]["faces"] == "top"
+    assert ops[-1]["args"]["thickness"] == pytest.approx(0.003)
+
+
+def test_a_closed_hollow_is_declined_rather_than_approximated():
+    """`.shell()` with no face selected asks for a closed hollow, and nothing here
+    builds one exactly: `add_modifier("shell")` puts its outer surface half a wall
+    outside the body, and `MakeThickSolid` with no removed faces returns the inner
+    solid rather than the wall."""
+    with pytest.raises(ci.Unsupported) as caught:
+        _ops("""
+import cadquery as cq
+result = cq.Workplane("XY").circle(20).extrude(10).shell(-2)
+""")
+    assert caught.value.cause == "shell:no_face_selected"

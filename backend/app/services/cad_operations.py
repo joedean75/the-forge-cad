@@ -1879,6 +1879,46 @@ def _list_edges(doc_id, args):
     return {"edges": rows, "count": len(rows)}
 
 
+def _expanded_extremes(wanted: List[Any], table: List[Dict[str, Any]],
+                       kind: str) -> List[Any]:
+    """`"top"` in place of a face id, resolved on the body that is there.
+
+    A face id is a hash of the face's measurements, so naming one requires having
+    evaluated the body — which is right for a person clicking a list and wrong for
+    everything that has to say which face *before* there is one to measure. A
+    CadQuery program writes `.faces(">Z").shell(2)`; `shell_faces` could express
+    that and had no way to be told.
+
+    The six names are `datum.FACE_MAP`'s, read from that table rather than
+    restated, because the sketch-on-face path already means exactly this by "top"
+    and two spellings of one naming rule disagree the day after they are written.
+    The rule is the extreme centre along the axis, which is also how CadQuery's
+    `>Z` selects, so **every** face at that extreme is taken: a lid split in two
+    by a rib is two faces and opening one of them would leave a shell nobody
+    asked for.
+    """
+    if kind != "face":
+        return wanted
+    from app.services import datum
+
+    out: List[Any] = []
+    for entry in wanted:
+        name = entry.strip().lower() if isinstance(entry, str) else entry
+        if not isinstance(name, str) or name not in datum.FACE_MAP:
+            out.append(entry)
+            continue
+        _, axis, take_max = datum.FACE_MAP[name]
+        centres = [row for row in table if isinstance(row.get("center"), list)]
+        if not centres:
+            raise BadArgument(f"no face to resolve {name!r} against", arg="faces")
+        pick = max if take_max else min
+        limit = pick(row["center"][axis] for row in centres)
+        at_extreme = [row["id"] for row in centres
+                      if abs(row["center"][axis] - limit) <= 1e-6]
+        out.extend(at_extreme)
+    return out
+
+
 def _selected(doc_id, ids, kind: str) -> List[Dict[str, Any]]:
     """Turn the ids a caller selected into durable references.
 
@@ -1905,6 +1945,7 @@ def _selected(doc_id, ids, kind: str) -> List[Dict[str, Any]]:
         wanted = [d["id"] for d in table]
     else:
         wanted = [ids] if isinstance(ids, str) else list(ids or [])
+        wanted = _expanded_extremes(wanted, table, kind)
     if not wanted:
         raise MissingArgument(f"select at least one {kind} (see list_{kind}s)",
                               arg=f"{kind}s")
@@ -2297,7 +2338,10 @@ def _chamfer_edges(doc_id, args):
            "open there. Pick face ids with list_faces. This is a real shell — the "
            "`shell` modifier hollows everything with no opening. Requires the exact kernel.",
            {"faces": {"type": ["array", "string"], "required": True,
-           "description": "face ids from list_faces — the openings"},
+           "description": "face ids from list_faces — the openings. Or a face by "
+                          "position: top, bottom, left, right, front, back (the "
+                          "extreme along that axis, every face at it), which needs "
+                          "no list_faces call first. \"all\" opens every face"},
            "thickness": {"type": "number", "required": True, "description": "wall thickness, metres"},
            "target": _MODIFIER_TARGET})
 def _shell_faces(doc_id, args):
