@@ -131,41 +131,53 @@ def samples_from_file(path: str, *, limit: Optional[int] = None) -> List:
                 continue
 
             doc = document_service.create_document(name=f"imported {index}", owner_id="dataset")
-            with trajectories.recording(doc.id, goal=goal, kind="imported") as tid:
-                try:
-                    envelopes = decompiler.replay(ops, doc.id)
-                except Exception:  # noqa: BLE001 — a bad conversion is a drop
-                    envelopes = []
-            if not envelopes or not all(e.get("ok") for e in envelopes):
-                _drop("replay:failed")
-                continue
-            # **The row says which check applies.** A sketch has no body, and a
-            # geometry check pointed at one fails for a reason that has nothing
-            # to do with the conversion — the same reason
-            # `observation.summarize_assembly` states its `kind` rather than
-            # leaving a caller to infer it from which keys are present.
-            if str(row.get("verify") or "") == "sketch":
-                ok, why = verify_sketch(doc.id)
-            else:
-                ok, why = verify(doc.id, row.get("expect"))
-            if not ok:
-                _drop(f"verify:{why}")
-                continue
+            # **The scratch document is dropped the moment its samples exist.**
+            # They are throwaway by construction and keeping them cost twice.
+            # `derived_cache.SOLIDS` and the in-memory blob store hold every
+            # body and mesh a document has, so this process grew about a
+            # gigabyte a minute and a long ingest died silently at whatever
+            # `MemoryMax` was — twice, 24 minutes in, with no traceback
+            # because a cgroup kill leaves none. They accumulate in the
+            # datastore too: 2,567 `imported N` documents were still there
+            # from runs that had long finished with them.
+            try:
+                with trajectories.recording(doc.id, goal=goal, kind="imported") as tid:
+                    try:
+                        envelopes = decompiler.replay(ops, doc.id)
+                    except Exception:  # noqa: BLE001 — a bad conversion is a drop
+                        envelopes = []
+                if not envelopes or not all(e.get("ok") for e in envelopes):
+                    _drop("replay:failed")
+                    continue
+                # **The row says which check applies.** A sketch has no body, and a
+                # geometry check pointed at one fails for a reason that has nothing
+                # to do with the conversion — the same reason
+                # `observation.summarize_assembly` states its `kind` rather than
+                # leaving a caller to infer it from which keys are present.
+                if str(row.get("verify") or "") == "sketch":
+                    ok, why = verify_sketch(doc.id)
+                else:
+                    ok, why = verify(doc.id, row.get("expect"))
+                if not ok:
+                    _drop(f"verify:{why}")
+                    continue
 
-            record = trajectories.get(tid)
-            if record is None:
-                _drop("record:missing")
-                continue
-            record = {**record, "outcome": "done", "subject": "document"}
-            samples = corpus.samples_from_record(record, source=row.get("source") or "imported",
-                                                 synthetic_finish=True)
-            for sample in samples:
-                sample.meta.update({"source": row.get("source") or "imported",
-                                    "license": row.get("license") or "unknown",
-                                    "verified": True, "verified_by": why})
-            if not samples:
-                _drop("samples:none")
-            out.extend(samples)
+                record = trajectories.get(tid)
+                if record is None:
+                    _drop("record:missing")
+                    continue
+                record = {**record, "outcome": "done", "subject": "document"}
+                samples = corpus.samples_from_record(record, source=row.get("source") or "imported",
+                                                     synthetic_finish=True)
+                for sample in samples:
+                    sample.meta.update({"source": row.get("source") or "imported",
+                                        "license": row.get("license") or "unknown",
+                                        "verified": True, "verified_by": why})
+                if not samples:
+                    _drop("samples:none")
+                out.extend(samples)
+            finally:
+                document_service.delete_document(doc.id)
     return out
 
 
