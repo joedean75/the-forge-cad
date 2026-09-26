@@ -36,6 +36,34 @@
 > **solved `plate-4-holes`**, which both the 0.6B and Opus 5 had failed — so that
 > task was neither impossible nor mis-specified.
 >
+> **The corpus fix worked: 0.764 -> 0.879** (2026-09-26, v5 corpus, Qwen3.5-2B,
+> one epoch with cosine decay): **solved 10/18, mean score 0.879, geometry 18/18,
+> finished 10/18, 20 failed calls.** Opus 5 is 0.900 on the same suite, so the gap
+> is 0.021.
+>
+> Every one of the five operations that had **zero labels** is now used: steel
+> 0.00 -> 1.00, aluminium 0.80 -> 1.00, titanium 0.60 -> 1.00 (`set_material`),
+> filleted 0.80 -> 1.00 (`fillet_edges`), chamfered 0.80 -> 1.00
+> (`chamfer_edges`), rib 0.80 -> 1.00 (`add_rib`). Two-cubes 0.50 -> 1.00 and
+> sheet-bracket 0.33 -> 0.75 came along with them. That is the prediction the
+> 18-task suite made — "7 of 18 tasks, needing no new capability" — coming back as
+> the measurement.
+>
+> **Three tasks went backwards and the reason is worth more than the gain.**
+> `plate-4-holes` 1.00 -> 0.80 (three holes where four were asked), `bolt-circle`
+> four where six were asked, `counterbored-plate` two where four were asked,
+> `bushing` lost its bore. The failure mode has *changed*: the model now reaches
+> for the right operation and miscounts the repetitions, where before it never
+> reached at all. And `stepped-shaft` 0.80 -> 0.40 is a plain units error — 24,000
+> mm, which is 24 written where 0.024 was meant, the mistake
+> `adv:metres-for-millimetres` exists for.
+>
+> Both are countable corpus properties rather than mysteries: the coverage source
+> teaches one feature per sequence, so nothing in it demonstrates "four of these,
+> not three", and its dimensions are all metres-correct literals with no failure
+> to recover from. The next corpus pass writes multi-instance sequences and keeps
+> the recovery injection pointed at unit mistakes.
+>
 > **Eighteen tasks, and the failures are one sentence** (2026-09-25, step 2,800
 > serving): **mean score 0.767, solved 6/18, geometry valid 17/18, finished 5/18,
 > 25 failed calls.** The original six scored 0.900 within this run — identical to
