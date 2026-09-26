@@ -168,6 +168,50 @@ dataset. The export script is a dozen lines over
    which dropped type is worth adding next. Expect `Mirror` to lead — it is the
    one common constraint declined for a missing argument rather than for having no
    equivalent, and carrying the mirror line in the export would fix it.
+### The interpreter, and what it moved (2026-09-26)
+
+`datasets/cadquery_interp.py` executes the program instead of pattern-matching a
+chain. Measured on the same 10,000, each step by `yield_report`:
+
+| | converted |
+|---|---|
+| chain reader (`external.convert_cadquery`'s original path) | 9.4% |
+| interpreter, first pass | **0.8%** |
+| + the extent bug, `.edges()`, `translate` after material, default pen | 5.6% |
+| + `for` loops, `translate` of an extrusion, `cq.Vector` | **10.6%** |
+| **both paths, which is what runs** | **18.7%** |
+
+The first pass being *worse* than the thing it replaces is the shape to expect and
+the reason to measure each step: the interpreter must execute the whole program,
+so one unsupported statement loses it, where the chain reader needs one clean
+chain and ignores everything else. That is also why both are kept — 1,061 and 806
+programs, barely overlapping, and both verified downstream, so trying both is more
+samples at no cost in trust.
+
+Four pieces of state were what the chain reader lacked, and the middle two are
+where the yield came from:
+
+* an **environment**, so `solid = profile.extrude(t)` then `solid.union(boss)` is
+  readable at all;
+* **expression evaluation** over the program's own names, arithmetic and
+  `math.radians`/`sin` — 653 programs were dropped as `unresolved_argument` for
+  want of it;
+* **placement baked into the profile** as a `loops` outline in absolute
+  coordinates, because `rect` and `circle` profiles have no centre argument and an
+  in-plane offset is exactly what `center` and `moveTo` produce;
+* a **running bounding box**, which is what resolves `faces(">Z")` to a height.
+  Growing a throwaway clone's box instead of the real one made every `.faces()`
+  after an extrude report `no_body_yet` — 15% of the dataset, and the second
+  largest cause in the first measurement.
+
+**Ranked, what remains** (share of the 10,000, after the above):
+`pushPoints` 11.9% + `rarray` 5.6% + `polarArray` 3.6% — all three are
+`PatternFeature` kinds (`table`, `linear`, `circular`) and together the largest
+remaining block; `shell` 10.0%, **declined on purpose** because CadQuery's opens a
+face and `add_modifier("shell")` hollows uniformly, which is a different body;
+`ClassDef` 7.5% + `Measures` 6.3% + `FunctionDef` 5.1%, one template family's
+Python structure rather than any CAD; `rotate` 5.6%; `ListComp` 4.3%.
+
 ### Measured, on the real files (2026-09-26)
 
 The test split's 10,000 programs, fetched as **58 MB** by projecting the one

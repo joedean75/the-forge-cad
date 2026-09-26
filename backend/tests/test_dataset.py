@@ -207,16 +207,39 @@ def test_a_cadquery_program_converts_to_this_catalog_in_metres():
     assert "len 80 mm" in row["goal"], "the goal states the dimensions it was built to"
 
 
-def test_a_program_this_catalog_cannot_express_is_dropped_by_cause():
+def test_a_program_the_converter_cannot_read_is_dropped_by_cause():
+    """Named for the *converter*, because the first version of this said "this
+    catalog cannot express" and used a `revolve` to prove it — while `add_revolve`
+    existed the whole time. The chain reader could not read the program; the
+    kernel could always have built it, and the interpreter now does. The
+    distinction is the whole reason the interpreter was written.
+
+    So the case here is one that genuinely has no equivalent: CadQuery's `.shell`
+    opens a face, and `add_modifier("shell")` hollows uniformly — a different
+    body, which is why it is declined rather than mapped.
+    """
     from datasets import external
 
     external.DROPS.clear()
     assert external.convert_cadquery("""
 import cadquery as cq
-r = 10.0
-body = cq.Workplane('XZ').circle(r).revolve()
+t = 2.0
+body = cq.Workplane('XY').box(20, 20, 20).faces('>Z').shell(t)
 """) is None
     assert external.DROPS, "a silent drop is a yield nobody can see"
+
+
+def test_the_interpreter_reads_what_the_chain_reader_could_not():
+    """The same `revolve` program the previous test used to call unexpressible."""
+    from datasets import external
+
+    row = external.convert_cadquery("""
+import cadquery as cq
+r = 10.0
+body = cq.Workplane('XZ').circle(r).revolve()
+""")
+    assert row is not None and row["converted_by"] == "interpreter"
+    assert [o["op"] for o in row["ops"]] == ["add_revolve"]
 
 
 def test_a_converted_sequence_is_kept_only_if_it_builds_the_source_s_body(tmp_path):

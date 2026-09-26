@@ -237,6 +237,32 @@ def convert_cadquery(source: str, *, goal: str = "",
     Millimetres in the program, metres in the operations — the conversion every
     caller of this API makes, and the one a converter gets wrong silently.
     """
+    # **The interpreter first, the chain reader as the fallback.** They fail on
+    # different programs: the interpreter executes the whole thing, so one
+    # unsupported statement loses it, while the chain reader needs only one clean
+    # chain and ignores the rest — which is also why it silently drops placement.
+    # Measured on Zero-To-CAD's 10,000 test programs: interpreter 10.6%, chain
+    # reader 9.4%, and neither is a superset of the other. Both are verified
+    # downstream, so trying both is strictly more samples at no cost in trust.
+    from datasets import cadquery_interp
+
+    try:
+        interpreted = cadquery_interp.interpret(source)
+    except cadquery_interp.Unsupported as exc:
+        _drop(f"interp:{exc.cause}")
+    except RecursionError:
+        _drop("interp:recursion")
+    except Exception as exc:  # noqa: BLE001 — a converter bug is a drop, counted
+        _drop(f"interp:crash:{type(exc).__name__}")
+    else:
+        if interpreted:
+            values = _literals(ast.parse(source))
+            stated = ", ".join(f"{k.removeprefix('p_').replace('_', ' ')} {v:g} mm"
+                               for k, v in list(values.items())[:8])
+            return {"goal": goal or (f"{name}: {stated}" if stated else name),
+                    "ops": interpreted, "source": "zero-to-cad",
+                    "license": "Apache-2.0", "converted_by": "interpreter"}
+
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -310,7 +336,8 @@ def convert_cadquery(source: str, *, goal: str = "",
     stated = ", ".join(f"{k.removeprefix('p_').replace('_', ' ')} {v:g} mm"
                        for k, v in list(values.items())[:8])
     return {"goal": goal or (f"{name}: {stated}" if stated else name),
-            "ops": ops, "source": "zero-to-cad", "license": "Apache-2.0"}
+            "ops": ops, "source": "zero-to-cad", "license": "Apache-2.0",
+            "converted_by": "chain"}
 
 
 # --------------------------------------------------------- SketchGraphs --
