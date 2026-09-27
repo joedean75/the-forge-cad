@@ -36,6 +36,25 @@
 > **solved `plate-4-holes`**, which both the 0.6B and Opus 5 had failed — so that
 > task was neither impossible nor mis-specified.
 >
+> **Assemblies are where it stops** (2026-09-27, the first end-to-end attempt).
+> A full brief — a 1/10 short-course truck to Traxxas Slash dimensions, structural
+> parts printed and electrics inserted from the catalog — ran **8 steps, one
+> successful operation**, and the loop stopped it on `repeated_failure`:
+> `build_part` without `goal`, then `build_part` with `add_primitive`'s `params`
+> and `shape`, then four `add_mate` calls each missing a required argument.
+>
+> The label counts predicted it exactly: `add_mate` 2, `insert_standard_part` 2,
+> `list_components` 3, `build_part` **0**. Step 2 is the diagnosis — reaching for
+> `params` and `shape` is what a model does when building one part is nearly all
+> it has ever seen. The single `build_part` that landed took the whole brief as
+> one part and produced an 8.76 kg body named "short-course RC truck" against a
+> 2.64 kg target for the vehicle.
+>
+> Every guard behaved: typed `MISSING_ARG` naming the argument each time, the
+> repeat guard ending the run rather than burning 120 steps, and a summary that
+> said "Goal not confirmed complete. Ran 1 operation(s)". **The surface is not
+> what needs fixing** — the corpus is, and an assembly corpus is the next one.
+>
 > **A second suite, and editing works** (2026-09-27, `evals.tasks.EDITS`, eleven
 > tasks that start from a seeded body and ask for a change). **v6: mean 0.909,
 > solved 8/11, finished 8/11, 3.18 steps, 10 failed calls all `PRECONDITION`.**
