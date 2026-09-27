@@ -102,6 +102,14 @@ class TaskResult:
     #: Did the API reject at least one call in this run.
     refused: bool = False
     expect: str = "succeed"
+    #: The planner never ran — no key, no credit, a provider outage. **Not a
+    #: score.** An Opus run over eleven edit tasks met `HTTP 402: would exceed
+    #: your available credits` on five of them, took zero steps on each, and the
+    #: suite reported a mean of 0.818 as though it had measured something: the
+    #: five unrun tasks contributed whatever their *seed* already scored. A
+    #: benchmark that averages in tasks it could not attempt reads highest when
+    #: the model is least available.
+    unrun: bool = False
 
     @property
     def flagged(self) -> bool:
@@ -205,6 +213,11 @@ def run_task(task: Task, planner: Optional[Callable[..., dict]] = None, *,
     # identical from outside, and they are not the same outcome.
     finished = bool(run.get("finished"))
 
+    # A planner that never answered at all is not a result. A planner error *after*
+    # work is still a measurement of what the model did, so this needs both: the
+    # loop stopped on a provider failure, and nothing ran.
+    unrun = not steps and str(run.get("stop_reason") or "") == "planner_error"
+
     return TaskResult(
         task_id=task.id,
         expect=task.expect,
@@ -221,6 +234,9 @@ def run_task(task: Task, planner: Optional[Callable[..., dict]] = None, *,
         unmet=unmet,
         warnings=sum(len(s.get("warnings") or []) for s in steps),
         seconds=round(time.perf_counter() - started, 2),
+        unrun=unrun,
+        note=(str(run.get("summary") or "the planner never answered")[:160]
+              if unrun else None),
     )
 
 
@@ -243,10 +259,20 @@ def report(results: Sequence[TaskResult], *, resolution: int = DEFAULT_RESOLUTIO
         for code, n in result.error_codes.items():
             codes[code] = codes.get(code, 0) + n
 
-    count = len(results) or 1
-    adversarial = [r for r in results if r.expect in ("refuse", "warn")]
+    # **Averaged over what actually ran.** A task the planner never answered is
+    # excluded rather than scored, and counted so the exclusion is visible: a
+    # suite that quietly averages in unrun tasks reports its best numbers when the
+    # provider is down.
+    every = list(results)
+    scored = [r for r in results if not r.unrun]
+    unrun = [r for r in results if r.unrun]
+    count = len(scored) or 1
+    adversarial = [r for r in scored if r.expect in ("refuse", "warn")]
+    results = scored
     return {
         "tasks": len(results),
+        "unrun": len(unrun),
+        "unrun_tasks": [r.task_id for r in unrun],
         "resolution": resolution,
         # **What produced this number, recorded beside it.** Three baselines were
         # compared as though they shared their conditions, and the artifacts could
@@ -275,7 +301,9 @@ def report(results: Sequence[TaskResult], *, resolution: int = DEFAULT_RESOLUTIO
         "failed_calls": sum(sum(r.error_codes.values()) for r in results),
         "by_error_code": dict(sorted(codes.items(), key=lambda kv: -kv[1])),
         "seconds": round(sum(r.seconds for r in results), 2),
-        "results": [asdict(r) for r in results],
+        # Every task, including the ones excluded from the averages: an artifact
+        # that hides what it could not run cannot be audited afterwards.
+        "results": [asdict(r) for r in every],
     }
 
 
@@ -324,11 +352,13 @@ def format_report(data: Dict[str, Any]) -> str:
         unmet = "; ".join(row["unmet"])[:38] or ("—" if row["score"] >= 1 else "")
         want = row["expect"]
         flagged = row["refused"] or row["warnings"] > 0
-        got = ("refused" if row["refused"]
+        got = ("NOT RUN" if row.get("unrun")
+               else "refused" if row["refused"]
                else "warned" if row["warnings"]
                else "solved" if row["score"] >= 1 and row["geometry_ok"]
                else "built-wrong")
-        expected = (row["refused"] if want == "refuse"
+        expected = (False if row.get("unrun")
+                    else row["refused"] if want == "refuse"
                     else flagged if want == "warn"
                     else row["score"] >= 1 and row["geometry_ok"])
         mark = " " if expected else "!"
@@ -338,6 +368,9 @@ def format_report(data: Dict[str, Any]) -> str:
             f"{row['steps']:>3}/{row['max_steps']:<3}  {unmet}")
     lines += [
         "-" * 104,
+        (f"** {data['unrun']} task(s) never ran and are excluded: "
+         f"{', '.join(data.get('unrun_tasks') or [])} **" if data.get("unrun")
+         else ""),
         f"as expected {data['as_expected']}/{data['tasks']}  "
         f"caught {data['caught']}/{data['expected_flags']} bad calls  "
         f"solved {data['solved']}/{data['tasks']}  "

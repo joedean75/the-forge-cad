@@ -131,3 +131,27 @@ def test_a_document_with_no_spec_is_not_given_a_phantom_failure():
 @pytest.mark.skipif(llm_client.is_configured(), reason="a key is configured")
 def test_the_goal_suite_declines_rather_than_pretending_without_a_key():
     assert agent.main(["--suite", "goals"]) == 2
+
+
+def test_a_task_the_planner_never_answered_is_not_a_score():
+    """An Opus run over eleven edit tasks met `HTTP 402: this request would exceed
+    your available credits` on five of them, took **zero steps** on each, and the
+    suite reported a mean of 0.818 — the five unrun tasks contributing whatever
+    their *seed* already scored. A benchmark that averages in tasks it could not
+    attempt reads highest exactly when the model is least available.
+
+    The excluded tasks stay in `results`, because an artifact that hides what it
+    could not run cannot be audited afterwards.
+    """
+    ran = agent.TaskResult(task_id="ran", score=1.0, met=2, total=2, geometry_ok=True,
+                           steps=3, max_steps=8, finished=True, ok_steps=3)
+    never = agent.TaskResult(task_id="never", score=0.8, met=4, total=5,
+                             geometry_ok=True, steps=0, max_steps=8, finished=False,
+                             ok_steps=0, unrun=True)
+
+    data = agent.report([ran, never], resolution=96)
+    assert data["tasks"] == 1, "the unrun task is not one of the tasks scored"
+    assert data["unrun"] == 1 and data["unrun_tasks"] == ["never"]
+    assert data["mean_score"] == 1.0, "0.8 from a task that never ran must not average in"
+    assert {r["task_id"] for r in data["results"]} == {"ran", "never"}
+    assert "never ran" in agent.format_report(data)
