@@ -108,30 +108,51 @@ check interference. Nothing in `coverage` does any of that today.
 
 ### The same brief with the scaffolding done for it
 
-The experiment worth running next is the one that separates the two failures, because
-"it cannot build a vehicle" was two claims: it cannot *plan* an assembly, and it
-cannot *design the parts*. So the assembly was scaffolded by hand — one
-`build_part` call per printed part, with a standalone dimensioned goal and a
-`requirements` list — and only the part design left to the model.
+"It cannot build a vehicle" was two claims — it cannot *plan* an assembly, and it
+cannot *design the parts* — so the second experiment separated them. The assembly was
+scaffolded by direct operations: one `build_part` call per printed part with a
+standalone dimensioned goal and a `requirements` list, then placement, the purchased
+parts and the roll-ups. Only part design was left to the model. **17 of 17 parts
+built.**
 
-It designs the parts. Of the parts that got a planner that answered, **every one came
-back dimensionally exact**: a 380 x 90 x 4 chassis plate to 0.0 mm, an 88 x 45 x 40
-bulkhead, a 95 x 38 x 10 arm, a 30 x 22 x 40 knuckle, all watertight solids with
-consistent winding. It also wrote its own brief first — the bulkhead's `set_spec`
-recorded three `bounding_box` requirements and a `feature` requirement without being
-asked for them specifically, and scored 1.0 against it.
+On the *envelope* it is essentially perfect. Sixteen of seventeen parts came back
+dimensionally exact — `err=0.0` on all three axes, at 128 voxels, across plates,
+blocks, a cylinder and a 500 mm shell — and all seventeen are valid watertight solids
+with consistent winding. The one miss is a battery tray built 12 mm thick against 8 mm
+asked. Measured with `verify_against_spec`'s own machinery, not by eye.
 
-What it gets wrong is *inside* the envelope, and `finished` is the field that says so:
+On what goes *inside* the envelope it is about a third right. Judging by volume against
+closed form, combined with the feature count where the feature is too small for volume
+to discriminate:
 
-* `motor_mount` returned `ok` with `finished=False` after one step — a 45 x 40 x 30
-  box with **no 36 mm bore**. The right outside, none of the inside.
-* `knuckle` returned `ok` with `finished=False` after six — the right block with
-  **five** bores where one was asked for.
+| outcome | count | parts |
+|---|---|---|
+| feature cut correctly | 6 | chassis (4 × ⌀6), both arms (2 × ⌀4), rear tower, shock (⌀10 × 60 bore, 7,294 mm³ against 7,295 predicted), body shell (2 mm wall, 553,152 mm³ against 553,152) |
+| feature cut wrong | 3 | front bulkhead (bore present, wrong size), knuckle (**5** bores where 1 was asked), hub carrier (over-cut) |
+| envelope only, nothing cut | 8 | rear bulkhead, motor mount, front tower, servo tray, battery tray, both bumpers, wheel |
 
-Both are the shape of failure to expect from here: the primitive is reliable and the
-feature on it is not. Neither is silent, which is the part that matters — a run that
-stops short reports `finished=False` and a caller that reads only `ok` will place a
-box and call it a motor mount.
+The body shell is worth pausing on: a 500 × 280 × 90 box hollowed to a 2 mm wall,
+matching the closed form exactly. That is the hardest thing on the list and it is
+right.
+
+### `finished=True` is only as honest as the spec behind it
+
+This is the finding that matters, and it corrects what a first look at the data
+suggested. Two of the incomplete parts (motor mount, knuckle) reported
+`finished=False`, so the failure looked self-reporting. It is not: **the wheel and both
+bumpers reported `finished=True` with nothing cut at all** — a bare cylinder called a
+wheel, and two blocks called bumpers.
+
+The chain is mechanical. `_unmet_requirements` runs `verify_against_spec` on the claim
+of done, and `verify_against_spec` has nothing to say about a document with no spec. One
+part in seventeen wrote one. So for sixteen of them the done gate checked that the body
+was a valid solid — which it was — and nothing else. **A missing brief does not degrade
+the reward function, it removes it**, and the visible symptom is a confident
+`finished=True` on a part that is missing its defining feature.
+
+So the 2.1% `set_spec` rate below is not a cosmetic coverage gap. It is the reason
+`finished` cannot be trusted as a completeness signal today, and fixing the corpus is
+what makes the gate real rather than decorative.
 
 ### The brief rule is only followed when the corpus teaches it
 
@@ -169,6 +190,41 @@ and a knuckle at that track. **Nothing in the pipeline checks one part's dimensi
 against another's** — each `build_part` run sees its own goal and nothing else. That
 is what `build_part`'s `component_ids` argument is for, and not using it is the
 mistake; a per-part spec cannot catch a relationship between two parts.
+
+### The roll-ups caught every consequence, including mine
+
+* **Mass found the envelope-only failures without being asked.** All-up came to
+  11,006 g against a 2,640 g target. Not a units bug: four wheels left as solid
+  cylinders are 2.6 kg by themselves, and the un-bored bulkhead, mount and trays carry
+  the rest. The parts that were *dimensionally* perfect and internally empty are
+  exactly the parts that made the budget 4.2x over, which is what a mass budget is for.
+* **Interference found 31 real clashes, and every one was mine.** 3,741 pairs, and the
+  split is the whole story: 3,554 hardware-on-hardware and 156 hardware-on-part are the
+  96 fasteners and bearings I left stacked at the origin, because a screw in this
+  assembly is a BOM row and not a placement. The remaining **31 part-on-part** are
+  genuine, and each names the dimension to change — `steering knuckle ∩ wheel` at
+  −26.83 mm is the track arithmetic I got wrong, `motor mount ∩ rear bulkhead` at
+  −17.50 mm is two parts I placed into the same 40 mm of chassis. The model's parts were
+  right and my layout was wrong, and the check said so.
+* **There is no way to scope the check to a subset**, so realistic fastener counts
+  drown it. Reading it required bucketing `pairs` by hand. The counts reconcile exactly
+  against the operation's own total, which is how you know the bucketing is honest.
+* **No mates, deliberately.** The four bounding-box mates align one world axis between
+  two extremes, so a `fasten` would have moved the front bulkhead to the middle of the
+  chassis top face rather than the front axle line — and `place_component` then refuses
+  to correct it, because a mate owns the placement. Rotation is impossible for the same
+  structural reason. One mate that visibly misplaces a part is worse than none and an
+  honest note.
+* **A per-part spec cannot catch a relationship between two parts.** I specified a
+  95 mm arm and a 240 mm track independently, and a 95 mm arm does not fit between a
+  90 mm chassis and a knuckle at that track. Nothing checked it, because each
+  `build_part` run sees only its own goal — which is what `component_ids` is for, and
+  not using it was the mistake.
+* **A volume check only discriminates where the feature is big enough.** Two ⌀4 holes
+  are 0.4% of a shock tower, inside any sane tolerance, so volume-against-closed-form
+  silently passed parts with no holes at all. Volume decides the bores and pockets;
+  the feature count decides the small holes. Either alone gets a third of the table
+  wrong.
 
 ## Corpus practices
 
