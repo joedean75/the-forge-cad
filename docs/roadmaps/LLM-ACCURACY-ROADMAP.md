@@ -36,6 +36,33 @@
 > **solved `plate-4-holes`**, which both the 0.6B and Opus 5 had failed — so that
 > task was neither impossible nor mis-specified.
 >
+> **A second suite, and editing works** (2026-09-27, `evals.tasks.EDITS`, eleven
+> tasks that start from a seeded body and ask for a change). **v6: mean 0.909,
+> solved 8/11, finished 8/11, 3.18 steps, 10 failed calls all `PRECONDITION`.**
+>
+> The three tasks that can only be done by reading a feature's parameters and
+> passing the same structure back — lengthen, thicken, enlarge-hole — all pass, in
+> one or two steps. That is the first measurement of `set_feature_params` working
+> at all: 223 labels in the corpus and, until this suite, no task that used one.
+> `edit-material` and `edit-hollow` pass too, so `set_material` and `shell_faces`
+> are chosen on an existing body and not only on a fresh one.
+>
+> **The Opus comparison is incomplete and the reason is recorded rather than
+> smoothed.** Five of its eleven tasks met `HTTP 402: would exceed your available
+> credits` and ran zero steps. On the six both models reached, they **tie at 1.00**
+> — and Opus needs **1.0 steps against v6's 1.67**. The efficiency gap the goal
+> suite showed (2.33 against 4.39) is the same gap, and it is the honest remaining
+> difference: not what the local model can do, but how many turns it spends doing
+> it.
+>
+> The three v6 losses are all *additive edits to an existing body*: `edit-add-boss`
+> 0.60 with an invalid solid, `edit-add-rib` 0.60 having spent all eight steps, and
+> `edit-remove-boss` 0.80 never deleting the feature. Ten `PRECONDITION` failures
+> across the suite say the same thing: it is reaching for operations whose
+> preconditions it has not established. Adding material *onto* something that is
+> already there, and removing a feature by id, are the two shapes the corpus has
+> almost nothing of — `delete_feature` has no labels at all.
+>
 > **v6 passes Opus 5: 0.918** (2026-09-27, v5's corpus plus 2,408 Zero-To-CAD
 > samples, 3,377 trained, cosine): **solved 12/18, mean score 0.918, geometry
 > 18/18, finished 12/18, mean 4.39 steps, 5 failed calls.** Opus 5 is 0.900 on the
