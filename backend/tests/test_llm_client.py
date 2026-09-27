@@ -140,3 +140,56 @@ def test_a_tool_call_asks_for_one_action_at_a_time(monkeypatch):
 
     llm_client._post_chat([{"role": "user", "content": "hi"}], timeout=5.0)
     assert "parallel_tool_calls" not in sent[-1], "only meaningful when tools are offered"
+
+
+# ---------------------------------------------------------------------------
+# A timeout is a property of the hardware, so it is configurable
+# ---------------------------------------------------------------------------
+
+def _timeouts(monkeypatch):
+    """A client that answers politely and remembers the timeout it was built with."""
+    seen = []
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            seen.append(kw.get("timeout"))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, *a, **kw):
+            return _Resp(200, {"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setattr(llm_client.httpx, "Client", _Client)
+    monkeypatch.setattr(llm_client, "LLM_API_KEY", "test-key")
+    return seen
+
+
+def test_a_call_with_no_timeout_takes_the_configured_one(monkeypatch):
+    """A 2B served off a laptop GPU needs more than the hosted default, and the
+    failure when it does not get it reads as the model being unable to answer."""
+    seen = _timeouts(monkeypatch)
+    monkeypatch.setattr(llm_client, "LLM_TIMEOUT", 300.0)
+    llm_client._post_chat([{"role": "user", "content": "hi"}])
+    assert seen == [300.0]
+
+
+def test_an_explicit_timeout_still_wins(monkeypatch):
+    seen = _timeouts(monkeypatch)
+    monkeypatch.setattr(llm_client, "LLM_TIMEOUT", 300.0)
+    llm_client._post_chat([{"role": "user", "content": "hi"}], timeout=5.0)
+    assert seen == [5.0]
+
+
+def test_the_planner_turn_does_not_pin_its_own_timeout():
+    """`copilot`'s planner call was the one hardcoded 60 s that mattered: no
+    deployment could raise it without editing code."""
+    import inspect
+
+    from app.services import copilot
+
+    src = inspect.getsource(copilot)
+    assert "timeout=60.0" not in src

@@ -307,7 +307,7 @@ def _plan_next(goal: str, transcript: List[dict], summary: dict,
     with_tools = tools is not None
     message = llm_client._post_chat(
 
-        messages, timeout=60.0, max_tokens=2400, tools=tools, model=model)
+        messages, max_tokens=2400, tools=tools, model=model)
 
     calls = message.get("tool_calls") or []
     deferred: List[str] = []

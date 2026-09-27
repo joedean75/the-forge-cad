@@ -106,6 +106,70 @@ So the next corpus is an assembly corpus, and it is as specific as the last two
 were: sequences that insert a purchased part, place it, mate it by connector, and
 check interference. Nothing in `coverage` does any of that today.
 
+### The same brief with the scaffolding done for it
+
+The experiment worth running next is the one that separates the two failures, because
+"it cannot build a vehicle" was two claims: it cannot *plan* an assembly, and it
+cannot *design the parts*. So the assembly was scaffolded by hand — one
+`build_part` call per printed part, with a standalone dimensioned goal and a
+`requirements` list — and only the part design left to the model.
+
+It designs the parts. Of the parts that got a planner that answered, **every one came
+back dimensionally exact**: a 380 x 90 x 4 chassis plate to 0.0 mm, an 88 x 45 x 40
+bulkhead, a 95 x 38 x 10 arm, a 30 x 22 x 40 knuckle, all watertight solids with
+consistent winding. It also wrote its own brief first — the bulkhead's `set_spec`
+recorded three `bounding_box` requirements and a `feature` requirement without being
+asked for them specifically, and scored 1.0 against it.
+
+What it gets wrong is *inside* the envelope, and `finished` is the field that says so:
+
+* `motor_mount` returned `ok` with `finished=False` after one step — a 45 x 40 x 30
+  box with **no 36 mm bore**. The right outside, none of the inside.
+* `knuckle` returned `ok` with `finished=False` after six — the right block with
+  **five** bores where one was asked for.
+
+Both are the shape of failure to expect from here: the primitive is reliable and the
+feature on it is not. Neither is silent, which is the part that matters — a run that
+stops short reports `finished=False` and a caller that reads only `ok` will place a
+box and call it a motor mount.
+
+### The brief rule is only followed when the corpus teaches it
+
+Of the first six parts, **one** wrote a spec. The other five answer
+`verify_against_spec` with `PRECONDITION: this document has no design spec`, which
+means the reward function and the done gate were both inert for five parts out of six
+— the run was checked for a valid solid and nothing else. The one that did comply
+(`bulkhead_front`) wrote three `bounding_box` requirements and a `feature`
+requirement unprompted and scored 1.0, so the capability is there.
+
+The corpus predicts the rate. Counted over the 5,477 merged v6 labels:
+
+| label | count | share |
+|---|---|---|
+| `add_primitive` | 1,493 | 27% |
+| finishing turn (`{"done": true}`) | 1,118 | 20% |
+| `add_extrude` | 920 | 17% |
+| `add_hole` | 900 | 16% |
+| `set_feature_params` | 243 | 4.4% |
+| **`set_spec`** | **116** | **2.1%** |
+| `set_material` | 22 | 0.4% |
+| `add_mate` / `insert_standard_part` | 2 / 2 | 0.04% |
+| `build_part` | 0 | — |
+
+`set_spec` is meant to be the *first* call of every part run and is 2.1% of labels;
+one part in six is about what 2.1% buys. Finishing, at 20%, is reliable — which is the
+same relationship the other way round and the reason to trust the number. Count the
+label before blaming the prompt: the rule is in the prompt for every run, and the
+prompt is not what decides whether it is followed.
+
+One brief of mine was wrong in a way nothing caught, and it is worth naming because it
+is an agent-driving lesson rather than a model one: I specified a 95 mm suspension arm
+and a 240 mm track independently, and a 95 mm arm does not fit between a 90 mm chassis
+and a knuckle at that track. **Nothing in the pipeline checks one part's dimensions
+against another's** — each `build_part` run sees its own goal and nothing else. That
+is what `build_part`'s `component_ids` argument is for, and not using it is the
+mistake; a per-part spec cannot catch a relationship between two parts.
+
 ## Corpus practices
 
 * **One generator for the prompt and the corpus.** Every sample is built by
@@ -148,5 +212,44 @@ check interference. Nothing in `coverage` does any of that today.
   for 68 minutes at 283% CPU.
 * **Do not pipe a long job's output to `tail`.** It buffers until the pipe closes,
   so a running job looks silent and a dead one looks the same. Redirect to a file.
+* **The 6 GB card is the whole story, and it presents as three different bugs.**
+  Qwen3.5-2B in bf16 nearly fills a 3050's VRAM. As a prompt grows the allocation
+  does too, and on Windows the driver *spills VRAM to host RAM* rather than
+  failing — so the first symptom is **slowness**: per-step latency went 19 s ->
+  81 s -> 300 s, and the process's host working set grew to 8.5 GB and then
+  11.7 GB, which is the spilled VRAM and not a leak. The second symptom is
+  **timeouts**, once a turn drifts past whatever the client allows. The third is
+  `RuntimeError: CUDA error: out of memory`, after which the context is dead and
+  every later request fails identically. One cause, three faces; diagnosing any of
+  them on its own sends you somewhere useless. Measure VRAM headroom first.
+* **`RuntimeError: CUDA error: out of memory` is not `torch.cuda.OutOfMemoryError`.**
+  The second is PyTorch's allocator declining a request, and the next shorter
+  prompt succeeds. The first is a failed kernel launch reported by the driver, and
+  it **poisons the CUDA context** — nothing in-process recovers it. `serve.py`
+  caught only the recoverable one, so the fatal one fell to the generic handler and
+  the server answered 500 for every subsequent request while `/v1/models` kept
+  returning 200. Eight parts died against a server that looked healthy. It is now
+  matched on the message (there is no distinct type to catch), latched, and
+  answered as a 503 naming the restart.
+* **`/v1/models` answering is not a health check.** It touches no CUDA. A probe that
+  does not run the model cannot tell you the model is dead, and this is what made
+  the first diagnosis wrong twice.
+* **A hardcoded client timeout is indistinguishable from a model that cannot answer.**
+  The planner turn was fixed at 60 s with two attempts, so a local 2B that needs 80 s
+  reported `planner_error: provider connection timed out` and `Ran 0 operation(s)` —
+  reading exactly like a model failure, on a server that was answering. Ten of
+  seventeen parts were lost to it across two passes. `LLM_TIMEOUT` now overrides it,
+  because the right value is a property of the hardware and not of the code.
+* **Relaunching that server is not the command line it is running.** The Windows Store
+  `python.exe` alias in the recorded command line re-execs an interpreter with no
+  `transformers`; the one that works is the `.venv-qwen` virtualenv. `Win32_Process`
+  reports the alias, so the command line a process shows is not always one that starts
+  it again.
+* **Read the envelope's `ok` before its `result`.** A probe of `list_standard_parts`
+  passing `query` (the parameter is `search`) printed an empty catalog, and I spent a
+  step believing the catalog was empty. The API was right — a typed `BAD_ARG` naming
+  every valid parameter — and the harness threw it away by reading `result` through
+  `.get`. A script that does that converts every typed refusal into a plausible empty
+  answer, which is the exact failure the envelope exists to prevent.
 * **A "stale" log may be a timezone.** Windows here runs UTC−4; a watcher log that
   looked four hours dead was nine minutes old.

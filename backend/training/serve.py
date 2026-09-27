@@ -155,6 +155,22 @@ def _load_hf(args) -> None:
     print(f"serving {args.model_name} ({args.hf}) on {device}", flush=True)
 
 
+#: What a caller is told once the CUDA context has died. It names the restart
+#: because that is the only fix: the process cannot rebuild a poisoned context.
+_POISONED = ("the CUDA context is unrecoverable after an out-of-memory fault; "
+             "restart this server process")
+
+
+def _is_cuda_fault(exc: BaseException) -> bool:
+    """Whether a `RuntimeError` is a driver-level CUDA failure.
+
+    Matched on the message because the driver reports these as a plain
+    `RuntimeError`, with no distinct type to catch.
+    """
+    text = str(exc).lower()
+    return "cuda error" in text or "cublas" in text or "device-side assert" in text
+
+
 class _JsonStopCriteria:
     """`JsonStop` as a transformers stopping criterion.
 
@@ -411,14 +427,41 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError as exc:
             self._send(400, {"error": {"message": f"body is not JSON: {exc}"}})
             return
+        # A context that has already died stays dead, so say so at once rather
+        # than spending a generation's wall clock to fail the same way.
+        if _STATE.get("poisoned"):
+            self._send(503, {"error": {"message": _POISONED, "type": "server_error"}})
+            return
         try:
             self._send(200, completion(payload))
         except ValueError as exc:            # a prompt longer than the context
             self._send(400, {"error": {"message": str(exc), "type": "invalid_request_error"}})
         except torch.cuda.OutOfMemoryError:
+            # PyTorch's own allocator refused: the context is still good, so the
+            # next request with a shorter prompt can succeed.
             torch.cuda.empty_cache()
             self._send(503, {"error": {"message": "out of GPU memory; retry with a "
                                                   "shorter prompt", "type": "server_error"}})
+        except RuntimeError as exc:
+            # `RuntimeError: CUDA error: out of memory` is *not*
+            # `torch.cuda.OutOfMemoryError`. The first comes from the allocator and
+            # is recoverable; this one comes from a failed kernel launch inside the
+            # driver, is reported asynchronously, and leaves the CUDA context
+            # unusable — every later call fails the same way no matter how short
+            # the prompt is. It used to fall to the generic handler below, so the
+            # server answered 500 forever while `/v1/models` kept returning 200,
+            # and a caller could only read that as the model being unable to
+            # answer. There is no in-process recovery, so it is latched and named.
+            if not _is_cuda_fault(exc):
+                raise
+            _STATE["poisoned"] = True
+            try:
+                torch.cuda.empty_cache()
+            except Exception:                # noqa: BLE001 — already broken
+                pass
+            self._send(503, {"error": {"message": f"{_POISONED} ({exc.__class__.__name__}: "
+                                                  f"{str(exc).splitlines()[0]})",
+                                       "type": "server_error"}})
         except Exception as exc:             # noqa: BLE001 — a server must answer
             self._send(500, {"error": {"message": f"{type(exc).__name__}: {exc}"}})
 

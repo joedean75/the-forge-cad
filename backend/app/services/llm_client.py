@@ -37,6 +37,15 @@ LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("KIMI_API_KEY")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL") or os.getenv("KIMI_BASE_URL", "https://api.moonshot.cn/v1")
 LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("KIMI_MODEL", "kimi-k2-turbo-preview")
 
+#: How long one chat-completion round trip may take. A hosted flagship answers a
+#: planner turn in a few seconds, so 60 s is generous there — but a 2B served
+#: locally off a laptop GPU takes tens of seconds per turn and drifts past it,
+#: and the failure arrives as `planner_error: provider connection timed out`,
+#: which reads as the *model* being unable to answer rather than the client
+#: giving up on it. Configurable because the right value is a property of the
+#: deployment's hardware, which this code cannot see.
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT") or os.getenv("FORGE_LLM_TIMEOUT") or 60.0)
+
 # Curated model lists by provider — current flagships first, then fast/cheap
 # tiers, then legacy fallbacks. OpenRouter routes many more; the active model is
 # always injected at the top of the list if it isn't already present.
@@ -358,7 +367,7 @@ def generate_feature_tree(prompt: str) -> Optional[dict[str, Any]]:
         {"role": "user", "content": prompt},
     ]
     try:
-        content = _call_llm(messages, timeout=60.0, max_tokens=3000)
+        content = _call_llm(messages, max_tokens=3000)
     except Exception as exc:
         _LOGGER.warning("LLM feature-tree request failed: %s", exc)
         return None
@@ -401,7 +410,7 @@ def edit_feature_tree(instruction: str, current: dict[str, Any]) -> Optional[dic
         {"role": "user", "content": user},
     ]
     try:
-        content = _call_llm(messages, timeout=60.0, max_tokens=3000)
+        content = _call_llm(messages, max_tokens=3000)
     except LLMFailure:
         raise
     except Exception as exc:
@@ -431,7 +440,7 @@ def repair_feature_tree(prompt: str, previous: dict[str, Any], error: str) -> Op
         {"role": "user", "content": user},
     ]
     try:
-        content = _call_llm(messages, timeout=60.0, max_tokens=3000)
+        content = _call_llm(messages, max_tokens=3000)
     except Exception as exc:
         _LOGGER.warning("LLM repair request failed: %s", exc)
         return None
@@ -583,7 +592,7 @@ def _charge(ledger: Optional[dict], usage: dict) -> None:
         ledger["cost_known"] = False
 
 
-def _post_chat(messages: list[dict[str, Any]], *, timeout: float = 60.0,
+def _post_chat(messages: list[dict[str, Any]], *, timeout: float | None = None,
                max_tokens: Optional[int] = None,
                tools: Optional[list[dict[str, Any]]] = None,
                model: Optional[str] = None) -> dict[str, Any]:
@@ -595,6 +604,10 @@ def _post_chat(messages: list[dict[str, Any]], *, timeout: float = 60.0,
     """
     if not LLM_API_KEY:
         raise RuntimeError("LLM_API_KEY is not set")
+    # Read at call time rather than binding the default at import, so patching
+    # `LLM_TIMEOUT` takes effect for callers that do not pass one.
+    if timeout is None:
+        timeout = LLM_TIMEOUT
 
     url = f"{LLM_BASE_URL.rstrip('/')}/chat/completions"
     payload: dict[str, Any] = {
@@ -712,7 +725,7 @@ def supports_tools() -> bool:
     return os.getenv("FORGE_LLM_TOOLS", "1") not in ("0", "false", "no")
 
 
-def _call_llm(messages: list[dict[str, str]], timeout: float = 60.0, max_tokens: Optional[int] = None) -> str:
+def _call_llm(messages: list[dict[str, str]], timeout: float | None = None, max_tokens: Optional[int] = None) -> str:
     """Send a chat-completion request and return its text content."""
     content = _post_chat(messages, timeout=timeout, max_tokens=max_tokens).get("content", "")
     if not content:

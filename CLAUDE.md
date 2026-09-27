@@ -613,7 +613,7 @@ The datastore is one table — `records(kind, id, owner_id, data)` — so a new 
 
 ## LLM configuration
 
-Opt-in via `backend/.env`: `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` (provider-agnostic OpenAI-style chat protocol; defaults target Moonshot/Kimi, also works with OpenRouter). Text-to-CAD, text-to-assembly and the Copilot loop all require a key — see "Text-to-CAD needs a model, and there is no fallback" above; without one, `create_document(prompt=…)` and `text_to_assembly` raise `TextToCadUnavailable` rather than degrading to a rule-based parser, which no longer exists.
+Opt-in via `backend/.env`: `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` (provider-agnostic OpenAI-style chat protocol; defaults target Moonshot/Kimi, also works with OpenRouter). `LLM_TIMEOUT` bounds one chat round trip and defaults to 60 s, which is generous for a hosted flagship and **too short for a model served locally**: a 2B on a laptop GPU takes tens of seconds a turn, drifts past it, and the failure arrives as `planner_error: provider connection timed out` — which reads as the model being unable to answer rather than the client giving up on it. It was hardcoded at the one call site that matters (`copilot`'s planner turn), so no deployment could raise it without editing code; the right value is a property of the hardware, which this code cannot see. Text-to-CAD, text-to-assembly and the Copilot loop all require a key — see "Text-to-CAD needs a model, and there is no fallback" above; without one, `create_document(prompt=…)` and `text_to_assembly` raise `TextToCadUnavailable` rather than degrading to a rule-based parser, which no longer exists.
 
 ## OAuth sign-in configuration
 
