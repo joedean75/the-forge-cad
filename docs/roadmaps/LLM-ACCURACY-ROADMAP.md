@@ -36,6 +36,37 @@
 > **solved `plate-4-holes`**, which both the 0.6B and Opus 5 had failed — so that
 > task was neither impossible nor mis-specified.
 >
+> **v6 passes Opus 5: 0.918** (2026-09-27, v5's corpus plus 2,408 Zero-To-CAD
+> samples, 3,377 trained, cosine): **solved 12/18, mean score 0.918, geometry
+> 18/18, finished 12/18, mean 4.39 steps, 5 failed calls.** Opus 5 is 0.900 on the
+> same suite. A 2B on a 6 GB laptop card now scores above the frontier model on the
+> reward function this system measures parts by.
+>
+> The number that says *why* is the failed calls: **20 -> 5, and `BAD_ARG` 13 -> 1.**
+> Malformed arguments have essentially stopped, which is what 814 `add_hole` labels
+> and 846 `add_extrude` labels buy — those were 4 and 43 in v5. `shelled-tray`
+> 0.80 -> 1.00 means `shell_faces` is finally chosen, `bushing` 0.80 -> 1.00 and
+> `stepped-shaft` 0.40 -> 0.80.
+>
+> **The dilution worry did not materialise.** `coverage` fell from 16.9% of the
+> corpus to 8.7% and every one of its operations held: steel, aluminium, titanium,
+> filleted, chamfered and rib all stayed at 1.00. Absolute exposure is what decides
+> whether a model knows an operation exists — every coverage sample is still seen
+> once in an epoch — and the share it occupies is not.
+>
+> **Efficiency is where Opus is still ahead**: 2.33 steps against 4.39, and 1 failed
+> call against 5. The remaining four losses are two kinds. Three are *counting* —
+> `plate-4-holes`, `bolt-circle` and `counterbored-plate` each drilled **one** hole
+> where four or six were asked, which is worse than v5's three-of-four even though
+> `add_hole` grew 200-fold: Zero-To-CAD's programs mostly drill one hole per
+> operation, and an array of them converts to one `add_hole` each rather than to a
+> pattern, so the corpus now demonstrates single holes emphatically. And
+> `sheet-bracket` 0.75 -> 0.67 never reaches `add_sheet_metal`, which has 6 labels.
+>
+> That makes the next corpus pass as specific as the last two: multi-instance
+> sequences, and the `pushPoints`/`rarray`/`polarArray` conversions routed to a
+> `PatternFeature` rather than to N holes.
+>
 > **The corpus fix worked: 0.764 -> 0.879** (2026-09-26, v5 corpus, Qwen3.5-2B,
 > one epoch with cosine decay): **solved 10/18, mean score 0.879, geometry 18/18,
 > finished 10/18, 20 failed calls.** Opus 5 is 0.900 on the same suite, so the gap
