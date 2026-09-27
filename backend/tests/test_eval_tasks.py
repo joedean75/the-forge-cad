@@ -191,3 +191,147 @@ def test_the_task_is_satisfiable(task_id):
     assert report["score"] == 1.0, (
         f"{task_id} cannot be satisfied by a correct build: "
         + "; ".join(f"{c.get('id')}: {c.get('detail')}" for c in unmet))
+
+
+# --------------------------------------------------------------- edit tasks --
+
+def _features(doc):
+    from app.services import cad_operations
+    return cad_operations.execute("list_features", doc, {},
+                                  include_state=False)["result"]["features"]
+
+
+def _first(doc, type_name):
+    return next(f["id"] for f in _features(doc) if f.get("type") == type_name)
+
+
+def _params_of(doc, type_name):
+    """A feature's current parameters, from the tree.
+
+    **Not from `list_features`, which does not carry them.** The rules tell a
+    planner to read them from the document summary and pass the same structure
+    back, and the summary does carry them. Reading the listing instead gave an
+    empty dict here, so `size` became `{"x": 0.12}` with no y or z — a degenerate
+    box that failed to mesh. `set_feature_params` takes `params` as an opaque
+    object the feature owns, by design, so nothing validates it on the way past:
+    the same shape of mistake the `_VEC` required-components guard catches at
+    every other door.
+    """
+    from app.cad_kernel.core.feature_tree import walk_nodes
+    from app.services import document_service
+
+    tree = document_service.get_document(doc).feature_tree
+    node = next(n for n in walk_nodes(tree) if n.get("type") == type_name)
+    return node["id"], dict(node.get("params") or {})
+
+
+def _set_size(doc, axis, value_mm):
+    """Read the box's current params and pass the same structure back, which is
+    the whole point of the tasks that can only be done this way."""
+    fid, params = _params_of(doc, "BoxFeature")
+    size = dict(params.get("size") or {})
+    assert {"x", "y", "z"} <= set(size), size
+    size[axis] = value_mm * MM
+    _run(doc, "set_feature_params", feature_id=fid, params={**params, "size": size})
+
+
+def _e_lengthen(doc):
+    _set_size(doc, "x", 120)
+
+
+def _e_thicken(doc):
+    _set_size(doc, "z", 10)
+
+
+def _e_enlarge_hole(doc):
+    fid, params = _params_of(doc, "HoleFeature")
+    _run(doc, "set_feature_params", feature_id=fid, params={**params, "radius": 5 * MM})
+
+
+def _e_add_hole(doc):
+    _run(doc, "add_hole", radius=3 * MM, through=True,
+         center={"x": 0.0, "y": 0.0, "z": 0.0})
+
+
+def _e_round_edges(doc):
+    _run(doc, "fillet_edges", edges="all", radius=3 * MM)
+
+
+def _e_chamfer(doc):
+    _run(doc, "chamfer_edges", edges="all", distance=2 * MM)
+
+
+def _e_material(doc):
+    _run(doc, "set_material", material_id="steel-1018")
+
+
+def _e_hollow(doc):
+    _run(doc, "shell_faces", faces="top", thickness=3 * MM)
+
+
+def _e_add_boss(doc):
+    _cyl(doc, 10, 12, cz=9, operation="union")
+
+
+def _e_add_rib(doc):
+    _run(doc, "add_rib", start={"x": -35 * MM, "y": 0.0, "z": 2.5 * MM},
+         end={"x": 35 * MM, "y": 0.0, "z": 2.5 * MM},
+         thickness=3 * MM, height=10 * MM)
+
+
+def _e_remove_boss(doc):
+    _run(doc, "delete_feature", feature_id=_first(doc, "CylinderFeature"))
+
+
+EDITORS = {
+    "edit-lengthen": _e_lengthen,
+    "edit-thicken": _e_thicken,
+    "edit-enlarge-hole": _e_enlarge_hole,
+    "edit-add-hole": _e_add_hole,
+    "edit-round-edges": _e_round_edges,
+    "edit-chamfer": _e_chamfer,
+    "edit-material": _e_material,
+    "edit-hollow": _e_hollow,
+    "edit-add-boss": _e_add_boss,
+    "edit-add-rib": _e_add_rib,
+    "edit-remove-boss": _e_remove_boss,
+}
+
+
+def _edit_ids():
+    from evals import tasks
+    return [t.id for t in tasks.SUITES["edits"]]
+
+
+def test_every_edit_task_has_an_editor():
+    assert sorted(EDITORS) == sorted(_edit_ids())
+
+
+@pytest.mark.parametrize("task_id", _edit_ids())
+def test_the_edit_task_is_satisfiable(task_id):
+    """Seed the part, make the change the goal asks for, and score it.
+
+    The seed is the part the goal is about, so a task whose *seed* already meets
+    the spec would measure nothing — `edit-lengthen` starts at 80 mm and asks for
+    120, `edit-remove-boss` starts 18 mm tall and asks for 6. Both halves are
+    checked here: the seed alone must fail, and the seed plus the edit must pass.
+    """
+    from app.services import cad_operations, decompiler, document_service, rollout
+    from evals import tasks
+
+    task = next(t for t in tasks.SUITES["edits"] if t.id == task_id)
+    with rollout.rollout(resolution=96):
+        doc = document_service.create_document(name=f"edit-{task_id}").id
+        replayed = decompiler.replay(list(task.seed), doc)
+        assert all(e.get("ok") for e in replayed), replayed
+        _run(doc, "set_spec", requirements=list(task.requirements))
+
+        before = cad_operations.execute("verify_against_spec", doc, {})["result"]
+        EDITORS[task_id](doc)
+        after = cad_operations.execute("verify_against_spec", doc, {})["result"]
+
+    assert before["score"] < 1.0, "the seed already satisfies the spec — nothing is measured"
+    unmet = [c for c in after.get("checks", []) if c.get("status") != "pass"]
+    assert after["score"] == 1.0, (
+        f"{task_id} cannot be satisfied by the edit it asks for: "
+        + "; ".join(f"{c.get('id')}: {c.get('detail')}" for c in unmet))

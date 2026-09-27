@@ -229,6 +229,157 @@ GOALS: Sequence[Task] = (
 )
 
 
+
+# -------------------------------------------------------------- edit tasks --
+#
+# **Every goal task starts from nothing, and that is not what the tool is for.**
+# `EmptyDocumentGuide` draws the template gallery only while a document has no
+# solid; after that the prompt bar edits the part on screen, and `ai_edit` is the
+# primary action once a body exists. None of that was measured: eighteen tasks all
+# began with three datum planes.
+#
+# These start from a body and ask for a change. The distinction is not cosmetic —
+# three of them (`lengthen`, `thicken`, `enlarge-hole`) can only be done by reading
+# a feature's current parameters and passing the same structure back, which is what
+# `set_feature_params` is for: 223 labels in the corpus and no task that used one.
+# The rest can be satisfied by adding a feature, but only *after* finding out what
+# the body already is, and a model that rebuilds the plate from scratch fails the
+# dimensions it was not told.
+#
+# Verified reachable the same way as the goal tasks, by building each one's edit
+# and scoring it — see `tests/test_eval_tasks.py`.
+
+
+def _box(x: float, y: float, z: float, cx: float = 0.0, cy: float = 0.0,
+         cz: float = 0.0, operation: str = "union") -> dict:
+    return {"op": "add_primitive",
+            "args": {"shape": "box", "operation": operation,
+                     "params": {"size": {"x": x * MM, "y": y * MM, "z": z * MM},
+                                "center": {"x": cx * MM, "y": cy * MM, "z": cz * MM}}}}
+
+
+def _cylinder(radius: float, height: float, cz: float = 0.0,
+              operation: str = "union") -> dict:
+    return {"op": "add_primitive",
+            "args": {"shape": "cylinder", "operation": operation,
+                     "params": {"radius": radius * MM, "height": height * MM,
+                                "center": {"x": 0.0, "y": 0.0, "z": cz * MM}}}}
+
+
+def _hole(diameter: float, cx: float = 0.0, cy: float = 0.0) -> dict:
+    return {"op": "add_hole",
+            "args": {"radius": diameter / 2 * MM, "through": True,
+                     "center": {"x": cx * MM, "y": cy * MM, "z": 0.0}}}
+
+
+EDITS: Sequence[Task] = (
+    Task(
+        id="edit-lengthen",
+        seed=[_box(80, 40, 6)],
+        goal="Make this plate 120 mm long. Leave its width and thickness alone.",
+        requirements=[_bbox("x", 120), _bbox("y", 40), _bbox("z", 6),
+                      {"kind": "watertight"}],
+        tags=("edit", "parameters"),
+    ),
+    Task(
+        id="edit-thicken",
+        seed=[_box(80, 40, 6)],
+        goal="This plate needs to be 10 mm thick instead of 6.",
+        requirements=[_bbox("x", 80), _bbox("y", 40), _bbox("z", 10),
+                      {"kind": "watertight"}],
+        tags=("edit", "parameters"),
+    ),
+    Task(
+        id="edit-enlarge-hole",
+        seed=[_box(80, 40, 8), _hole(5)],
+        goal="The hole in this plate should be 10 mm in diameter, not 5.",
+        requirements=[_bbox("x", 80), _bbox("y", 40), _bbox("z", 8),
+                      {"kind": "hole", "diameter": 10, "count": 1},
+                      {"kind": "watertight"}],
+        max_steps=10,
+        tags=("edit", "parameters", "holes"),
+    ),
+    Task(
+        id="edit-add-hole",
+        seed=[_box(80, 40, 6)],
+        goal="Drill a single 6 mm diameter hole through the middle of this plate.",
+        requirements=[_bbox("x", 80), _bbox("y", 40), _bbox("z", 6),
+                      {"kind": "hole", "diameter": 6, "count": 1},
+                      {"kind": "watertight"}],
+        tags=("edit", "holes"),
+    ),
+    Task(
+        id="edit-round-edges",
+        seed=[_box(40, 40, 20)],
+        goal="Round every edge of this block by 3 mm.",
+        requirements=[_bbox("x", 40), _bbox("y", 40), _bbox("z", 20),
+                      {"kind": "feature", "value": "EdgeFilletFeature"},
+                      {"kind": "watertight"}],
+        tags=("edit", "exact-kernel"),
+    ),
+    Task(
+        id="edit-chamfer",
+        seed=[_box(30, 30, 30)],
+        goal="Put a 2 mm chamfer on every edge of this cube.",
+        requirements=[_bbox("x", 30), _bbox("y", 30), _bbox("z", 30),
+                      {"kind": "feature", "value": "EdgeChamferFeature"},
+                      {"kind": "watertight"}],
+        tags=("edit", "exact-kernel"),
+    ),
+    Task(
+        id="edit-material",
+        seed=[_box(50, 50, 10)],
+        # 50 x 50 x 10 mm of 1018 at 7870 kg/m^3 is 196.75 g.
+        goal="This part should be made from 1018 steel.",
+        requirements=[{"kind": "material", "value": "steel-1018"},
+                      {"kind": "mass", "value": 196.75, "tolerance": 5}],
+        tags=("edit", "material"),
+    ),
+    Task(
+        id="edit-hollow",
+        seed=[_box(60, 40, 30)],
+        goal="Hollow this box out to a 3 mm wall, leaving the top open.",
+        requirements=[_bbox("x", 60), _bbox("y", 40), _bbox("z", 30),
+                      {"kind": "feature", "value": "FaceShellFeature"},
+                      {"kind": "watertight"}],
+        max_steps=10,
+        tags=("edit", "exact-kernel"),
+    ),
+    Task(
+        id="edit-add-boss",
+        seed=[_box(80, 80, 6)],
+        goal="Add a 20 mm diameter boss to the middle of the top face, standing "
+             "12 mm proud of it.",
+        requirements=[_bbox("x", 80), _bbox("y", 80), _bbox("z", 18),
+                      {"kind": "bodies", "value": 1, "tolerance": 0},
+                      {"kind": "watertight"}],
+        tags=("edit", "boolean"),
+    ),
+    Task(
+        id="edit-add-rib",
+        seed=[_box(80, 40, 5)],
+        goal="Add a rib along the centreline of this plate: 3 mm thick at the tip "
+             "and standing 10 mm above it.",
+        requirements=[_bbox("x", 80), _bbox("y", 40), _bbox("z", 15),
+                      {"kind": "feature", "value": "RibFeature"},
+                      {"kind": "watertight"}],
+        tags=("edit", "rib"),
+    ),
+    Task(
+        id="edit-remove-boss",
+        seed=[_box(80, 80, 6), _cylinder(10, 12, cz=9)],
+        # The plate is 6 mm; with the boss the extent is 18. Removing it is the
+        # only way back to 6, and rebuilding a plate from scratch gets the
+        # dimensions the goal never states.
+        goal="Take the boss off this plate and leave the plate as it was.",
+        requirements=[_bbox("x", 80), _bbox("y", 80), _bbox("z", 6),
+                      {"kind": "bodies", "value": 1, "tolerance": 0},
+                      {"kind": "watertight"}],
+        tags=("edit", "delete"),
+    ),
+)
+
+
 # -------------------------------------------------------- adversarial tasks --
 
 def _cube_spec() -> list:
@@ -395,6 +546,7 @@ ADVERSARIAL: Sequence[Task] = (
 
 
 SUITES: Dict[str, Sequence[Task]] = {
+    "edits": EDITS,
     "scripted": ADVERSARIAL,
     "goals": GOALS,
     "all": tuple(ADVERSARIAL) + tuple(GOALS),

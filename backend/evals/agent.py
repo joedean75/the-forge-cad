@@ -48,6 +48,18 @@ class Task:
     requirements: Sequence[Dict[str, Any]]
     max_steps: int = DEFAULT_MAX_STEPS
     tags: Sequence[str] = ()
+    #: Operations applied *before* the run, as the part the goal is about.
+    #:
+    #: Every goal task starts from three datum planes and builds, which leaves the
+    #: workflow the prompt bar is actually for — changing the part on screen —
+    #: unmeasured. A seeded task asks for an *edit*: the model has to read what is
+    #: there and modify it, and `set_feature_params` had 223 labels in the corpus
+    #: and no task that exercised them.
+    #:
+    #: The seed is the starting state rather than work: it is replayed outside the
+    #: copilot's step budget and scored by nothing. A seed that fails to build is a
+    #: broken task, reported as one rather than run.
+    seed: Optional[Sequence[Dict[str, Any]]] = None
     #: A fixed op sequence standing in for the planner. Present on the tasks
     #: that must run without an API key — see `scripted_planner`.
     script: Optional[Sequence[Dict[str, Any]]] = None
@@ -148,6 +160,18 @@ def run_task(task: Task, planner: Optional[Callable[..., dict]] = None, *,
     started = time.perf_counter()
     with rollout.rollout(resolution=resolution):
         doc = document_service.create_document(name=f"eval:{task.id}", owner_id=owner_id)
+        if task.seed:
+            from app.services import decompiler
+
+            try:
+                seeded = decompiler.replay(list(task.seed), doc.id)
+            except Exception as exc:  # noqa: BLE001 — a broken seed is a broken task
+                seeded = [{"ok": False, "error": str(exc)}]
+            if not all(env.get("ok") for env in seeded):
+                return TaskResult(task.id, 0.0, 0, len(task.requirements), False, 0,
+                                  task.max_steps, False, 0,
+                                  note="seed failed to build",
+                                  seconds=round(time.perf_counter() - started, 2))
         spec = cad_operations.execute("set_spec", doc.id, {
             "requirements": list(task.requirements), "goal": task.goal})
         if not spec["ok"]:
