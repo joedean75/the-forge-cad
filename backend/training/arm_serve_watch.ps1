@@ -2,7 +2,10 @@
 # hours. Written as a file rather than a schtasks one-liner because the /TR value
 # has to carry quoted paths and its own arguments, and that quoting is where these
 # get silently mangled into a task that runs the wrong script.
-$Copilot = "C:\Users\gameb\Documents\Books\Pipeline_copilot"
+# Where the staged trainer/server live on the Windows side. Override with
+# FORGE_COPILOT_DIR rather than editing this, so a checkout carries no path.
+$Copilot = if ($env:FORGE_COPILOT_DIR) { $env:FORGE_COPILOT_DIR }
+          else { Join-Path $HOME "Pipeline_copilot" }
 $Name    = "ForgeCopilotServe"
 Unregister-ScheduledTask -TaskName $Name -Confirm:$false -ErrorAction SilentlyContinue
 

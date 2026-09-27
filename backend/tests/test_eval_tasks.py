@@ -335,3 +335,57 @@ def test_the_edit_task_is_satisfiable(task_id):
     assert after["score"] == 1.0, (
         f"{task_id} cannot be satisfied by the edit it asks for: "
         + "; ".join(f"{c.get('id')}: {c.get('detail')}" for c in unmet))
+
+
+# ---------------------------------------------------------------------------
+# The vehicle suite measures the feature, not the envelope
+# ---------------------------------------------------------------------------
+
+def _vehicle():
+    from evals import tasks
+    return tasks.SUITES["vehicle"]
+
+
+def test_every_vehicle_task_requires_more_than_its_envelope():
+    """The whole point of this suite.
+
+    The 2026-09-27 run got sixteen of seventeen envelopes exact to 0.0 mm and only
+    four of the parts right, so a task carrying nothing but `bounding_box` and
+    `watertight` would score 1.0 on a block and measure nothing this suite exists
+    for.
+    """
+    for task in _vehicle():
+        kinds = {r["kind"] for r in task.requirements}
+        assert kinds - {"bounding_box", "watertight"}, (
+            f"{task.id} asks only for an envelope; it needs the hole or volume "
+            f"that makes it the part rather than the block it is cut from")
+
+
+def test_a_vehicle_hole_requirement_names_a_diameter_and_a_count():
+    """Matched on diameter so a wheel's Ø110 outer face is not read as its Ø20
+    bore, and counted exactly so the knuckle that cut five bores fails as loudly
+    as the one that cut none."""
+    for task in _vehicle():
+        for req in task.requirements:
+            if req["kind"] != "hole":
+                continue
+            assert req.get("diameter"), f"{task.id}: hole with no diameter"
+            assert req.get("count"), f"{task.id}: hole with no count"
+
+
+def test_the_suites_run_the_vehicle_tasks_last():
+    """`all` is ordered so the cheap regressions report before the expensive
+    suite spends an hour."""
+    from evals import tasks
+
+    ids = [t.id for t in tasks.SUITES["all"]]
+    veh = [t.id for t in _vehicle()]
+    assert ids[-len(veh):] == veh
+    assert set(veh).isdisjoint(ids[:-len(veh)])
+
+
+def test_vehicle_tasks_fit_the_step_budget_the_card_sustained():
+    """Twelve steps grew the prompt until the CUDA context died mid-run; six is
+    what completed."""
+    for task in _vehicle():
+        assert task.max_steps <= 6, task.id

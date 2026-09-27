@@ -20,7 +20,7 @@ param(
   [switch]$Eval,
   [string]$Distro = "Ubuntu"
 )
-$Root    = "C:\Users\gameb\Documents\Books"
+$Root    = if ($env:FORGE_TRAIN_ROOT) { $env:FORGE_TRAIN_ROOT } else { $HOME }
 $Copilot = "$Root\Pipeline_copilot"
 $Python  = "$Root\How_to_make_a_reasoning_model_from_scratch\My_work\.venv\Scripts\python.exe"
 $Adapter = "$Copilot\$Out\lora-final.pt"
@@ -70,7 +70,9 @@ Add-Content $Log "$Stamp started serve.py on the GPU with $Out\lora-final.pt (ba
 if ($Eval) {
   # Detached, because the suite takes far longer than this task's time limit:
   # the script waits for the endpoint itself rather than assuming it is up.
-  $bash = "/home/joed/cad/backend/training/eval_when_served.sh"
+  # The WSL-side path to this repo. FORGE_REPO_WSL overrides it.
+  $repo = if ($env:FORGE_REPO_WSL) { $env:FORGE_REPO_WSL } else { "~/cad" }
+  $bash = "$repo/backend/training/eval_when_served.sh"
   $launch = if ($ModelName) { "MODEL='$ModelName' $bash" } else { $bash }
   # **The command has to arrive as one argument.** `Start-Process` joins
   # `-ArgumentList` with spaces, so an unquoted string here reached `bash -lc` as

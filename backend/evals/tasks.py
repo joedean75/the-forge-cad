@@ -545,9 +545,212 @@ ADVERSARIAL: Sequence[Task] = (
 )
 
 
+# ------------------------------------------------------------- vehicle tasks --
+#
+# The seventeen printed parts of the 1/10 short-course truck, as they were put to
+# the fine-tune on 2026-09-27. That run is what this suite exists to pin: sixteen
+# of seventeen envelopes came back exact to 0.0 mm while only six of the parts had
+# the feature that makes them the part rather than a block — a wheel with no bore,
+# a servo tray with no opening, a motor mount with no 36 mm hole.
+#
+# So **every task carries the requirement the envelope cannot satisfy**: a `hole`
+# at the bore's own diameter (matched on diameter, so a wheel's Ø110 outer face is
+# not mistaken for its Ø20 bore, and `count` exact, so the knuckle that cut *five*
+# bores fails as loudly as the one that cut none), or a `volume`, which is where
+# the feature is a pocket, an opening or a wall and no cylinder exists to count.
+# `volume` is in cm³.
+#
+# `run_task` writes the spec **before** the run, so the done gate fires and what is
+# scored is whether the part gets built — not whether the planner would have
+# written the brief itself. That second gap is real and is measured where it lives,
+# in the corpus label counts; reading this suite's score as covering it would be
+# reading it wrong.
+#
+# `max_steps` is 6 because that is what the 6 GB card sustained: at 12 the prompt
+# grew until the CUDA context died mid-suite.
+# `volume` appears only where the feature is at least a few per cent of the body.
+# Two Ø4 holes are 0.4% of a shock tower — below the tessellation noise on a
+# curved body — so a volume row there would either pass a plate with no holes or
+# fail a correct part depending on the tolerance picked. Volume decides bores,
+# pockets and walls; `hole` decides small holes. Either alone misreads a third of
+# these seventeen parts, which is how this table was arrived at.
+VEHICLE: Sequence[Task] = (
+    Task(
+        id="veh-chassis",
+        goal="A flat chassis plate 380 mm long, 90 mm wide and 4 mm thick, with a "
+             "6 mm diameter hole 20 mm in from each of the four corners.",
+        requirements=[_bbox("x", 380), _bbox("y", 90), _bbox("z", 4),
+                      {"kind": "hole", "diameter": 6, "count": 4},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "holes"),
+    ),
+    Task(
+        id="veh-bulkhead-front",
+        goal="A front bulkhead block 88 mm wide, 45 mm deep and 40 mm tall, with a "
+             "16 mm diameter bore through it along the 88 mm width.",
+        requirements=[_bbox("x", 88), _bbox("y", 45), _bbox("z", 40),
+                      {"kind": "hole", "diameter": 16, "count": 1},
+                      # A through-bore removes 17.7 cm³ and a 40 mm one 8.0,
+                      # so this is what says "through" — the count cannot.
+                      {"kind": "volume", "value": 140.707, "tolerance": 1.5},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "holes"),
+    ),
+    Task(
+        id="veh-bulkhead-rear",
+        goal="A rear gearbox housing 90 mm wide, 60 mm deep and 55 mm tall, with a "
+             "16 mm diameter bore through the 90 mm width and a 12 mm diameter bore "
+             "through the 60 mm depth.",
+        requirements=[_bbox("x", 90), _bbox("y", 60), _bbox("z", 55),
+                      {"kind": "hole", "diameter": 16, "count": 1},
+                      {"kind": "hole", "diameter": 12, "count": 1},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "holes"),
+    ),
+    Task(
+        id="veh-arm-front",
+        goal="A front lower suspension arm 95 mm long, 38 mm wide and 10 mm thick, "
+             "with a 4 mm diameter hole through the thickness 8 mm from each end.",
+        requirements=[_bbox("x", 95), _bbox("y", 38), _bbox("z", 10),
+                      {"kind": "hole", "diameter": 4, "count": 2},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "holes"),
+    ),
+    Task(
+        id="veh-arm-rear",
+        goal="A rear lower suspension arm 100 mm long, 40 mm wide and 10 mm thick, "
+             "with a 4 mm diameter hole through the thickness 8 mm from each end.",
+        requirements=[_bbox("x", 100), _bbox("y", 40), _bbox("z", 10),
+                      {"kind": "hole", "diameter": 4, "count": 2},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "holes"),
+    ),
+    Task(
+        id="veh-knuckle",
+        goal="A steering knuckle block 30 mm wide, 22 mm deep and 40 mm tall with "
+             "an 11 mm diameter bore through the 22 mm depth.",
+        requirements=[_bbox("x", 30), _bbox("y", 22), _bbox("z", 40),
+                      {"kind": "hole", "diameter": 11, "count": 1},
+                      {"kind": "volume", "value": 24.309, "tolerance": 0.6},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "holes"),
+    ),
+    Task(
+        id="veh-hub-carrier",
+        goal="A rear hub carrier block 30 mm wide, 22 mm deep and 38 mm tall with "
+             "an 11 mm diameter bore through the 22 mm depth.",
+        requirements=[_bbox("x", 30), _bbox("y", 22), _bbox("z", 38),
+                      {"kind": "hole", "diameter": 11, "count": 1},
+                      {"kind": "volume", "value": 22.989, "tolerance": 0.6},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "holes"),
+    ),
+    Task(
+        id="veh-tower-front",
+        goal="A front shock tower plate 100 mm wide, 60 mm tall and 5 mm thick with "
+             "a 4 mm diameter hole 10 mm in from each top corner.",
+        requirements=[_bbox("x", 100), _bbox("y", 60), _bbox("z", 5),
+                      {"kind": "hole", "diameter": 4, "count": 2},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "holes"),
+    ),
+    Task(
+        id="veh-tower-rear",
+        goal="A rear shock tower plate 95 mm wide, 55 mm tall and 5 mm thick with "
+             "a 4 mm diameter hole 10 mm in from each top corner.",
+        requirements=[_bbox("x", 95), _bbox("y", 55), _bbox("z", 5),
+                      {"kind": "hole", "diameter": 4, "count": 2},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "holes"),
+    ),
+    Task(
+        id="veh-shock",
+        goal="A shock body: a cylinder 14 mm in diameter and 78 mm long with a "
+             "10 mm diameter bore 60 mm deep down its axis.",
+        # The volume pins the bore's *depth*, which a hole count cannot: a bore
+        # drilled through the whole 78 mm passes the count and is a different part.
+        requirements=[_bbox("x", 14), _bbox("y", 14), _bbox("z", 78),
+                      {"kind": "hole", "diameter": 10, "count": 1},
+                      {"kind": "volume", "value": 7.295, "tolerance": 0.3},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "holes", "volume"),
+    ),
+    Task(
+        id="veh-motor-mount",
+        goal="A motor mount 45 mm wide, 40 mm deep and 30 mm tall with a 36 mm "
+             "diameter bore through the 40 mm depth for a 3650 can motor.",
+        requirements=[_bbox("x", 45), _bbox("y", 40), _bbox("z", 30),
+                      {"kind": "hole", "diameter": 36, "count": 1},
+                      {"kind": "volume", "value": 13.285, "tolerance": 0.5},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "holes"),
+    ),
+    Task(
+        id="veh-servo-tray",
+        goal="A servo tray plate 60 mm long, 42 mm wide and 6 mm thick with a "
+             "41 x 21 mm rectangular opening through it.",
+        # Rectangular, so there is no cylinder to count and volume is the only
+        # thing that can tell the tray from the plate it is cut from.
+        requirements=[_bbox("x", 60), _bbox("y", 42), _bbox("z", 6),
+                      {"kind": "volume", "value": 9.954, "tolerance": 0.3},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "volume"),
+    ),
+    Task(
+        id="veh-battery-tray",
+        goal="A battery tray 150 mm long, 52 mm wide and 8 mm thick with a "
+             "140 x 46 mm pocket 5 mm deep in its top face.",
+        requirements=[_bbox("x", 150), _bbox("y", 52), _bbox("z", 8),
+                      {"kind": "volume", "value": 30.2, "tolerance": 0.6},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "volume"),
+    ),
+    Task(
+        id="veh-bumper-front",
+        goal="A front bumper block 130 mm wide, 45 mm deep and 12 mm thick with a "
+             "4 mm diameter hole through the thickness 15 mm in from each end.",
+        requirements=[_bbox("x", 130), _bbox("y", 45), _bbox("z", 12),
+                      {"kind": "hole", "diameter": 4, "count": 2},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "holes"),
+    ),
+    Task(
+        id="veh-bumper-rear",
+        goal="A rear bumper block 110 mm wide, 40 mm deep and 12 mm thick with a "
+             "4 mm diameter hole through the thickness 15 mm in from each end.",
+        requirements=[_bbox("x", 110), _bbox("y", 40), _bbox("z", 12),
+                      {"kind": "hole", "diameter": 4, "count": 2},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "holes"),
+    ),
+    Task(
+        id="veh-wheel",
+        goal="A wheel: a cylinder 110 mm in diameter and 55 mm wide with a 20 mm "
+             "diameter bore through its axis.",
+        requirements=[_bbox("x", 110), _bbox("y", 110), _bbox("z", 55),
+                      {"kind": "hole", "diameter": 20, "count": 1},
+                      {"kind": "volume", "value": 505.4, "tolerance": 3.0},
+                      {"kind": "watertight"}],
+        max_steps=6, tags=("vehicle", "holes", "volume"),
+    ),
+    Task(
+        id="veh-body-shell",
+        goal="A body shell: a box 500 mm long, 280 mm wide and 90 mm tall, "
+             "hollowed out to a 2 mm wall thickness.",
+        # 12,600 cm³ solid against 553 hollow, so the volume row is the whole test.
+        requirements=[_bbox("x", 500), _bbox("y", 280), _bbox("z", 90),
+                      {"kind": "volume", "value": 553.15, "tolerance": 12.0}],
+        max_steps=6, tags=("vehicle", "volume", "shell"),
+    ),
+)
+
+
 SUITES: Dict[str, Sequence[Task]] = {
     "edits": EDITS,
     "scripted": ADVERSARIAL,
     "goals": GOALS,
-    "all": tuple(ADVERSARIAL) + tuple(GOALS),
+    "vehicle": VEHICLE,
+    # Vehicle last, deliberately: it is the hardest suite and the most expensive,
+    # so the cheap regressions are reported before anything spends an hour.
+    "all": tuple(ADVERSARIAL) + tuple(GOALS) + tuple(VEHICLE),
 }

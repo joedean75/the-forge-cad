@@ -261,6 +261,12 @@ conditions, none optional:
   fastener/bearing/extrusion gap, which the standards already cover, nor the
   motor/ESC/prop gap, which is R2.
 
+> **It has left the building (2026-09-27).** The repository is public and MIT
+> licensed, so every "does not trigger" in the table below that depended on not
+> distributing has flipped. The checklist in this section was run rather than
+> filed; the outcome is recorded at the end of it, and `NOTICE` at the repository
+> root is the inventory it produced. Read the posture section above as history.
+
 ## If this ever leaves the building
 
 The posture changing is what makes this document wrong, so here is the checklist
@@ -280,8 +286,33 @@ a contractor working on their own account, or spinning the tool out.
 5. **Ask counsel before, not after.** Everything above is about which questions
    to ask; the answers are worth money at that point.
 
-Until then the standing rule is unchanged and cheap to hold to: prefer the
-standards, because a fact carries no licence at all.
+### What running it actually found (2026-09-27)
+
+1. **Inventory by licence** — `NOTICE`. Four kinds of third-party material, and
+   none of it vendored: Adafruit (MIT, licence text shipped, models fetched at
+   run time), Zero-To-CAD (Apache-2.0, converter only, dataset never committed),
+   SketchGraphs (Onshape ToU §1.g.ii, which grants distribution outright), and
+   dimensions from the standards, which are facts.
+2. **Remove or release anything copyleft** — **nothing to do**, and this is the
+   finding that made publishing possible at all. The GPL libraries were used only
+   as an independent cross-check on the generated tables. Had a single dimension
+   table been transcribed, this step would have been "strip it or relicense the
+   whole repository under GPL-3", and the standards-generated equivalents being
+   authoritative is exactly what bought the cheap answer.
+3. **Attribute the CC rows** — none. No CC BY-SA geometry was ever taken.
+4. **Re-read every portal's terms as if new** — no change needed, because nothing
+   here calls a portal. `SOURCES` deep-links a *search*, and a hyperlink is not a
+   copy. The clauses that relaxed under "internal" (*external service*,
+   *competing*) no longer relax, which costs nothing today and constrains what may
+   be added tomorrow.
+5. **Ask counsel before, not after** — not done. This section is a record of which
+   questions were asked and what the repository contains; it is not legal advice
+   and does not stand in for it.
+
+The standing rule is unchanged and is now load-bearing rather than merely cheap:
+prefer the standards, because a fact carries no licence at all. What *is* new is
+that a sourced row must record a licence permitting redistribution, not just
+record a licence.
 
 ## If this is revisited
 

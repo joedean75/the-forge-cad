@@ -1,0 +1,44 @@
+The Forge — third-party material and what it requires
+=====================================================
+
+This repository is MIT licensed (see LICENSE). It also touches material owned by
+others. Nothing third-party is vendored here as data: the catalogs are generated
+from published standards, the external-dataset code is a *converter* and the
+datasets themselves are never committed or fetched by the server. What follows is
+the inventory anyway, because the obligations are real and the provenance fields
+in the code exist so this list can be rebuilt rather than remembered.
+
+Adafruit_CAD_Parts — MIT
+  `backend/app/services/adafruit_parts.py` carries a manifest of 484 models
+  pinned to a revision, verified against the git blob hash and downloaded on
+  first placement. The models are Adafruit's and MIT licensed; the licence text
+  ships beside the code at
+  `backend/app/services/data/ADAFRUIT-LICENSE.txt`.
+
+Zero-To-CAD-1m — Apache-2.0
+  `backend/datasets/external.py` converts that dataset's CadQuery programs into
+  this catalog's operation sequences. The converter is original work; the dataset
+  is not redistributed here and is not downloaded by the server. Anyone using the
+  converter against the dataset takes it under Apache-2.0, which requires the
+  licence and attribution to travel with any copy of the *data*.
+
+SketchGraphs / Onshape public documents — Onshape Terms of Use §1.g.ii
+  The sketch converter rests on the grant in §1.g.ii, which gives anyone
+  accessing a public Onshape document a licence to "use, copy, modify, merge,
+  publish, distribute, sublicense" its contents. No Onshape data is committed.
+
+Declined, and recorded so the reasons are not relitigated
+  Fusion 360 Gallery is non-commercial-research only. 3Dfindit/CADENAS disallows
+  this crawler in robots.txt and answers non-browser clients 403. TraceParts'
+  terms forbid distributing its data "on any storage medium whatsoever", which no
+  posture relaxes. BOLTS (GPL-3), the FreeCAD Fasteners workbench (GPL-2) and
+  NopSCADlib (GPL-3) were used only as an independent cross-check on tables
+  generated from the standards — **nothing was transcribed from them**, which is
+  what leaves this repository distributable at all. See
+  `docs/PURCHASED-PARTS-SOURCING.md`.
+
+Standards
+  ISO 4762, 4032, 7089, 2338, 273, 261, 2306, 68-1, 54, 286, ISO 15 and
+  NEMA ICS 16 dimensions are facts stated in those standards. A dimension carries
+  no licence; the standards documents themselves are copyrighted and are not
+  reproduced here.

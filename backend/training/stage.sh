@@ -3,7 +3,9 @@
 # CUDA interpreter and the weights live. Writes nothing into the book projects:
 # their README says reuse, never modify.
 set -euo pipefail
-DEST="${1:-/mnt/c/Users/gameb/Documents/Books/Pipeline_copilot}"
+# Staging destination: pass it, or set FORGE_COPILOT_DIR. No path is baked in,
+# so a checkout of this repo carries nobody's home directory.
+DEST="${1:-${FORGE_COPILOT_DIR:?pass a destination or set FORGE_COPILOT_DIR}}"
 DATASET="${2:-}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$DEST/dataset" "$DEST/runs"

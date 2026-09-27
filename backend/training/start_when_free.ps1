@@ -32,7 +32,7 @@ param(
   [switch]$Resume,
   [switch]$NoSchedule                # launching by hand: leave the task alone
 )
-$Root      = "C:\Users\gameb\Documents\Books"
+$Root      = if ($env:FORGE_TRAIN_ROOT) { $env:FORGE_TRAIN_ROOT } else { $HOME }
 $Copilot   = "$Root\Pipeline_copilot"
 $Python    = "$Root\How_to_make_a_reasoning_model_from_scratch\My_work\.venv\Scripts\python.exe"
 $MinFreeMiB = 5000
